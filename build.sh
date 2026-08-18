@@ -31,9 +31,6 @@ cd wrapper
 echo "  -> go mod tidy..."
 go mod tidy
 
-# Fyne's desktop OpenGL backend needs CGO + a real C compiler. Without one,
-# Go silently sets CGO_ENABLED=0 and cgo-based packages fail with a cryptic
-# "build constraints exclude all Go files" instead of a clear error.
 if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && [ -z "${CC:-}" ]; then
     echo
     echo "WARNING: No C compiler found on PATH."
@@ -41,14 +38,13 @@ if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && [ -z "
     if [[ "$OSTYPE" == "darwin"* ]]; then
         echo "  Fix: xcode-select --install"
     else
-        echo "  Fix: sudo apt install build-essential   (Debian/Ubuntu)"
-        echo "   or: sudo dnf groupinstall 'Development Tools'   (Fedora)"
+        echo "  Fix: sudo apt install build-essential"
     fi
-    echo "  Attempting the build anyway in case a compiler is configured another way..."
     echo
 fi
 
-go build -o minesport .
+# Release build: strip debug symbols/DWARF from the distribution binary.
+go build -trimpath -ldflags="-s -w" -o minesport .
 cd ..
 echo
 
@@ -56,13 +52,7 @@ echo "============================================"
 echo " Build complete!"
 echo "============================================"
 echo " Executables:"
-echo "   wrapper/minesport              (Go UI)"
+echo "   wrapper/minesport              (Go UI, stripped release build)"
 echo "   wrapper/minesport-engine-*.jar (Java engine)"
 echo "   bridge/build/libs/*.jar        (Bridge mod)"
 echo
-echo " To run:"
-echo "   cd wrapper && ./minesport"
-echo
-echo " Dev mode (Java UI directly):"
-echo "   cd engine && ./gradlew run"
-echo "============================================"
