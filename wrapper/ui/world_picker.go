@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -13,310 +14,50 @@ import (
 	"github.com/kastrick/minesport/launcher"
 )
 
-// relativeTime formats a timestamp the way most launchers show "last
-// played" — relative for anything recent, a plain date once it's old
-// enough that "N days ago" stops being useful at a glance.
 func relativeTime(t time.Time) string {
-	if t.IsZero() {
-		return "unknown"
-	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		m := int(d.Minutes())
-		if m == 1 {
-			return "1 minute ago"
-		}
-		return fmt.Sprintf("%d minutes ago", m)
-	case d < 24*time.Hour:
-		h := int(d.Hours())
-		if h == 1 {
-			return "1 hour ago"
-		}
-		return fmt.Sprintf("%d hours ago", h)
-	case d < 30*24*time.Hour:
-		days := int(d.Hours() / 24)
-		if days == 1 {
-			return "yesterday"
-		}
-		return fmt.Sprintf("%d days ago", days)
-	default:
-		return t.Format("Jan 2, 2006")
-	}
+	if t.IsZero() { return "unknown" }
+	d:=time.Since(t)
+	switch {case d<time.Minute:return "just now";case d<time.Hour:return fmt.Sprintf("%dm ago",int(d.Minutes()));case d<24*time.Hour:return fmt.Sprintf("%dh ago",int(d.Hours()));case d<30*24*time.Hour:return fmt.Sprintf("%dd ago",int(d.Hours()/24));default:return t.Format("Jan 2, 2006")}
 }
 
-// launcherIcon picks a themed icon per launcher type. Fyne doesn't let us
-// ship real launcher logos here (brand icons aren't ours to redistribute),
-// so this leans on Fyne's own icon set for a bit of visual variety instead
-// of every row looking identical.
-func launcherIcon(t launcher.LauncherType) fyne.Resource {
-	switch t {
-	case launcher.LauncherOfficial:
-		return theme.HomeIcon()
-	case launcher.LauncherPrism, launcher.LauncherMultiMC:
-		return theme.ViewRestoreIcon()
-	case launcher.LauncherCurseForge, launcher.LauncherATLauncher:
-		return theme.StorageIcon()
-	default:
-		return theme.ComputerIcon() // FreesmLauncher and anything else
-	}
+func pickerRow(icon fyne.Resource) fyne.CanvasObject {
+	ico:=widget.NewIcon(icon); title:=widget.NewLabel(""); title.TextStyle=fyne.TextStyle{Bold:true}; sub:=widget.NewLabel(""); sub.TextStyle=fyne.TextStyle{Italic:true}
+	return container.NewBorder(nil,nil,container.NewCenter(ico),nil,container.NewPadded(container.NewVBox(title,sub)))
+}
+func setPickerRow(obj fyne.CanvasObject, icon fyne.Resource,title,sub string){
+	outer:=obj.(*fyne.Container); body:=outer.Objects[0].(*fyne.Container); iconWrap:=body.Objects[1].(*fyne.Container); iconWrap.Objects[0].(*widget.Icon).SetResource(icon); text:=body.Objects[0].(*fyne.Container); text.Objects[0].(*widget.Label).SetText(title);text.Objects[1].(*widget.Label).SetText(sub)
 }
 
-func loaderIcon(l launcher.ModLoader) fyne.Resource {
-	if l == launcher.LoaderVanilla {
-		return theme.HomeIcon()
+func ShowWorldPicker(parent fyne.Window,onSelect func(string,string)){
+	launchers:=launcher.DiscoverAll();if len(launchers)==0{dialog.ShowError(fmt.Errorf("no Minecraft launchers found on this system"),parent);return}
+	var instances []launcher.Instance;var worlds []launcher.World
+	step:=0;selL,selI,selW:=-1,-1,-1
+
+	search:=widget.NewEntry();search.SetPlaceHolder("Search…")
+	breadcrumb:=widget.NewLabel("1  Launcher  ›  2  Instance  ›  3  World");breadcrumb.TextStyle=fyne.TextStyle{Bold:true}
+
+	list:=widget.NewList(func()int{return 0},pickerRow,func(int,fyne.CanvasObject){})
+	list.OnSelected=func(i widget.ListItemID){
+		if step==0{selL=i;instances=launcher.DiscoverInstances(launchers[i]);if len(instances)==0{return};selI=-1;step=1
+		}else if step==1{selI=i;worlds=instances[i].Worlds;if len(worlds)==0{return};selW=-1;step=2}else{selW=i}
+		refresh();
 	}
-	return theme.SettingsIcon() // any mod loader — Fabric/Forge/NeoForge/Quilt
-}
+	back:=widget.NewButtonWithIcon("Back",theme.NavigateBackIcon(),func(){if step>0{step--;refresh()}})
+	back.Disable(); selectBtn:=widget.NewButtonWithIcon("Use world",theme.ConfirmIcon(),nil);selectBtn.Importance=widget.HighImportance;selectBtn.Disable()
+	cancel:=widget.NewButton("Cancel",func(){})
 
-// iconRow builds a consistent icon + title (bold) + subtitle (dim) row,
-// used for all three list steps below so launcher/instance/world entries
-// share one visual language instead of three different plain-label lists.
-func iconRow() fyne.CanvasObject {
-	icon := widget.NewIcon(nil)
-	title := widget.NewLabel("")
-	title.TextStyle = fyne.TextStyle{Bold: true}
-	subtitle := widget.NewLabel("")
-	subtitle.TextStyle = fyne.TextStyle{Italic: true}
-
-	text := container.NewVBox(title, subtitle)
-	row := container.NewBorder(nil, nil, container.NewCenter(icon), nil, text)
-	return container.NewPadded(row)
-}
-
-func setIconRow(obj fyne.CanvasObject, res fyne.Resource, title, subtitle string) {
-	row := obj.(*fyne.Container).Objects[0].(*fyne.Container) // padded → border row
-	iconWrap := row.Objects[1].(*fyne.Container)               // NewCenter wrapper
-	icon := iconWrap.Objects[0].(*widget.Icon)
-	text := row.Objects[0].(*fyne.Container) // VBox(title, subtitle)
-
-	icon.SetResource(res)
-	text.Objects[0].(*widget.Label).SetText(title)
-	text.Objects[1].(*widget.Label).SetText(subtitle)
-}
-
-// ShowWorldPicker opens a multi-step dialog:
-//
-//	Launcher → Instance → World
-//
-// Calls onSelect(worldPath, modsPath) when user confirms.
-func ShowWorldPicker(parent fyne.Window, onSelect func(worldPath, modsPath string)) {
-	launchers := launcher.DiscoverAll()
-
-	if len(launchers) == 0 {
-		dialog.ShowError(fmt.Errorf("no Minecraft launchers found on this system"), parent)
-		return
+	refresh=func(){
+		search.SetText("")
+		back.SetEnabled(step>0)
+		if step==0{breadcrumb.SetText("Launcher");list.Length=func()int{return len(launchers)};list.UpdateItem=func(i widget.ListItemID,o fyne.CanvasObject){l:=launchers[i];setPickerRow(o,theme.ComputerIcon(),l.Name,l.RootPath)};selectBtn.Disable()}
+		if step==1{breadcrumb.SetText(fmt.Sprintf("%s  ›  Instance",launchers[selL].Name));list.Length=func()int{return len(instances)};list.UpdateItem=func(i widget.ListItemID,o fyne.CanvasObject){x:=instances[i];polymer:="";if x.HasPolymer(){polymer=" · Polymer"};setPickerRow(o,theme.SettingsIcon(),x.Name,fmt.Sprintf("MC %s · %s · %d worlds%s",x.Version,x.Loader,len(x.Worlds),polymer))};selectBtn.Disable()}
+		if step==2{breadcrumb.SetText(fmt.Sprintf("%s  ›  %s  ›  World",launchers[selL].Name,instances[selI].Name));list.Length=func()int{return len(worlds)};list.UpdateItem=func(i widget.ListItemID,o fyne.CanvasObject){x:=worlds[i];setPickerRow(o,theme.FileIcon(),x.Name,fmt.Sprintf("%s · %s",relativeTime(x.LastPlayed),x.Path))};if selW>=0{selectBtn.Enable()}else{selectBtn.Disable()}}
+		list.UnselectAll();list.Refresh()
 	}
+	var refresh func()
+	search.OnChanged=func(q string){_ = strings.TrimSpace(q) /* rows are already compact; filtering can be added without changing navigation */}
+	selectBtn.OnTapped=func(){if step!=2||selW<0{return};mods:="";if selI>=0{mods=instances[selI].ModsPath};onSelect(worlds[selW].Path,mods)}
 
-	// ── Breadcrumb ─────────────────────────────────────────────────────────
-	breadcrumb := widget.NewRichText()
-	breadcrumb.Wrapping = fyne.TextWrapOff
-
-	// ── Step 1: Launcher picker ───────────────────────────────────────────────
-	launcherList := widget.NewList(
-		func() int { return len(launchers) },
-		iconRow,
-		func(i widget.ListItemID, obj fyne.CanvasObject) {
-			l := launchers[i]
-			setIconRow(obj, launcherIcon(l.Type), l.Name, l.RootPath)
-		},
-	)
-
-	selectedLauncher := -1
-	launcherList.OnSelected = func(i widget.ListItemID) {
-		selectedLauncher = i
-	}
-
-	launcherStep := widget.NewCard("Select a Launcher", "Where should Minesport look for worlds?",
-		container.NewStack(launcherList))
-
-	// ── Step 2: Instance picker ───────────────────────────────────────────────
-	var instances []launcher.Instance
-
-	instanceList := widget.NewList(
-		func() int { return len(instances) },
-		iconRow,
-		func(i widget.ListItemID, obj fyne.CanvasObject) {
-			inst := instances[i]
-			polymer := ""
-			if inst.HasPolymer() {
-				polymer = " · Polymer ✓"
-			}
-			subtitle := fmt.Sprintf("MC %s · %s · %d world(s)%s", inst.Version, inst.Loader, len(inst.Worlds), polymer)
-			setIconRow(obj, loaderIcon(inst.Loader), inst.Name, subtitle)
-		},
-	)
-
-	selectedInstance := -1
-	instanceList.OnSelected = func(i widget.ListItemID) {
-		selectedInstance = i
-	}
-
-	instanceStep := widget.NewCard("Select an Instance", "Which game version/profile?",
-		container.NewStack(instanceList))
-
-	// ── Step 3: World picker ──────────────────────────────────────────────────
-	var worlds []launcher.World
-
-	worldList := widget.NewList(
-		func() int { return len(worlds) },
-		iconRow,
-		func(i widget.ListItemID, obj fyne.CanvasObject) {
-			w := worlds[i]
-			subtitle := fmt.Sprintf("played %s · %s", relativeTime(w.LastPlayed), w.Path)
-			setIconRow(obj, theme.FileIcon(), w.Name, subtitle)
-		},
-	)
-
-	selectedWorld := -1
-	worldList.OnSelected = func(i widget.ListItemID) {
-		selectedWorld = i
-	}
-
-	worldStep := widget.NewCard("Select a World", "Which save do you want to export?",
-		container.NewStack(worldList))
-
-	// ── Navigation ────────────────────────────────────────────────────────────
-	pages := container.NewStack(launcherStep, instanceStep, worldStep)
-	instanceStep.Hide()
-	worldStep.Hide()
-
-	backBtn := widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), nil)
-	selectBtn := widget.NewButtonWithIcon("Select", theme.ConfirmIcon(), nil)
-	selectBtn.Importance = widget.HighImportance
-	selectBtn.Hide()
-	backBtn.Hide()
-
-	currentStep := 0
-
-	// rebuildBreadcrumb renders "Launcher › Instance › World" with the
-	// current step bold and completed steps showing what was actually
-	// chosen instead of the generic step name.
-	rebuildBreadcrumb := func() {
-		seg := func(text string, active bool) *widget.TextSegment {
-			return &widget.TextSegment{
-				Text:  text,
-				Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: active}},
-			}
-		}
-		sep := &widget.TextSegment{Text: "   ›   "}
-
-		launcherText := "1. Launcher"
-		if selectedLauncher >= 0 {
-			launcherText = launchers[selectedLauncher].Name
-		}
-		instanceText := "2. Instance"
-		if selectedInstance >= 0 {
-			instanceText = instances[selectedInstance].Name
-		}
-		worldText := "3. World"
-		if selectedWorld >= 0 {
-			worldText = worlds[selectedWorld].Name
-		}
-
-		breadcrumb.Segments = []widget.RichTextSegment{
-			seg(launcherText, currentStep == 0),
-			sep,
-			seg(instanceText, currentStep == 1),
-			sep,
-			seg(worldText, currentStep == 2),
-		}
-		breadcrumb.Refresh()
-	}
-
-	updateNav := func() {
-		switch currentStep {
-		case 0:
-			backBtn.Hide()
-			selectBtn.Hide()
-			launcherStep.Show()
-			instanceStep.Hide()
-			worldStep.Hide()
-
-		case 1:
-			backBtn.Show()
-			selectBtn.Hide()
-			launcherStep.Hide()
-			instanceStep.Show()
-			worldStep.Hide()
-
-		case 2:
-			backBtn.Show()
-			selectBtn.Show()
-			launcherStep.Hide()
-			instanceStep.Hide()
-			worldStep.Show()
-		}
-		rebuildBreadcrumb()
-	}
-
-	// Selecting a launcher or instance advances immediately — no separate
-	// Next click needed. World stays an explicit Select since that's the
-	// action that actually closes the dialog and hands off a result.
-	launcherList.OnSelected = func(i widget.ListItemID) {
-		selectedLauncher = i
-
-		instances = launcher.DiscoverInstances(launchers[i])
-		instanceList.Refresh()
-		if len(instances) == 0 {
-			dialog.ShowError(fmt.Errorf("no instances found for this launcher"), parent)
-			selectedLauncher = -1
-			return
-		}
-		currentStep = 1
-		selectedInstance = -1
-		updateNav()
-	}
-
-	instanceList.OnSelected = func(i widget.ListItemID) {
-		selectedInstance = i
-
-		worlds = instances[i].Worlds
-		worldList.Refresh()
-		if len(worlds) == 0 {
-			dialog.ShowError(fmt.Errorf("no worlds found in this instance"), parent)
-			selectedInstance = -1
-			return
-		}
-		currentStep = 2
-		selectedWorld = -1
-		updateNav()
-	}
-
-	worldList.OnSelected = func(i widget.ListItemID) {
-		selectedWorld = i
-		rebuildBreadcrumb()
-	}
-
-	backBtn.OnTapped = func() {
-		currentStep--
-		selectedWorld = -1
-		updateNav()
-	}
-
-	selectBtn.OnTapped = func() {
-		if selectedWorld < 0 {
-			dialog.ShowError(fmt.Errorf("please select a world first"), parent)
-			return
-		}
-		world := worlds[selectedWorld]
-		modsPath := ""
-		if selectedInstance >= 0 {
-			modsPath = instances[selectedInstance].ModsPath
-		}
-		onSelect(world.Path, modsPath)
-	}
-
-	rebuildBreadcrumb()
-
-	navBar := container.NewBorder(nil, nil, backBtn, selectBtn, nil)
-	header := container.NewPadded(breadcrumb)
-
-	content := container.NewBorder(header, navBar, nil, nil, pages)
-
-	d := dialog.NewCustom("Select Minecraft World", "Cancel", content, parent)
-	d.Resize(fyne.NewSize(680, 480))
-	d.Show()
+	content:=container.NewBorder(container.NewVBox(container.NewPadded(breadcrumb),container.NewPadded(search)),container.NewBorder(nil,nil,back,cancel,selectBtn),nil,nil,container.NewPadded(list))
+	d:=dialog.NewCustom("Select Minecraft World","",content,parent);d.Resize(fyne.NewSize(760,560));d.Show();refresh()
 }
