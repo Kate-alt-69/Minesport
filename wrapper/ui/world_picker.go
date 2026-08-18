@@ -61,10 +61,9 @@ func ShowWorldPicker(parent fyne.Window, onSelect func(string,string)) {
     var visibleInstances []launcher.Instance
     var visibleWorlds []launcher.World
 
-    matches := func(text string, query string) bool {
+    matches := func(text, query string) bool {
         q := strings.ToLower(strings.TrimSpace(query))
-        if q == "" { return true }
-        return strings.Contains(strings.ToLower(text), q)
+        return q == "" || strings.Contains(strings.ToLower(text), q)
     }
 
     refresh := func() {
@@ -79,13 +78,13 @@ func ShowWorldPicker(parent fyne.Window, onSelect func(string,string)) {
         case 1:
             breadcrumb.SetText(fmt.Sprintf("%s  ›  Instance", launchers[selL].Name)); back.Enable(); selectBtn.Disable()
             visibleInstances = visibleInstances[:0]
-            for _, x := range instances { if matches(x.Name,query) || matches(x.Version,query) || matches(string(x.Loader),query) { visibleInstances=append(visibleInstances,x) } }
+            for _, x := range instances { if matches(x.Name,query) || matches(x.Version,query) || matches(string(x.Loader),query) || matches(x.MinecraftDir,query) { visibleInstances=append(visibleInstances,x) } }
             list.Length = func() int { return len(visibleInstances) }
             list.UpdateItem = func(i widget.ListItemID,o fyne.CanvasObject){x:=visibleInstances[i];poly:="";if x.HasPolymer(){poly=" · Polymer"};setPickerRow(o,theme.SettingsIcon(),x.Name,fmt.Sprintf("MC %s · %s · %d worlds%s",x.Version,x.Loader,len(x.Worlds),poly))}
         case 2:
             breadcrumb.SetText(fmt.Sprintf("%s  ›  %s  ›  World",launchers[selL].Name,instances[selI].Name)); back.Enable()
             visibleWorlds = visibleWorlds[:0]
-            for _, x := range worlds { if matches(x.Name,query) || matches(x.Path,query) { visibleWorlds=append(visibleWorlds,x) } }
+            for _, x := range worlds { if matches(x.Name,query) || matches(x.Path,query) || matches(x.LevelName,query) { visibleWorlds=append(visibleWorlds,x) } }
             list.Length = func() int { return len(visibleWorlds) }
             list.UpdateItem = func(i widget.ListItemID,o fyne.CanvasObject){x:=visibleWorlds[i];setPickerRow(o,theme.FileIcon(),x.Name,fmt.Sprintf("%s · %s",relativeTime(x.LastPlayed),x.Path))}
             if selW >= 0 { selectBtn.Enable() } else { selectBtn.Disable() }
@@ -105,7 +104,7 @@ func ShowWorldPicker(parent fyne.Window, onSelect func(string,string)) {
         case 1:
             if i < 0 || i >= len(visibleInstances) { return }
             chosen := visibleInstances[i]
-            for idx, x := range instances { if x.RootPath == chosen.RootPath && x.Name == chosen.Name { selI = idx; break } }
+            for idx, x := range instances { if x.MinecraftDir == chosen.MinecraftDir && x.Name == chosen.Name && x.Version == chosen.Version { selI = idx; break } }
             if selI < 0 { return }
             worlds = instances[selI].Worlds
             if len(worlds) == 0 { refresh(); return }
