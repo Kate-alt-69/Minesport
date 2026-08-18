@@ -26,826 +26,153 @@ import (
 	_ "image/png"
 )
 
-// ── App state ──────────────────────────────────────────────────────────────────
-
 type MinesportApp struct {
-	window    fyne.Window
-	fyneApp   fyne.App
-	engine    *ipc.Engine
-	mu        sync.Mutex
-
+	window fyne.Window
+	fyneApp fyne.App
+	engine *ipc.Engine
+	mu sync.Mutex
 	settings Settings
-
-	// Debug console — a separate window, only created/shown when
-	// settings.DebugMode is on. nil means it's currently closed.
 	debugWindow fyne.Window
-
-	// 3D preview viewer — a separate subprocess (see viewer/window.go's
-	// doc comment for why), nil when not open.
 	viewerSession *ViewerSession
-
-	// Set by a "Joined Blocks" selection from the 3D viewer — an exact
-	// block set that isn't representable as a box or ellipsoid. Cleared
-	// automatically if the user edits the box/bubble fields by hand
-	// afterward (see suppressSelectionClear).
-	customSelectionFile    string
-	customSelectionCount   int
+	customSelectionFile string
+	customSelectionCount int
 	suppressSelectionClear bool
+	worldPath, worldName, mcVersion, loaderType, modsPath, outputPath string
 
-	// World state
-	worldPath   string
-	worldName   string
-	mcVersion   string
-	loaderType  string
-	modsPath    string
-	outputPath  string
-
-	// UI components — sidebar
-	worldNameLabel   *widget.Label
-	worldMetaLabel   *widget.Label
-	formatSelect     *widget.Select
-	modeSelect       *widget.Select
-	minXEntry        *widget.Entry
-	maxXEntry        *widget.Entry
-	minYEntry        *widget.Entry
-	maxYEntry        *widget.Entry
-	minZEntry        *widget.Entry
-	maxZEntry        *widget.Entry
-	outputLabel      *widget.Label
-	exportBtn        *widget.Button
-	autoDetectBtn    *widget.Button
-	optimizeCheck    *widget.Check
-	optimizeHint     *widget.Label
-
-	// UI components — selection mode (box vs. bubble)
+	worldNameLabel *widget.Label
+	worldMetaLabel *widget.Label
+	formatSelect *widget.Select
+	modeSelect *widget.Select
+	minXRange, minYRange, minZRange *AxisRange
+	centerX, centerY, centerZ, radiusX, radiusY, radiusZ *StepperEntry
+	outputLabel *widget.Label
+	exportBtn *widget.Button
+	autoDetectBtn *widget.Button
+	optimizeCheck *widget.Check
+	optimizeHint *widget.Label
 	selectionModeSelect *widget.Select
-	boxCoordGroup       *fyne.Container
-	bubbleCoordGroup    *fyne.Container
-	centerXEntry        *widget.Entry
-	centerYEntry        *widget.Entry
-	centerZEntry        *widget.Entry
-	radiusXEntry        *widget.Entry
-	radiusYEntry        *widget.Entry
-	radiusZEntry        *widget.Entry
+	boxCoordGroup, bubbleCoordGroup *fyne.Container
 
-	// UI components — main area
-	worldMap        *WorldMap
-	logContent      *widget.Label
-	logScroll       *container.Scroll
-	progressBar     *widget.ProgressBar
-	statusLabel     *widget.Label // dedicated export-state text
-	stateIcon       *widget.Icon  // ready/running/done/error indicator
-	cursorLabel     *widget.Label // world X/Z under the mouse — separate from export state
-	metaHUD         *widget.Label // bottom-right corner: selection size / block+vertex counts
-	viewToggle2D    *widget.Button
-	viewToggle3D    *widget.Button
-	fitBtn          *widget.Button
-	settingsBtn     *widget.Button
+	worldMap *WorldMapV2
+	logContent *widget.Label
+	logScroll *container.Scroll
+	progressBar *widget.ProgressBar
+	statusLabel *widget.Label
+	stateIcon *widget.Icon
+	cursorLabel *widget.Label
+	metaHUD *widget.Label
+	viewToggle2D, viewToggle3D, fitBtn, settingsBtn *widget.Button
+
+	exportWindow fyne.Window
+	exportTitle *widget.Label
+	exportStage *widget.Label
+	exportDetail *widget.Label
+	exportBar *widget.ProgressBar
+	exportStats *widget.Label
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
-
-func Run(jarPath string) {
-	a := app.NewWithID("kastrick.dev.minesport")
-	w := a.NewWindow("Minesport — by Kastrick")
-	w.Resize(fyne.NewSize(1100, 680))
-	w.SetMaster()
-
-	ms := &MinesportApp{window: w, fyneApp: a}
-	ms.settings = LoadSettings()
-	ms.engine = ipc.NewEngine(jarPath)
-	w.SetContent(ms.buildUI())
-
-	if ms.settings.DebugMode {
-		ms.openDebugConsole()
-	}
-
-	ms.engine.OnLog = func(msg string) { ms.appendLog(msg) }
-	ms.engine.OnProgress = func(pct int, msg string) {
-		ms.progressBar.SetValue(float64(pct) / 100.0)
-		ms.statusLabel.SetText(msg)
-		ms.stateIcon.SetResource(theme.ViewRefreshIcon())
-	}
-	ms.engine.OnDone = func(resp ipc.Response) {
-		ms.progressBar.SetValue(1.0)
-		ms.statusLabel.SetText("Done!")
-		ms.stateIcon.SetResource(theme.ConfirmIcon())
-		ms.appendLog(fmt.Sprintf("Export complete → %s (%d blocks, %d faces, ≤%d vertices)",
-			resp.Output, resp.BlockCount, resp.QuadCount, resp.VertexCount))
-		ms.exportBtn.Enable()
-
-		hudText := fmt.Sprintf("%s blocks · %s faces · ≤%s verts",
-			formatCount(resp.BlockCount), formatCount(resp.QuadCount), formatCount(resp.VertexCount))
-		ms.updateMetaHUD(hudText)
-
-		dialog.ShowInformation("Export complete", fmt.Sprintf(
-			"Saved to:\n%s\n\n%s blocks · %s faces · up to %s vertices",
-			resp.Output, formatCount(resp.BlockCount), formatCount(resp.QuadCount), formatCount(resp.VertexCount),
-		), w)
-	}
-	ms.engine.OnError = func(msg string) {
-		ms.appendLog("Error: " + msg)
-		ms.statusLabel.SetText("Failed")
-		ms.stateIcon.SetResource(theme.ErrorIcon())
-		ms.exportBtn.Enable()
-		dialog.ShowError(fmt.Errorf("%s", msg), w)
-	}
-
-	if jarPath == "" {
-		ms.appendLog("Engine jar not found. Export is disabled.")
-		ms.statusLabel.SetText("Engine jar not found")
-	} else if err := ms.engine.Start(jarPath); err != nil {
-		dialog.ShowError(fmt.Errorf("Engine failed to start: %s", err), w)
-	} else {
-		ms.appendLog("Engine ready.")
-	}
-
+func Run(jarPath string){
+	a:=app.NewWithID("kastrick.dev.minesport");w:=a.NewWindow("Minesport — by Kastrick");w.Resize(fyne.NewSize(1180,740));w.SetMaster()
+	ms:=&MinesportApp{window:w,fyneApp:a};ms.settings=LoadSettings();ms.engine=ipc.NewEngine(jarPath);w.SetContent(ms.buildUI())
+	if ms.settings.DebugMode{ms.openDebugConsole()}
+	ms.engine.OnLog=func(msg string){ms.appendLog(msg)}
+	ms.engine.OnProgress=func(pct int,msg string){ms.progressBar.SetValue(float64(pct)/100);ms.statusLabel.SetText(msg);ms.stateIcon.SetResource(theme.ViewRefreshIcon());ms.updateExportProgress(pct,msg)}
+	ms.engine.OnDone=func(resp ipc.Response){ms.finishExport(resp,true,"")}
+	ms.engine.OnError=func(msg string){ms.finishExport(ipc.Response{},false,msg)}
+	if jarPath==""{ms.statusLabel.SetText("Engine jar not found");ms.exportBtn.Disable()}else if err:=ms.engine.Start(jarPath);err!=nil{dialog.ShowError(fmt.Errorf("engine failed to start: %s",err),w)}else{ms.statusLabel.SetText("Ready")}
 	w.ShowAndRun()
 }
 
-// ── UI builder ─────────────────────────────────────────────────────────────────
-
-func (ms *MinesportApp) buildUI() fyne.CanvasObject {
-	sidebar := ms.buildSidebar()
-	mainArea := ms.buildMainArea()
-
-	ms.updateMetaHUD(ms.selectionSizeText())
-
-	split := container.NewHSplit(sidebar, mainArea)
-	split.SetOffset(0.22)
-	return split
+func (ms *MinesportApp) buildUI() fyne.CanvasObject{
+	side:=ms.buildInspector();main:=ms.buildMainArea();ms.updateMetaHUD(ms.selectionSizeText());sp:=container.NewHSplit(side,main);sp.SetOffset(0.27);return sp
 }
 
-// ── Sidebar ───────────────────────────────────────────────────────────────────
+func (ms *MinesportApp) buildInspector() fyne.CanvasObject{
+	ms.worldNameLabel=widget.NewLabel("No world selected");ms.worldNameLabel.TextStyle=fyne.TextStyle{Bold:true};ms.worldMetaLabel=widget.NewLabel("Select a Minecraft save to begin")
+	selectBtn:=widget.NewButtonWithIcon("Select world",theme.FolderOpenIcon(),ms.onSelectWorld);selectBtn.Importance=widget.HighImportance
+	worldCard:=widget.NewCard("WORLD INSPECTOR","",container.NewVBox(ms.worldNameLabel,ms.worldMetaLabel,container.NewPadded(selectBtn)))
 
-func (ms *MinesportApp) buildSidebar() fyne.CanvasObject {
+	ms.selectionModeSelect=widget.NewSelect([]string{"Box selection","Bubble selection"},func(choice string){bubble:=choice=="Bubble selection";ms.boxCoordGroup.Show();if bubble{ms.boxCoordGroup.Hide();ms.bubbleCoordGroup.Show()}else{ms.bubbleCoordGroup.Hide();ms.boxCoordGroup.Show()};if ms.worldMap!=nil{ms.worldMap.SetBubbleMode(bubble)};ms.updateMetaHUD(ms.selectionSizeText())});ms.selectionModeSelect.SetSelected("Box selection")
+	ms.minXRange=NewAxisRange("X",-256,256,func(){ms.updateMetaHUD(ms.selectionSizeText())});ms.minYRange=NewAxisRange("Y",-64,320,func(){ms.updateMetaHUD(ms.selectionSizeText())});ms.minZRange=NewAxisRange("Z",-256,256,func(){ms.updateMetaHUD(ms.selectionSizeText())})
+	ms.boxCoordGroup=container.NewVBox(ms.minXRange.Container,ms.minYRange.Container,ms.minZRange.Container)
 
-	// World card
-	ms.worldNameLabel = widget.NewLabel("No world selected")
-	ms.worldNameLabel.TextStyle = fyne.TextStyle{Bold: true}
-	ms.worldMetaLabel = widget.NewLabel("")
-	ms.worldMetaLabel.TextStyle = fyne.TextStyle{Italic: true}
-
-	selectWorldBtn := widget.NewButtonWithIcon("Select World", theme.FolderOpenIcon(), ms.onSelectWorld)
-	selectWorldBtn.Alignment = widget.ButtonAlignLeading
-
-	worldCard := widget.NewCard("World", "", container.NewVBox(
-		ms.worldNameLabel,
-		ms.worldMetaLabel,
-		selectWorldBtn,
-	))
-
-	// Export settings
-	ms.formatSelect = widget.NewSelect([]string{"glTF (recommended)", "OBJ + MTL"}, nil)
-	ms.formatSelect.SetSelected("glTF (recommended)")
-
-	ms.modeSelect = widget.NewSelect([]string{"Grouped by type", "Individual blocks", "All merged"}, nil)
-	ms.modeSelect.SetSelected("Grouped by type")
-
-	ms.optimizeCheck = widget.NewCheck("Optimize Output", nil)
-	ms.optimizeHint = widget.NewLabel("Enable in Settings → Advanced")
-	ms.optimizeHint.TextStyle = fyne.TextStyle{Italic: true}
-	ms.applyOptimizeGate() // starts disabled unless Settings already has it on
-
-	exportCard := widget.NewCard("Export", "", container.NewVBox(
-		widget.NewLabel("Format"),
-		ms.formatSelect,
-		widget.NewLabel("Mode"),
-		ms.modeSelect,
-		widget.NewSeparator(),
-		ms.optimizeCheck,
-		ms.optimizeHint,
-	))
-
-	// Region coordinates
-	ms.minXEntry = ms.makeEntry("-256")
-	ms.maxXEntry = ms.makeEntry("256")
-	ms.minYEntry = ms.makeEntry("-64")
-	ms.maxYEntry = ms.makeEntry("320")
-	ms.minZEntry = ms.makeEntry("-256")
-	ms.maxZEntry = ms.makeEntry("256")
-
-	coordGrid := container.NewGridWithColumns(2,
-		container.NewVBox(widget.NewLabel("Min X"), ms.minXEntry),
-		container.NewVBox(widget.NewLabel("Max X"), ms.maxXEntry),
-		container.NewVBox(widget.NewLabel("Min Y"), ms.minYEntry),
-		container.NewVBox(widget.NewLabel("Max Y"), ms.maxYEntry),
-		container.NewVBox(widget.NewLabel("Min Z"), ms.minZEntry),
-		container.NewVBox(widget.NewLabel("Max Z"), ms.maxZEntry),
+	ms.centerX=NewStepperEntry("0");ms.centerY=NewStepperEntry("64");ms.centerZ=NewStepperEntry("0");ms.radiusX=NewStepperEntry("32");ms.radiusY=NewStepperEntry("32");ms.radiusZ=NewStepperEntry("32")
+	for _,e:=range []*StepperEntry{ms.centerX,ms.centerY,ms.centerZ,ms.radiusX,ms.radiusY,ms.radiusZ}{e.SetBounds(-30000000,30000000);e.OnChanged=func(string){ms.syncBubblePreview();ms.updateMetaHUD(ms.selectionSizeText())}}
+	ms.bubbleCoordGroup=container.NewVBox(
+		compactNumberRow("Center X",ms.centerX),compactNumberRow("Center Y",ms.centerY),compactNumberRow("Center Z",ms.centerZ),
+		widget.NewSeparator(),compactNumberRow("Radius X",ms.radiusX),compactNumberRow("Radius Y",ms.radiusY),compactNumberRow("Radius Z",ms.radiusZ),
 	)
-	ms.boxCoordGroup = container.NewVBox(coordGrid)
-
-	onBoxFieldChanged := func(string) {
-		if !ms.suppressSelectionClear {
-			ms.customSelectionFile = ""
-		}
-		ms.updateMetaHUD(ms.selectionSizeText())
-	}
-	for _, e := range []*widget.Entry{ms.minXEntry, ms.maxXEntry, ms.minYEntry, ms.maxYEntry, ms.minZEntry, ms.maxZEntry} {
-		e.OnChanged = onBoxFieldChanged
-	}
-
-	// Bubble (center + outward radius) selection — click a point on the map
-	// to set the center, then dial in how far outward the selection reaches
-	// on each axis. Lets you grab "everything within N blocks of this tree"
-	// without hand-computing a bounding box.
-	ms.centerXEntry = ms.makeEntry("0")
-	ms.centerYEntry = ms.makeEntry("64")
-	ms.centerZEntry = ms.makeEntry("0")
-	ms.radiusXEntry = ms.makeEntry("32")
-	ms.radiusYEntry = ms.makeEntry("32")
-	ms.radiusZEntry = ms.makeEntry("32")
-
-	onBubbleFieldChanged := func(string) {
-		ms.syncBubblePreview()
-		if !ms.suppressSelectionClear {
-			ms.customSelectionFile = ""
-		}
-		ms.updateMetaHUD(ms.selectionSizeText())
-	}
-	ms.centerXEntry.OnChanged = onBubbleFieldChanged
-	ms.centerYEntry.OnChanged = onBubbleFieldChanged
-	ms.centerZEntry.OnChanged = onBubbleFieldChanged
-	ms.radiusXEntry.OnChanged = onBubbleFieldChanged
-	ms.radiusYEntry.OnChanged = onBubbleFieldChanged
-	ms.radiusZEntry.OnChanged = onBubbleFieldChanged
-
-	bubbleHint := widget.NewLabel("Click the map to set the center point")
-	bubbleHint.TextStyle = fyne.TextStyle{Italic: true}
-
-	bubbleGrid := container.NewGridWithColumns(2,
-		container.NewVBox(widget.NewLabel("Center X"), ms.centerXEntry),
-		container.NewVBox(widget.NewLabel("Radius X"), ms.radiusXEntry),
-		container.NewVBox(widget.NewLabel("Center Y"), ms.centerYEntry),
-		container.NewVBox(widget.NewLabel("Radius Y"), ms.radiusYEntry),
-		container.NewVBox(widget.NewLabel("Center Z"), ms.centerZEntry),
-		container.NewVBox(widget.NewLabel("Radius Z"), ms.radiusZEntry),
-	)
-	ms.bubbleCoordGroup = container.NewVBox(bubbleHint, bubbleGrid)
 	ms.bubbleCoordGroup.Hide()
+	ms.autoDetectBtn=widget.NewButtonWithIcon("Auto-detect world bounds",theme.SearchIcon(),ms.onAutoDetect);ms.autoDetectBtn.Disable()
+	selectionCard:=widget.NewCard("SELECTION","",container.NewVBox(ms.selectionModeSelect,ms.boxCoordGroup,ms.bubbleCoordGroup,container.NewPadded(ms.autoDetectBtn)))
 
-	ms.selectionModeSelect = widget.NewSelect([]string{"Box (min/max)", "Bubble (center + radius)"}, func(choice string) {
-		bubble := choice == "Bubble (center + radius)"
-		if bubble {
-			ms.boxCoordGroup.Hide()
-			ms.bubbleCoordGroup.Show()
-		} else {
-			ms.bubbleCoordGroup.Hide()
-			ms.boxCoordGroup.Show()
-		}
-		if ms.worldMap != nil {
-			ms.worldMap.SetBubbleMode(bubble)
-		}
-		if !ms.suppressSelectionClear {
-			ms.customSelectionFile = ""
-		}
-		ms.updateMetaHUD(ms.selectionSizeText())
-	})
-	ms.selectionModeSelect.SetSelected("Box (min/max)")
+	ms.formatSelect=widget.NewSelect([]string{"glTF 2.0","OBJ + MTL"},nil);ms.formatSelect.SetSelected("glTF 2.0")
+	ms.modeSelect=widget.NewSelect([]string{"Grouped","Individual blocks","Merged"},nil);ms.modeSelect.SetSelected("Grouped")
+	ms.optimizeCheck=widget.NewCheck("Optimize geometry",nil);ms.optimizeHint=widget.NewLabel("Enable face culling in Basic Settings")
+	ms.optimizeHint.TextStyle=fyne.TextStyle{Italic:true};ms.applyOptimizeGate()
+	exportCard:=widget.NewCard("EXPORT","",container.NewVBox(compactSelectRow("Format",ms.formatSelect),compactSelectRow("Objects",ms.modeSelect),ms.optimizeCheck,ms.optimizeHint))
 
-	ms.autoDetectBtn = widget.NewButtonWithIcon("Auto-detect bounds", theme.SearchIcon(), ms.onAutoDetect)
-	ms.autoDetectBtn.Disable()
+	ms.outputLabel=widget.NewLabel("~/Minesport_Exports");ms.outputLabel.Truncation=fyne.TextTruncateEllipsis
+	outputCard:=widget.NewCard("OUTPUT","",container.NewVBox(ms.outputLabel,widget.NewButtonWithIcon("Change folder",theme.FolderIcon(),ms.onSelectOutput)))
+	ms.exportBtn=widget.NewButtonWithIcon("Export world",theme.DownloadIcon(),ms.onExport);ms.exportBtn.Importance=widget.HighImportance;ms.exportBtn.Disable()
 
-	regionCard := widget.NewCard("Region", "", container.NewVBox(
-		ms.selectionModeSelect,
-		ms.boxCoordGroup,
-		ms.bubbleCoordGroup,
-		ms.autoDetectBtn,
-	))
-
-	// Output folder
-	ms.outputLabel = widget.NewLabel("~/Minesport_Exports")
-	ms.outputLabel.Truncation = fyne.TextTruncateEllipsis
-
-	outputBtn := widget.NewButtonWithIcon("Change folder", theme.FolderIcon(), ms.onSelectOutput)
-	outputBtn.Alignment = widget.ButtonAlignLeading
-
-	outputCard := widget.NewCard("Output", "", container.NewVBox(ms.outputLabel, outputBtn))
-
-	// Export button
-	ms.exportBtn = widget.NewButtonWithIcon("Export", theme.DownloadIcon(), ms.onExport)
-	ms.exportBtn.Importance = widget.HighImportance
-	ms.exportBtn.Disable()
-
-	// Assemble sidebar — Cards give each section a clear visual boundary
-	// instead of stacked labels/separators, and consistent spacing between
-	// them instead of the mixed rhythm that grows organically otherwise.
-	sidebar := container.NewVBox(
-		worldCard,
-		exportCard,
-		regionCard,
-		outputCard,
-		container.NewPadded(ms.exportBtn),
-	)
-
-	scroll := container.NewVScroll(container.NewPadded(sidebar))
-	return scroll
+	side:=container.NewVBox(worldCard,selectionCard,exportCard,outputCard,container.NewPadded(ms.exportBtn));return container.NewVScroll(container.NewPadded(side))
 }
 
-// applyOptimizeGate enables/disables the sidebar's Optimize Output checkbox
-// (and swaps the hint text) to match the global Settings toggle. Called at
-// sidebar build time and again whenever Settings are saved.
-func (ms *MinesportApp) applyOptimizeGate() {
-	if ms.optimizeCheck == nil {
-		return
-	}
-	if ms.settings.OptimizeOutputEnabled {
-		ms.optimizeCheck.Enable()
-		ms.optimizeHint.Hide()
-	} else {
-		ms.optimizeCheck.SetChecked(false)
-		ms.optimizeCheck.Disable()
-		ms.optimizeHint.Show()
-	}
+func compactNumberRow(label string,e *StepperEntry) fyne.CanvasObject{return container.NewBorder(nil,nil,widget.NewLabel(label),nil,e)}
+func compactSelectRow(label string,s *widget.Select) fyne.CanvasObject{return container.NewBorder(nil,nil,widget.NewLabel(label),nil,s)}
+
+func (ms *MinesportApp) applyOptimizeGate(){if ms.optimizeCheck==nil{return};if ms.settings.OptimizeOutputEnabled{ms.optimizeCheck.Enable();ms.optimizeHint.Hide()}else{ms.optimizeCheck.SetChecked(false);ms.optimizeCheck.Disable();ms.optimizeHint.Show()}}
+
+func (ms *MinesportApp) buildMainArea() fyne.CanvasObject{
+	ms.viewToggle2D=widget.NewButtonWithIcon("2D",theme.GridIcon(),func(){ms.worldMap.SetMode2D()});ms.viewToggle2D.Importance=widget.HighImportance
+	ms.viewToggle3D=widget.NewButtonWithIcon("3D preview",theme.ViewFullScreenIcon(),ms.onExplore3D);ms.viewToggle3D.Disable()
+	ms.fitBtn=widget.NewButtonWithIcon("Fit",theme.ZoomFitIcon(),func(){ms.worldMap.FitToWindow()});ms.settingsBtn=widget.NewButtonWithIcon("Settings",theme.SettingsIcon(),ms.onOpenSettings)
+	toolbar:=container.NewBorder(nil,nil,container.NewHBox(ms.viewToggle2D,ms.viewToggle3D),container.NewHBox(ms.fitBtn,ms.settingsBtn),widget.NewLabel("LMB select · MMB pan · scroll zoom"))
+
+	ms.worldMap=NewWorldMapV2()
+	ms.worldMap.OnSelectionChanged=func(minX,minZ,maxX,maxZ int){ms.minXRange.Front.SetText(fmt.Sprintf("%d",minX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",maxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",minZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",maxZ));ms.updateMetaHUD(ms.selectionSizeText())}
+	ms.worldMap.OnCursorMoved=func(x,z int){ms.cursorLabel.SetText(fmt.Sprintf("X %d  ·  Z %d",x,z))}
+	ms.worldMap.OnCenterPicked=func(x,z int){ms.centerX.SetText(fmt.Sprintf("%d",x));ms.centerZ.SetText(fmt.Sprintf("%d",z))}
+
+	mapArea:=container.NewStack(ms.worldMap,container.NewVBox(layout.NewSpacer(),container.NewHBox(layout.NewSpacer(),ms.buildMetaHUD())))
+	ms.logContent=widget.NewLabel("");ms.logContent.TextStyle=fyne.TextStyle{Monospace:true};ms.logContent.Wrapping=fyne.TextWrapWord;ms.logScroll=container.NewVScroll(ms.logContent)
+	ms.progressBar=widget.NewProgressBar();ms.statusLabel=widget.NewLabel("Ready");ms.stateIcon=widget.NewIcon(theme.InfoIcon());ms.cursorLabel=widget.NewLabel("")
+	state:=container.NewBorder(nil,nil,container.NewHBox(ms.stateIcon,ms.statusLabel),ms.cursorLabel,ms.progressBar)
+	return container.NewBorder(toolbar,state,nil,nil,mapArea)
 }
 
-// ── Main area ─────────────────────────────────────────────────────────────────
+func(ms *MinesportApp)buildMetaHUD()fyne.CanvasObject{bg:=canvas.NewRectangle(color.NRGBA{12,16,20,220});bg.CornerRadius=6;ms.metaHUD=widget.NewLabel("");ms.metaHUD.TextStyle=fyne.TextStyle{Monospace:true,Bold:true};return container.NewStack(bg,container.NewPadded(ms.metaHUD))}
+func(ms *MinesportApp)updateMetaHUD(text string){if ms.metaHUD!=nil{ms.metaHUD.SetText(text)}}
+func(ms *MinesportApp)selectionSizeText()string{var w,h,d int;if ms.selectionModeSelect!=nil&&ms.selectionModeSelect.Selected=="Bubble selection"{w=2*ms.radiusX.Int(32)+1;h=2*ms.radiusY.Int(32)+1;d=2*ms.radiusZ.Int(32)+1}else{a,b:=ms.minXRange.Bounds();c,e:=ms.minYRange.Bounds();f,g:=ms.minZRange.Bounds();w=b-a+1;h=e-c+1;d=g-f+1};if w<0{w=-w};if h<0{h=-h};if d<0{d=-d};return fmt.Sprintf("%s blocks  ·  %s × %s × %s",formatCount(w*h*d),formatCount(w),formatCount(h),formatCount(d))}
+func formatCount(n int)string{if n<0{n=0};s:=fmt.Sprintf("%d",n);out:="";for i,c:=range s{if i>0&&(len(s)-i)%3==0{out+=","};out+=string(c)};return out}
 
-func (ms *MinesportApp) buildMainArea() fyne.CanvasObject {
+func(ms *MinesportApp)onSelectWorld(){ShowWorldPicker(ms.window,func(worldPath,modsPath string){ms.worldPath=worldPath;ms.modsPath=modsPath;ms.worldName=filepath.Base(worldPath);ms.worldNameLabel.SetText(ms.worldName);ms.worldMetaLabel.SetText(ms.detectWorldMeta(worldPath));if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)};ms.exportBtn.Enable();ms.autoDetectBtn.Enable();ms.viewToggle3D.Enable();go ms.generateHeightmap(worldPath)})}
+func(ms *MinesportApp)onSelectOutput(){go func(){f:=nativeOpenFolder("Select Output Folder");if f!=""{ms.outputPath=f;ms.outputLabel.SetText(f)}}()}
+func(ms *MinesportApp)onAutoDetect(){if ms.worldPath==""{return};go func(){r,e:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":ms.worldPath,"scale":1});if e!=nil||r==nil||r.Type!="heightmap"{return};ms.minXRange.Front.SetText(fmt.Sprintf("%d",r.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",r.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",r.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",r.MaxZ))}()}
 
-	// View toggle toolbar
-	ms.viewToggle2D = widget.NewButtonWithIcon("2D", theme.GridIcon(), func() {
-		ms.worldMap.SetMode2D()
-	})
-	ms.viewToggle2D.Importance = widget.HighImportance
-
-	// "3D" opens the real 3D preview viewer (a separate process — see
-	// viewer/window.go's doc comment for why) rather than toggling a mode
-	// on the map widget the way "2D" does. It used to switch the map into
-	// a flat pseudo-isometric render; that's retired now that there's an
-	// actual navigable 3D view.
-	ms.viewToggle3D = widget.NewButtonWithIcon("3D", theme.ViewFullScreenIcon(), ms.onExplore3D)
-	ms.viewToggle3D.Disable() // enabled once a world is selected
-
-	ms.fitBtn = widget.NewButtonWithIcon("Fit world", theme.ZoomFitIcon(), func() {
-		ms.worldMap.FitToWindow()
-	})
-
-	ms.settingsBtn = widget.NewButtonWithIcon("Settings", theme.SettingsIcon(), ms.onOpenSettings)
-
-	hintDrag := widget.NewLabel("drag: select")
-	hintPan := widget.NewLabel("RMB: pan")
-	hintZoom := widget.NewLabel("scroll: zoom")
-	for _, l := range []*widget.Label{hintDrag, hintPan, hintZoom} {
-		l.TextStyle = fyne.TextStyle{Italic: true}
-	}
-
-	toolbar := container.NewBorder(nil, nil,
-		container.NewHBox(ms.viewToggle2D, ms.viewToggle3D),
-		container.NewHBox(ms.fitBtn, ms.settingsBtn),
-		container.NewHBox(hintDrag, hintPan, hintZoom),
-	)
-
-	// World map widget
-	ms.worldMap = NewWorldMap()
-	ms.worldMap.OnSelectionChanged = func(minX, minZ, maxX, maxZ int) {
-		ms.minXEntry.SetText(fmt.Sprintf("%d", minX))
-		ms.minZEntry.SetText(fmt.Sprintf("%d", minZ))
-		ms.maxXEntry.SetText(fmt.Sprintf("%d", maxX))
-		ms.maxZEntry.SetText(fmt.Sprintf("%d", maxZ))
-		ms.appendLog(fmt.Sprintf("Selection: X[%d→%d] Z[%d→%d]", minX, maxX, minZ, maxZ))
-	}
-	ms.worldMap.OnCursorMoved = func(worldX, worldZ int) {
-		ms.cursorLabel.SetText(fmt.Sprintf("X: %d  Z: %d", worldX, worldZ))
-	}
-	ms.worldMap.OnCenterPicked = func(worldX, worldZ int) {
-		ms.centerXEntry.SetText(fmt.Sprintf("%d", worldX))
-		ms.centerZEntry.SetText(fmt.Sprintf("%d", worldZ))
-		ms.appendLog(fmt.Sprintf("Bubble center set: X=%d Z=%d", worldX, worldZ))
-	}
-
-	mapArea := container.NewStack(
-		ms.worldMap,
-		container.NewVBox(
-			layout.NewSpacer(),
-			container.NewHBox(layout.NewSpacer(), ms.buildMetaHUD()),
-		),
-	)
-
-	// Log content is captured continuously (appendLog always writes here)
-	// but is only ever SHOWN inside the separate debug console window —
-	// see openDebugConsole(). The main window stays clean by default.
-	ms.logContent = widget.NewLabel("")
-	ms.logContent.TextStyle = fyne.TextStyle{Monospace: true}
-	ms.logContent.Wrapping = fyne.TextWrapWord
-	ms.logScroll = container.NewVScroll(ms.logContent)
-	ms.logScroll.SetMinSize(fyne.NewSize(0, 90))
-
-	// Export-state row: an icon + text that always shows what's actually
-	// happening right now (ready / running phase / done with stats / failed)
-	// — previously this label doubled as the cursor-position readout too,
-	// so hovering the map would silently blow away whatever export status
-	// was showing. Cursor position now lives in its own label.
-	ms.progressBar = widget.NewProgressBar()
-	ms.stateIcon = widget.NewIcon(theme.InfoIcon())
-	ms.statusLabel = widget.NewLabel("Ready")
-	ms.statusLabel.TextStyle = fyne.TextStyle{Italic: true}
-	ms.cursorLabel = widget.NewLabel("")
-	ms.cursorLabel.TextStyle = fyne.TextStyle{Italic: true}
-
-	stateRow := container.NewBorder(nil, nil,
-		container.NewHBox(ms.stateIcon, ms.statusLabel),
-		ms.cursorLabel,
-		ms.progressBar,
-	)
-
-	// Assemble main area — no console/log panel here anymore; just the
-	// map and the export-state row. Enable Debug mode in Settings to see
-	// engine output, in its own window.
-	return container.NewBorder(
-		toolbar,
-		stateRow,
-		nil, nil,
-		mapArea,
-	)
+func(ms *MinesportApp)onExport(){if ms.worldPath==""{dialog.ShowError(fmt.Errorf("no world selected"),ms.window);return};ms.exportBtn.Disable();ms.progressBar.SetValue(0);ms.statusLabel.SetText("Preparing export…");ms.showExportProgress()
+	format:="gltf";if strings.Contains(ms.formatSelect.Selected,"OBJ"){format="obj"};mode:="grouped";switch ms.modeSelect.Selected{case "Individual blocks":mode="individual";case "Merged":mode="merged"}
+	p:=ipc.ExportParams{WorldPath:ms.worldPath,OutputPath:filepath.Join(ms.outputPath,ms.worldName+"_export."+format),Format:format,ExportMode:mode}
+	if ms.selectionModeSelect.Selected=="Bubble selection"{cx,cy,cz:=ms.centerX.Int(0),ms.centerY.Int(64),ms.centerZ.Int(0);rx,ry,rz:=ms.radiusX.Int(32),ms.radiusY.Int(32),ms.radiusZ.Int(32);p.MinX,p.MaxX=cx-rx,cx+rx;p.MinY,p.MaxY=cy-ry,cy+ry;p.MinZ,p.MaxZ=cz-rz,cz+rz;p.CenterX,p.CenterY,p.CenterZ=&cx,&cy,&cz;p.RadiusX,p.RadiusY,p.RadiusZ=&rx,&ry,&rz}else{p.MinX,p.MaxX=ms.minXRange.Bounds();p.MinY,p.MaxY=ms.minYRange.Bounds();p.MinZ,p.MaxZ=ms.minZRange.Bounds()}
+	options:=map[string]string{};if ms.optimizeCheck.Checked{options["optimize"]="true"};if ms.customSelectionFile!=""{options["customSelectionFile"]=ms.customSelectionFile};if len(ms.settings.ResourcePackPaths)>0{options["resourcePacks"]=PathListString(ms.settings.ResourcePackPaths)};if len(ms.settings.DataPackPaths)>0{options["dataPacks"]=PathListString(ms.settings.DataPackPaths)};p.Options=options
+	if err:=ms.engine.Export(p);err!=nil{ms.finishExport(ipc.Response{},false,err.Error())}
 }
 
-// buildMetaHUD creates the bottom-right corner overlay: selection size
-// while you're setting one up, then real block/face/vertex counts once a
-// listBlocks or export actually runs — the "for 3D artists" readout.
-func (ms *MinesportApp) buildMetaHUD() fyne.CanvasObject {
-	backdrop := canvas.NewRectangle(color.NRGBA{R: 20, G: 20, B: 26, A: 190})
-	backdrop.CornerRadius = 4
-
-	ms.metaHUD = widget.NewLabel("")
-	ms.metaHUD.TextStyle = fyne.TextStyle{Monospace: true}
-	ms.metaHUD.Alignment = fyne.TextAlignTrailing
-
-	return container.NewStack(backdrop, container.NewPadded(ms.metaHUD))
+func(ms *MinesportApp)showExportProgress(){if ms.exportWindow!=nil{return};w:=ms.fyneApp.NewWindow("Minesport — Exporting");w.Resize(fyne.NewSize(620,330));w.SetFixedSize(true);ms.exportTitle=widget.NewLabel("Exporting world…");ms.exportTitle.TextStyle=fyne.TextStyle{Bold:true};ms.exportStage=widget.NewLabel("Preparing…");ms.exportDetail=widget.NewLabel("");ms.exportBar=widget.NewProgressBar();ms.exportStats=widget.NewLabel("");cancel:=widget.NewButton("Minimize",func(){})
+	card:=widget.NewCard("LIVE EXPORT","",container.NewVBox(ms.exportStage,ms.exportBar,ms.exportDetail,widget.NewSeparator(),ms.exportStats,canvas.NewText("Main window is hidden while the exporter runs.",color.NRGBA{150,160,170,255})))
+	w.SetContent(container.NewBorder(container.NewPadded(ms.exportTitle),container.NewPadded(cancel),nil,nil,container.NewPadded(card)));ms.exportWindow=w;ms.window.Hide();w.Show()
 }
+func(ms *MinesportApp)updateExportProgress(pct int,msg string){if ms.exportWindow==nil{return};ms.exportBar.SetValue(float64(pct)/100);ms.exportStage.SetText(msg);blocks:=ms.estimateBlocks();estimatedBlocks:=int(float64(blocks)*float64(pct)/100);verts:=estimatedBlocks*24;data:=estimatedBlocks*80;ms.exportDetail.SetText(fmt.Sprintf("Blocks %s / ~%s",formatCount(estimatedBlocks),formatCount(blocks)));ms.exportStats.SetText(fmt.Sprintf("Estimated vertices  ~%s\nEstimated geometry data  ~%s KB",formatCount(verts),formatCount(data/1024)))}
+func(ms *MinesportApp)estimateBlocks()int{var w,h,d int;if ms.selectionModeSelect.Selected=="Bubble selection"{w=2*ms.radiusX.Int(32)+1;h=2*ms.radiusY.Int(32)+1;d=2*ms.radiusZ.Int(32)+1}else{a,b:=ms.minXRange.Bounds();c,e:=ms.minYRange.Bounds();f,g:=ms.minZRange.Bounds();w=b-a+1;h=e-c+1;d=g-f+1};if w<1{w=1};if h<1{h=1};if d<1{d=1};return w*h*d}
+func(ms *MinesportApp)finishExport(resp ipc.Response,ok bool,msg string){if ok{ms.progressBar.SetValue(1);ms.statusLabel.SetText("Done");ms.stateIcon.SetResource(theme.ConfirmIcon());ms.updateExportProgress(100,"Export complete");ms.updateMetaHUD(fmt.Sprintf("%s blocks · %s faces · ≤%s verts",formatCount(resp.BlockCount),formatCount(resp.QuadCount),formatCount(resp.VertexCount)));if ms.exportWindow!=nil{ms.exportWindow.Close();ms.exportWindow=nil};ms.window.Show();ms.exportBtn.Enable()}else{ms.statusLabel.SetText("Failed");ms.stateIcon.SetResource(theme.ErrorIcon());if ms.exportWindow!=nil{ms.exportStage.SetText("Export failed");ms.exportDetail.SetText(msg);ms.exportWindow.Show()}else{ms.window.Show()};ms.exportBtn.Enable()}}
 
-// updateMetaHUD refreshes the corner readout. Called whenever the
-// selection changes (live estimate) and whenever real counts come back
-// from the engine (listBlocks / export done).
-func (ms *MinesportApp) updateMetaHUD(text string) {
-	if ms.metaHUD == nil {
-		return
-	}
-	ms.metaHUD.SetText(text)
-}
+func(ms *MinesportApp)generateHeightmap(worldFolder string){resp,err:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":worldFolder,"scale":1});if err!=nil||resp==nil||resp.Type!="heightmap"||resp.Image==""{return};b,err:=base64.StdEncoding.DecodeString(resp.Image);if err!=nil{return};img,_,err:=image.Decode(bytes.NewReader(b));if err!=nil{return};rgba:=image.NewRGBA(img.Bounds());for y:=img.Bounds().Min.Y;y<img.Bounds().Max.Y;y++{for x:=img.Bounds().Min.X;x<img.Bounds().Max.X;x++{rgba.Set(x,y,img.At(x,y))}};ms.worldMap.LoadHeightmap(rgba,resp.MinX,resp.MinZ,resp.MaxX,resp.MaxZ);ms.worldMap.FitToWindow();ms.minXRange.Front.SetText(fmt.Sprintf("%d",resp.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",resp.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",resp.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",resp.MaxZ))}
 
-// selectionSizeText computes the current selection's block-space
-// dimensions from whichever mode (box/bubble) is active — cheap, instant,
-// no engine round-trip, shown before any real data has been fetched.
-func (ms *MinesportApp) selectionSizeText() string {
-	var w, h, d int
-	if ms.selectionModeSelect != nil && ms.selectionModeSelect.Selected == "Bubble (center + radius)" {
-		w = 2 * ms.intEntry(ms.radiusXEntry, 32)
-		h = 2 * ms.intEntry(ms.radiusYEntry, 32)
-		d = 2 * ms.intEntry(ms.radiusZEntry, 32)
-	} else {
-		w = ms.intEntry(ms.maxXEntry, 256) - ms.intEntry(ms.minXEntry, -256)
-		h = ms.intEntry(ms.maxYEntry, 320) - ms.intEntry(ms.minYEntry, -64)
-		d = ms.intEntry(ms.maxZEntry, 256) - ms.intEntry(ms.minZEntry, -256)
-	}
-	return fmt.Sprintf("selection: %d × %d × %d blocks (up to %s)", w, h, d, formatCount(w*h*d))
-}
-
-func formatCount(n int) string {
-	if n < 0 {
-		n = 0
-	}
-	s := fmt.Sprintf("%d", n)
-	var out []byte
-	for i, c := range []byte(s) {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			out = append(out, ',')
-		}
-		out = append(out, c)
-	}
-	return string(out)
-}
-
-// ── Actions ───────────────────────────────────────────────────────────────────
-
-func (ms *MinesportApp) onSelectWorld() {
-	ShowWorldPicker(ms.window, func(worldPath, modsPath string) {
-		ms.worldPath = worldPath
-		ms.modsPath = modsPath
-
-		name := filepath.Base(worldPath)
-		ms.worldName = name
-		ms.worldNameLabel.SetText(name)
-
-		// Detect version + loader from instance info
-		meta := ms.detectWorldMeta(worldPath)
-		ms.worldMetaLabel.SetText(meta)
-
-		if ms.outputPath == "" {
-			home, _ := os.UserHomeDir()
-			ms.outputPath = filepath.Join(home, "Minesport_Exports")
-			ms.outputLabel.SetText(ms.outputPath)
-		}
-
-		ms.exportBtn.Enable()
-		ms.autoDetectBtn.Enable()
-		ms.viewToggle3D.Enable()
-		ms.appendLog("World selected: " + name)
-		ms.appendLog("Output: " + ms.outputPath)
-
-		go ms.generateHeightmap(worldPath)
-	})
-}
-
-func (ms *MinesportApp) onSelectOutput() {
-	go func() {
-		folder := nativeOpenFolder("Select Output Folder")
-		if folder == "" {
-			return
-		}
-		ms.outputPath = folder
-		ms.outputLabel.SetText(folder)
-		ms.appendLog("Output folder: " + folder)
-	}()
-}
-
-func (ms *MinesportApp) onAutoDetect() {
-	if ms.worldPath == "" {
-		return
-	}
-	ms.appendLog("Auto-detecting world bounds...")
-	go func() {
-		resp, err := ms.engine.SendCommand(map[string]interface{}{
-			"command":   "heightmap",
-			"worldPath": ms.worldPath,
-			"scale":     1,
-		})
-		if err != nil || resp == nil || resp.Type != "heightmap" {
-			return
-		}
-		// Set bounds from actual world data
-		ms.minXEntry.SetText(fmt.Sprintf("%d", resp.MinX))
-		ms.maxXEntry.SetText(fmt.Sprintf("%d", resp.MaxX))
-		ms.minZEntry.SetText(fmt.Sprintf("%d", resp.MinZ))
-		ms.maxZEntry.SetText(fmt.Sprintf("%d", resp.MaxZ))
-		ms.appendLog(fmt.Sprintf("Auto-detected: X[%d→%d] Z[%d→%d]",
-			resp.MinX, resp.MaxX, resp.MinZ, resp.MaxZ))
-	}()
-}
-
-func (ms *MinesportApp) onExport() {
-	if ms.worldPath == "" {
-		dialog.ShowError(fmt.Errorf("No world selected"), ms.window)
-		return
-	}
-
-	ms.exportBtn.Disable()
-	ms.progressBar.SetValue(0)
-	ms.statusLabel.SetText("Exporting...")
-	ms.stateIcon.SetResource(theme.ViewRefreshIcon())
-	ms.appendLog("─── Starting export ───")
-
-	format := "gltf"
-	if strings.Contains(ms.formatSelect.Selected, "OBJ") {
-		format = "obj"
-	}
-	exportMode := "grouped"
-	switch ms.modeSelect.Selected {
-	case "Individual blocks":
-		exportMode = "individual"
-	case "All merged":
-		exportMode = "merged"
-	}
-
-	outFile := filepath.Join(ms.outputPath, ms.worldName+"_export")
-	if format == "gltf" {
-		outFile += ".gltf"
-	} else {
-		outFile += ".obj"
-	}
-
-	params := ipc.ExportParams{
-		WorldPath:  ms.worldPath,
-		OutputPath: outFile,
-		Format:     format,
-		ExportMode: exportMode,
-	}
-
-	if ms.selectionModeSelect.Selected == "Bubble (center + radius)" {
-		cx := ms.intEntry(ms.centerXEntry, 0)
-		cy := ms.intEntry(ms.centerYEntry, 64)
-		cz := ms.intEntry(ms.centerZEntry, 0)
-		rx := ms.intEntry(ms.radiusXEntry, 32)
-		ry := ms.intEntry(ms.radiusYEntry, 32)
-		rz := ms.intEntry(ms.radiusZEntry, 32)
-
-		// The engine still needs a bounding box to scan region files —
-		// the ellipsoid's own bounding box covers it, and the engine
-		// narrows down to the true ellipsoid from there.
-		params.MinX, params.MaxX = cx-rx, cx+rx
-		params.MinY, params.MaxY = cy-ry, cy+ry
-		params.MinZ, params.MaxZ = cz-rz, cz+rz
-		params.CenterX, params.CenterY, params.CenterZ = &cx, &cy, &cz
-		params.RadiusX, params.RadiusY, params.RadiusZ = &rx, &ry, &rz
-
-		ms.appendLog(fmt.Sprintf("Bubble selection: center(%d,%d,%d) radius(%d,%d,%d)", cx, cy, cz, rx, ry, rz))
-	} else {
-		params.MinX = ms.intEntry(ms.minXEntry, -256)
-		params.MinY = ms.intEntry(ms.minYEntry, -64)
-		params.MinZ = ms.intEntry(ms.minZEntry, -256)
-		params.MaxX = ms.intEntry(ms.maxXEntry, 256)
-		params.MaxY = ms.intEntry(ms.maxYEntry, 320)
-		params.MaxZ = ms.intEntry(ms.maxZEntry, 256)
-	}
-
-	options := map[string]string{}
-	if ms.optimizeCheck != nil && ms.optimizeCheck.Checked {
-		options["optimize"] = "true"
-		ms.appendLog("Optimize Output: culling hidden faces, welding vertices (experimental)")
-	}
-	if ms.customSelectionFile != "" {
-		options["customSelectionFile"] = ms.customSelectionFile
-		ms.appendLog(fmt.Sprintf("Using exact 3D selection: %s blocks (narrowed from the box above)", formatCount(ms.customSelectionCount)))
-	}
-	if len(ms.settings.ResourcePackPaths) > 0 {
-		options["resourcePacks"] = PathListString(ms.settings.ResourcePackPaths)
-	}
-	if len(ms.settings.DataPackPaths) > 0 {
-		options["dataPacks"] = PathListString(ms.settings.DataPackPaths)
-	}
-	if len(options) > 0 {
-		params.Options = options
-	}
-
-	err := ms.engine.Export(params)
-	if err != nil {
-		ms.appendLog("Export send failed: " + err.Error())
-		ms.exportBtn.Enable()
-	}
-}
-
-// ── Heightmap ─────────────────────────────────────────────────────────────────
-
-func (ms *MinesportApp) generateHeightmap(worldFolder string) {
-	ms.appendLog("Generating world map (1:1)...")
-	ms.progressBar.SetValue(0.1)
-	ms.statusLabel.SetText("Loading map...")
-
-	resp, err := ms.engine.SendCommand(map[string]interface{}{
-		"command":   "heightmap",
-		"worldPath": worldFolder,
-		"scale":     1, // 1:1 — every pixel = 1 block
-	})
-	if err != nil || resp == nil || resp.Type != "heightmap" || resp.Image == "" {
-		ms.appendLog("[WARN] Heightmap not available")
-		ms.progressBar.SetValue(0)
-		ms.statusLabel.SetText("Ready")
-		return
-	}
-
-	imgBytes, err := base64.StdEncoding.DecodeString(resp.Image)
-	if err != nil {
-		ms.appendLog("[WARN] Heightmap decode failed: " + err.Error())
-		return
-	}
-
-	img, _, err := image.Decode(bytes.NewReader(imgBytes))
-	if err != nil {
-		ms.appendLog("[WARN] Heightmap parse failed: " + err.Error())
-		return
-	}
-
-	rgba := image.NewRGBA(img.Bounds())
-	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
-		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
-			rgba.Set(x, y, img.At(x, y))
-		}
-	}
-
-	ms.worldMap.LoadHeightmap(rgba, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ)
-	ms.worldMap.FitToWindow()
-
-	ms.progressBar.SetValue(0)
-	ms.statusLabel.SetText("Ready")
-	ms.appendLog(fmt.Sprintf("Map ready: X[%d→%d] Z[%d→%d] — %dx%d px",
-		resp.MinX, resp.MaxX, resp.MinZ, resp.MaxZ,
-		img.Bounds().Dx(), img.Bounds().Dy()))
-
-	// Set auto-bounds from map
-	ms.minXEntry.SetText(fmt.Sprintf("%d", resp.MinX))
-	ms.maxXEntry.SetText(fmt.Sprintf("%d", resp.MaxX))
-	ms.minZEntry.SetText(fmt.Sprintf("%d", resp.MinZ))
-	ms.maxZEntry.SetText(fmt.Sprintf("%d", resp.MaxZ))
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-func (ms *MinesportApp) appendLog(msg string) {
-	ms.mu.Lock()
-	current := ms.logContent.Text
-	ms.mu.Unlock()
-
-	lines := strings.Split(current, "\n")
-	if len(lines) > 200 {
-		lines = lines[len(lines)-200:]
-	}
-	lines = append(lines, msg)
-	next := strings.Join(lines, "\n")
-
-	ms.logContent.SetText(next)
-	ms.logScroll.ScrollToBottom()
-}
-
-// ── Settings ──────────────────────────────────────────────────────────────────
-
-func (ms *MinesportApp) onOpenSettings() {
-	ShowSettingsDialog(ms.window, ms.settings, ms.applySettings)
-}
-
-func (ms *MinesportApp) applySettings(s Settings) {
-	wasDebug := ms.settings.DebugMode
-	ms.settings = s
-
-	if err := s.Save(); err != nil {
-		ms.appendLog("[WARN] Failed to save settings: " + err.Error())
-	}
-
-	if s.DebugMode && !wasDebug {
-		ms.openDebugConsole()
-	} else if !s.DebugMode && wasDebug {
-		ms.closeDebugConsole()
-	}
-
-	ms.applyOptimizeGate()
-	ms.appendLog("Settings updated.")
-}
-
-// openDebugConsole shows the engine log in its own window. The log content
-// widget already exists and has been accumulating messages the whole time
-// (appendLog never stops writing to it) — this just makes it visible.
-func (ms *MinesportApp) openDebugConsole() {
-	if ms.debugWindow != nil {
-		ms.debugWindow.RequestFocus()
-		return
-	}
-	dw := ms.fyneApp.NewWindow("Minesport — Debug Console")
-	dw.SetContent(container.NewPadded(ms.logScroll))
-	dw.Resize(fyne.NewSize(640, 360))
-	dw.SetOnClosed(func() {
-		ms.debugWindow = nil
-		// Closing the console window doesn't silently flip Debug mode off
-		// behind the user's back — that's still controlled from Settings.
-	})
-	ms.debugWindow = dw
-	dw.Show()
-}
-
-func (ms *MinesportApp) closeDebugConsole() {
-	if ms.debugWindow != nil {
-		ms.debugWindow.Close()
-		ms.debugWindow = nil
-	}
-}
-
-// syncBubblePreview pushes the current center/radius sidebar fields into
-// the map's preview rectangle. Cheap no-op if a field is invalid/empty —
-// entries mid-edit are common while typing.
-func (ms *MinesportApp) syncBubblePreview() {
-	if ms.worldMap == nil {
-		return
-	}
-	cx := ms.intEntry(ms.centerXEntry, 0)
-	cz := ms.intEntry(ms.centerZEntry, 0)
-	rx := ms.intEntry(ms.radiusXEntry, 32)
-	rz := ms.intEntry(ms.radiusZEntry, 32)
-	ms.worldMap.SetBubbleCenter(cx, cz)
-	ms.worldMap.SetBubbleRadius(rx, rz)
-}
-
-func (ms *MinesportApp) makeEntry(defaultVal string) *widget.Entry {
-	e := widget.NewEntry()
-	e.SetText(defaultVal)
-	return e
-}
-
-func (ms *MinesportApp) intEntry(e *widget.Entry, fallback int) int {
-	v, err := strconv.Atoi(strings.TrimSpace(e.Text))
-	if err != nil {
-		return fallback
-	}
-	return v
-}
-
-func (ms *MinesportApp) detectWorldMeta(worldPath string) string {
-	// Find which instance/launcher this world belongs to
-	launchers := launcher.DiscoverAll()
-	for _, l := range launchers {
-		instances := launcher.DiscoverInstances(l)
-		for _, inst := range instances {
-			if strings.HasPrefix(worldPath, inst.MinecraftDir) {
-				ms.mcVersion = inst.Version
-				ms.loaderType = string(inst.Loader)
-				polymerNote := ""
-				if inst.HasPolymer() {
-					polymerNote = " · Polymer"
-				}
-				return fmt.Sprintf("MC %s · %s%s", inst.Version, inst.Loader, polymerNote)
-			}
-		}
-	}
-	return ""
-}
-
-func (ms *MinesportApp) setProgress(pct int) {
-	ms.progressBar.SetValue(float64(pct) / 100.0)
-}
+func(ms *MinesportApp)appendLog(msg string){ms.mu.Lock();defer ms.mu.Unlock();if ms.logContent==nil{return};lines:=strings.Split(ms.logContent.Text,"\n");if len(lines)>200{lines=lines[len(lines)-200:]};lines=append(lines,msg);ms.logContent.SetText(strings.Join(lines,"\n"));if ms.logScroll!=nil{ms.logScroll.ScrollToBottom()}}
+func(ms *MinesportApp)onOpenSettings(){ShowSettingsDialog(ms.window,ms.settings,ms.applySettings)}
+func(ms *MinesportApp)applySettings(s Settings){was:=ms.settings.DebugMode;ms.settings=s;if err:=s.Save();err!=nil{ms.appendLog(err.Error())};if s.DebugMode&&!was{ms.openDebugConsole()}else if !s.DebugMode&&was{ms.closeDebugConsole()};ms.applyOptimizeGate()}
+func(ms *MinesportApp)openDebugConsole(){if ms.debugWindow!=nil{return};w:=ms.fyneApp.NewWindow("Minesport — Debug Console");w.SetContent(container.NewPadded(ms.logScroll));w.Resize(fyne.NewSize(640,360));ms.debugWindow=w;w.Show()}
+func(ms *MinesportApp)closeDebugConsole(){if ms.debugWindow!=nil{ms.debugWindow.Close();ms.debugWindow=nil}}
+func(ms *MinesportApp)syncBubblePreview(){if ms.worldMap==nil{return};ms.worldMap.SetBubbleCenter(ms.centerX.Int(0),ms.centerZ.Int(0));ms.worldMap.SetBubbleRadius(ms.radiusX.Int(32),ms.radiusZ.Int(32))}
+func(ms *MinesportApp)detectWorldMeta(path string)string{for _,l:=range launcher.DiscoverAll(){for _,i:=range launcher.DiscoverInstances(l){if strings.HasPrefix(path,i.MinecraftDir){ms.mcVersion=i.Version;ms.loaderType=string(i.Loader);poly:="";if i.HasPolymer(){poly=" · Polymer"};return fmt.Sprintf("MC %s · %s%s",i.Version,i.Loader,poly)}}};return "Minecraft world"}
