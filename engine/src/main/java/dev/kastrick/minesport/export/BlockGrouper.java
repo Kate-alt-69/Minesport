@@ -8,8 +8,11 @@ import java.util.*;
  * Groups touching blocks of the same type into connected components.
  * Two blocks are "touching" if they share a face (6-connectivity, no diagonals).
  *
- * Result: each BlockData gets a groupId assigned.
- * Blocks in the same group are the same type AND physically connected.
+ * Multi-block structures are detected first by MultiBlockStructureResolver.
+ * Their members get a dedicated compound group so a door/bed/custom multi-part
+ * structure stays together and does not accidentally merge with unrelated
+ * blocks nearby. Individual export mode still bypasses this grouping and keeps
+ * every physical block as its own object.
  */
 public class BlockGrouper {
 
@@ -18,7 +21,6 @@ public class BlockGrouper {
      * Returns a map: blockId+coords → groupId string (e.g. "oak_bench_group_0")
      */
     public static Map<BlockData, String> computeGroups(List<BlockData> blocks) {
-        // Build spatial index
         Map<Long, BlockData> index = new HashMap<>(blocks.size());
         for (BlockData b : blocks) {
             if (!b.isAir()) index.put(key(b.x, b.y, b.z), b);
@@ -27,10 +29,27 @@ public class BlockGrouper {
         Map<BlockData, String> result = new IdentityHashMap<>(blocks.size());
         Map<BlockData, Integer> componentId = new IdentityHashMap<>(blocks.size());
 
-        // Track per-(blockId+state) component counter. Two blocks with the
-        // same ID but different block states (e.g. a lit vs. unlit lamp)
-        // are NOT the same "type" for grouping purposes — merging them would
-        // silently throw away the state difference the user needs to see.
+        // Resolve compound relationships once before ordinary same-state grouping.
+        Map<BlockData, String> compoundGroups = MultiBlockStructureResolver.resolve(blocks);
+        Set<BlockData> assignedCompound = Collections.newSetFromMap(new IdentityHashMap<>());
+
+        for (BlockData b : blocks) {
+            String compoundId = compoundGroups.get(b);
+            if (compoundId == null || assignedCompound.contains(b) || b.isAir()) continue;
+
+            // The resolver guarantees this id represents one connected compound.
+            // Assigning the same exact group name keeps the structure separate
+            // from ordinary blocks around it.
+            for (var entry : compoundGroups.entrySet()) {
+                if (compoundId.equals(entry.getValue())) {
+                    result.put(entry.getKey(), compoundId);
+                    assignedCompound.add(entry.getKey());
+                    componentId.put(entry.getKey(), 0);
+                }
+            }
+        }
+
+        // Ordinary grouping for everything that isn't part of a compound.
         Map<String, Integer> typeCounter = new HashMap<>();
 
         for (BlockData b : blocks) {
@@ -43,8 +62,8 @@ public class BlockGrouper {
 
             String baseName = shortName(b.blockId) + stateSuffix(b.properties);
             String groupName = cid == 0
-                ? baseName                          // first group just uses the name
-                : baseName + "_g" + cid;            // subsequent groups get _g1, _g2...
+                ? baseName
+                : baseName + "_g" + cid;
 
             Queue<BlockData> queue = new ArrayDeque<>();
             queue.add(b);
@@ -59,6 +78,7 @@ public class BlockGrouper {
                     long nk = key(cur.x + d[0], cur.y + d[1], cur.z + d[2]);
                     BlockData neighbour = index.get(nk);
                     if (neighbour == null) continue;
+                    if (compoundGroups.containsKey(neighbour)) continue;
                     if (!typeKey(neighbour).equals(blockType)) continue;
                     if (componentId.containsKey(neighbour)) continue;
                     componentId.put(neighbour, cid);
@@ -77,8 +97,7 @@ public class BlockGrouper {
 
     /**
      * Canonical, order-independent state key for a property map.
-     * {facing=north, lit=true} → "facing=north,lit=true" (sorted by key).
-     * Empty/no properties → "".
+     * {facing=north, lit=true} → "facing=north,lit=true".
      */
     public static String stateKey(Map<String, String> properties) {
         if (properties == null || properties.isEmpty()) return "";
@@ -93,9 +112,7 @@ public class BlockGrouper {
     }
 
     /**
-     * Object/group-name-safe suffix carrying the block's state, e.g.
-     * "_facing-north_lit-true". Empty string for blocks with no properties,
-     * so plain blocks (most vanilla blocks) keep their existing simple names.
+     * Object/group-name-safe suffix carrying the block's state.
      */
     public static String stateSuffix(Map<String, String> properties) {
         if (properties == null || properties.isEmpty()) return "";
@@ -127,8 +144,6 @@ public class BlockGrouper {
 
     /**
      * Strip namespace from block ID and return just the block name.
-     * "polydecorations:oak_bench" → "oak_bench"
-     * "minecraft:oak_planks"      → "oak_planks"
      */
     public static String shortName(String blockId) {
         int colon = blockId.indexOf(':');
