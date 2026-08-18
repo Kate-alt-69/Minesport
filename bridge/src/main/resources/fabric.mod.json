@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "minesport_bridge",
+  "version": "${version}",
+  "name": "Minesport Bridge",
+  "description": "Headless bridge mod — dumps block geometry and textures to Minesport engine via local socket. Auto-exits after dump. Not intended for normal gameplay.",
+  "authors": ["Kastrick"],
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.kastrick.minesport.bridge.MinesportBridge"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.5",
+    "fabric-api": "*",
+    "minecraft": "~1.21.10"
+  },
+  "suggests": {
+    "polymer": "*"
+  }
+}

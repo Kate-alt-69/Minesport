@@ -1,0 +1,38 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'dev.kastrick'
+version = '0.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_22
+    targetCompatibility = JavaVersion.VERSION_22
+}
+
+application {
+    mainClass = 'dev.kastrick.minesport.Main'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // JSON parsing for block model/blockstate files
+    implementation 'com.google.code.gson:gson:2.11.0'
+}
+
+jar {
+    manifest {
+        attributes 'Main-Class': 'dev.kastrick.minesport.Main'
+    }
+    // Fat jar - include all deps
+    from {
+        configurations.runtimeClasspath.collect {
+            it.isDirectory() ? it : zipTree(it)
+        }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
