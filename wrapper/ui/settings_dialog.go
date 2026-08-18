@@ -7,47 +7,52 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// ShowSettingsDialog opens the global Settings dialog. Unlike the sidebar's
-// per-export controls (format, mode, region bounds — which only apply to
-// the export about to run), everything here applies globally and persists
-// to disk immediately on Save.
 func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settings)) {
-	working := current // local copy, only committed on Save
+	working := current
 
-	// ── Basic tab ──────────────────────────────────────────────────────────
+	faceCullingCheck := widget.NewCheck("Enable face culling", func(v bool) {
+		working.OptimizeOutputEnabled = v
+	})
+	faceCullingCheck.SetChecked(working.OptimizeOutputEnabled)
+	faceCullingNote := widget.NewLabel(
+		"Removes faces that Minesport can prove are fully hidden by neighboring\n" +
+			"geometry during optimized exports. This can substantially reduce\n" +
+			"export size and geometry count. Turn it off when debugging a missing\n" +
+			"face or when testing unusual modded/custom geometry.",
+	)
+	faceCullingNote.Wrapping = fyne.TextWrapWord
+	faceCullingNote.TextStyle = fyne.TextStyle{Italic: true}
+	faceCullingCard := widget.NewCard("Geometry", "", container.NewVBox(faceCullingCheck, faceCullingNote))
+
+	hiddenBlockCheck := widget.NewCheck("Experimental: cull fully hidden blocks", func(v bool) {
+		working.HiddenBlockCullingEnabled = v
+	})
+	hiddenBlockCheck.SetChecked(working.HiddenBlockCullingEnabled)
+	hiddenBlockNote := widget.NewLabel(
+		"Removes whole blocks that are proven to be completely enclosed by\n" +
+			"six neighboring FULL_BLOCKs. This targets mountain interiors,\n" +
+			"sealed caves, and other invisible bulk geometry. It is conservative\n" +
+			"and currently only runs through Optimize Output; turn Optimize\n" +
+			"Output on for the export you want to test. Uncertain/custom/partial\n" +
+			"geometry is kept rather than guessed away.",
+	)
+	hiddenBlockNote.Wrapping = fyne.TextWrapWord
+	hiddenBlockNote.TextStyle = fyne.TextStyle{Italic: true}
+	hiddenBlockCard := widget.NewCard("Experimental Visibility", "", container.NewVBox(hiddenBlockCheck, hiddenBlockNote))
+
 	basicInfo := widget.NewLabel(
 		"Per-export options (format, export mode, region bounds) live in the\n" +
 			"sidebar next to the world map — they change what THIS export does.\n\n" +
-			"Everything on the Advanced tab applies to every export, in every\n" +
-			"session, until you change it again here.",
+			"The geometry toggles above apply globally and persist between sessions.",
 	)
 	basicInfo.Wrapping = fyne.TextWrapWord
-	basicTab := container.NewPadded(basicInfo)
-
-	// ── Advanced tab ───────────────────────────────────────────────────────
+	basicTab := container.NewVBox(faceCullingCard, hiddenBlockCard, container.NewPadded(basicInfo))
 
 	debugCheck := widget.NewCheck("Debug mode — show engine log in a separate console window", func(v bool) {
 		working.DebugMode = v
 	})
 	debugCheck.SetChecked(working.DebugMode)
-
 	generalCard := widget.NewCard("General", "", debugCheck)
-
-	optimizeCheck := widget.NewCheck("Enable \"Optimize Output\" (experimental)", func(v bool) {
-		working.OptimizeOutputEnabled = v
-	})
-	optimizeCheck.SetChecked(working.OptimizeOutputEnabled)
-	optimizeNote := widget.NewLabel(
-		"Culls faces the engine can prove are fully hidden between two solid\n" +
-			"blocks, and welds duplicate vertices — can meaningfully shrink\n" +
-			"Individual/Grouped exports. Turning this on makes the checkbox\n" +
-			"available in the sidebar's Export section; it stays off by default\n" +
-			"either way. If a face is ever missing that shouldn't be, turn it\n" +
-			"back off — the unoptimized path never removes geometry.",
-	)
-	optimizeNote.Wrapping = fyne.TextWrapWord
-	optimizeNote.TextStyle = fyne.TextStyle{Italic: true}
-	optimizeCard := widget.NewCard("Optimize Output", "", container.NewVBox(optimizeCheck, optimizeNote))
 
 	selectByModelCheck := widget.NewCheck("Enable \"select by model\" (experimental)", func(v bool) {
 		working.SelectByModel = v
@@ -75,14 +80,13 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 
 	advancedTab := container.NewVBox(
 		generalCard,
-		optimizeCard,
 		selectByModelCard,
 		resourcePackCard,
 		dataPackCard,
 	)
 
 	tabs := container.NewAppTabs(
-		container.NewTabItem("Basic", basicTab),
+		container.NewTabItem("Basic", container.NewVScroll(container.NewPadded(basicTab))),
 		container.NewTabItem("Advanced", container.NewVScroll(container.NewPadded(advancedTab))),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
@@ -98,12 +102,8 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 	d.Show()
 }
 
-// ── Path list editor ─────────────────────────────────────────────────────────
-// Small reusable widget: a label, a list of paths, and Add/Remove controls.
-// Used for both the resource pack list and the data pack list.
-
 func newPathListEditor(parent fyne.Window, title string, initial []string, onChange func([]string)) fyne.CanvasObject {
-	paths := append([]string{}, initial...) // local copy
+	paths := append([]string{}, initial...)
 
 	label := widget.NewLabel(title)
 	label.TextStyle = fyne.TextStyle{Italic: true}
