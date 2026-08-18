@@ -15,14 +15,29 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 	working := current // local copy, only committed on Save
 
 	// ── Basic tab ──────────────────────────────────────────────────────────
+
+	faceCullingCheck := widget.NewCheck("Enable face culling", func(v bool) {
+		working.OptimizeOutputEnabled = v
+	})
+	faceCullingCheck.SetChecked(working.OptimizeOutputEnabled)
+	faceCullingNote := widget.NewLabel(
+		"Removes faces that Minesport can prove are fully hidden by neighboring\n" +
+			"geometry during optimized exports. This can substantially reduce\n" +
+			"export size and geometry count. Turn it off when debugging a missing\n" +
+			"face or when testing unusual modded/custom geometry.",
+	)
+	faceCullingNote.Wrapping = fyne.TextWrapWord
+	faceCullingNote.TextStyle = fyne.TextStyle{Italic: true}
+	faceCullingCard := widget.NewCard("Geometry", "", container.NewVBox(faceCullingCheck, faceCullingNote))
+
 	basicInfo := widget.NewLabel(
 		"Per-export options (format, export mode, region bounds) live in the\n" +
 			"sidebar next to the world map — they change what THIS export does.\n\n" +
-			"Everything on the Advanced tab applies to every export, in every\n" +
-			"session, until you change it again here.",
+			"The geometry toggle above is a global master switch: the export card\n" +
+			"will only allow its optimization/culling control when this is enabled.",
 	)
 	basicInfo.Wrapping = fyne.TextWrapWord
-	basicTab := container.NewPadded(basicInfo)
+	basicTab := container.NewVBox(faceCullingCard, container.NewPadded(basicInfo))
 
 	// ── Advanced tab ───────────────────────────────────────────────────────
 
@@ -32,22 +47,6 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 	debugCheck.SetChecked(working.DebugMode)
 
 	generalCard := widget.NewCard("General", "", debugCheck)
-
-	optimizeCheck := widget.NewCheck("Enable \"Optimize Output\" (experimental)", func(v bool) {
-		working.OptimizeOutputEnabled = v
-	})
-	optimizeCheck.SetChecked(working.OptimizeOutputEnabled)
-	optimizeNote := widget.NewLabel(
-		"Culls faces the engine can prove are fully hidden between two solid\n" +
-			"blocks, and welds duplicate vertices — can meaningfully shrink\n" +
-			"Individual/Grouped exports. Turning this on makes the checkbox\n" +
-			"available in the sidebar's Export section; it stays off by default\n" +
-			"either way. If a face is ever missing that shouldn't be, turn it\n" +
-			"back off — the unoptimized path never removes geometry.",
-	)
-	optimizeNote.Wrapping = fyne.TextWrapWord
-	optimizeNote.TextStyle = fyne.TextStyle{Italic: true}
-	optimizeCard := widget.NewCard("Optimize Output", "", container.NewVBox(optimizeCheck, optimizeNote))
 
 	selectByModelCheck := widget.NewCheck("Enable \"select by model\" (experimental)", func(v bool) {
 		working.SelectByModel = v
@@ -75,14 +74,13 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 
 	advancedTab := container.NewVBox(
 		generalCard,
-		optimizeCard,
 		selectByModelCard,
 		resourcePackCard,
 		dataPackCard,
 	)
 
 	tabs := container.NewAppTabs(
-		container.NewTabItem("Basic", basicTab),
+		container.NewTabItem("Basic", container.NewVScroll(container.NewPadded(basicTab))),
 		container.NewTabItem("Advanced", container.NewVScroll(container.NewPadded(advancedTab))),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
