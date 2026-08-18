@@ -10,26 +10,10 @@ import dev.kastrick.minesport.resolver.ResolverChain;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
-/**
- * Export-mode GeometryBuilder wrapper used by IPC mode.
- *
- * The engine's normal GeometryBuilder remains the low-level renderer. This
- * same-package type is intentionally selected by IpcMode's wildcard import,
- * so the export pipeline gets an experimental visibility pass without
- * changing the established resolver/geometry implementation.
- *
- * Hidden-block culling is deliberately conservative: when face culling is
- * enabled, a block is omitted only when all six neighboring positions exist
- * in the selected block set and every one is classified as FULL_BLOCK.
- * Missing/partial/custom neighbors keep the block rendered.
- */
 public final class GeometryBuilder extends dev.kastrick.minesport.export.GeometryBuilder {
     private static final int[][] NEIGHBORS = {
         {1, 0, 0}, {-1, 0, 0},
@@ -37,10 +21,10 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
         {0, 0, 1}, {0, 0, -1}
     };
 
-    private Map<Long, BlockData> worldIndex = Map.of();
+    private Map<SpatialKey, BlockData> worldIndex = Map.of();
     private final Map<String, BlockGeometryKind> kindCache = new HashMap<>();
-    private boolean hiddenBlockCullingEnabled;
-    private BlockGeometryClassifier classifier;
+    private final boolean hiddenBlockCullingEnabled;
+    private final BlockGeometryClassifier classifier;
 
     public GeometryBuilder(ResolverChain resolvers) {
         super(resolvers);
@@ -52,10 +36,10 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
     public void enableFaceCulling(List<BlockData> allBlocks) {
         super.enableFaceCulling(allBlocks);
 
-        Map<Long, BlockData> index = new HashMap<>(allBlocks.size());
+        Map<SpatialKey, BlockData> index = new HashMap<>(allBlocks.size());
         for (BlockData b : allBlocks) {
             if (!b.isAir()) {
-                index.put(spatialKey(b.x, b.y, b.z), b);
+                index.put(new SpatialKey(b.x, b.y, b.z), b);
             }
         }
         worldIndex = index;
@@ -74,17 +58,11 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
         if (worldIndex.isEmpty()) return false;
 
         for (int[] d : NEIGHBORS) {
-            BlockData neighbor = worldIndex.get(spatialKey(
-                block.x + d[0],
-                block.y + d[1],
-                block.z + d[2]
+            BlockData neighbor = worldIndex.get(new SpatialKey(
+                block.x + d[0], block.y + d[1], block.z + d[2]
             ));
-            if (neighbor == null || neighbor.isAir()) {
-                return false;
-            }
-            if (classify(neighbor) != BlockGeometryKind.FULL_BLOCK) {
-                return false;
-            }
+            if (neighbor == null || neighbor.isAir()) return false;
+            if (classify(neighbor) != BlockGeometryKind.FULL_BLOCK) return false;
         }
         return true;
     }
@@ -94,11 +72,6 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
         return kindCache.computeIfAbsent(key, ignored -> classifier.classify(block));
     }
 
-    /**
-     * The Go UI persists settings through os.UserConfigDir(). Match the
-     * standard Windows/Linux/macOS locations from Java without requiring a
-     * new IPC field just for this experimental pass.
-     */
     private static boolean readHiddenBlockCullingSetting() {
         try {
             Path settings;
@@ -116,20 +89,13 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
                     : Path.of(xdg);
                 settings = root.resolve("minesport").resolve("settings.json");
             }
-
             if (!Files.isRegularFile(settings)) return false;
-            String json = Files.readString(settings);
-            JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
-            return obj.has("hiddenBlockCullingEnabled")
-                && obj.get("hiddenBlockCullingEnabled").getAsBoolean();
+            JsonObject obj = JsonParser.parseString(Files.readString(settings)).getAsJsonObject();
+            return obj.has("hiddenBlockCullingEnabled") && obj.get("hiddenBlockCullingEnabled").getAsBoolean();
         } catch (Exception ignored) {
             return false;
         }
     }
 
-    private static long spatialKey(int x, int y, int z) {
-        return ((long) (x + 1048576) << 42)
-             | ((long) (y + 1048576) << 21)
-             |  (long) (z + 1048576);
-    }
+    private record SpatialKey(int x, int y, int z) {}
 }
