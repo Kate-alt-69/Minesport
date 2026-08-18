@@ -7,14 +7,8 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// ShowSettingsDialog opens the global Settings dialog. Unlike the sidebar's
-// per-export controls (format, mode, region bounds — which only apply to
-// the export about to run), everything here applies globally and persists
-// to disk immediately on Save.
 func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settings)) {
-	working := current // local copy, only committed on Save
-
-	// ── Basic tab ──────────────────────────────────────────────────────────
+	working := current
 
 	faceCullingCheck := widget.NewCheck("Enable face culling", func(v bool) {
 		working.OptimizeOutputEnabled = v
@@ -30,22 +24,34 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 	faceCullingNote.TextStyle = fyne.TextStyle{Italic: true}
 	faceCullingCard := widget.NewCard("Geometry", "", container.NewVBox(faceCullingCheck, faceCullingNote))
 
+	hiddenBlockCheck := widget.NewCheck("Experimental: cull fully hidden blocks", func(v bool) {
+		working.HiddenBlockCullingEnabled = v
+	})
+	hiddenBlockCheck.SetChecked(working.HiddenBlockCullingEnabled)
+	hiddenBlockNote := widget.NewLabel(
+		"Removes whole blocks that are proven to be completely enclosed by\n" +
+			"six neighboring FULL_BLOCKs. This targets mountain interiors,\n" +
+			"sealed caves, and other invisible bulk geometry. It is conservative\n" +
+			"and currently only runs through Optimize Output; turn Optimize\n" +
+			"Output on for the export you want to test. Uncertain/custom/partial\n" +
+			"geometry is kept rather than guessed away.",
+	)
+	hiddenBlockNote.Wrapping = fyne.TextWrapWord
+	hiddenBlockNote.TextStyle = fyne.TextStyle{Italic: true}
+	hiddenBlockCard := widget.NewCard("Experimental Visibility", "", container.NewVBox(hiddenBlockCheck, hiddenBlockNote))
+
 	basicInfo := widget.NewLabel(
 		"Per-export options (format, export mode, region bounds) live in the\n" +
 			"sidebar next to the world map — they change what THIS export does.\n\n" +
-			"The geometry toggle above is a global master switch: the export card\n" +
-			"will only allow its optimization/culling control when this is enabled.",
+			"The geometry toggles above apply globally and persist between sessions.",
 	)
 	basicInfo.Wrapping = fyne.TextWrapWord
-	basicTab := container.NewVBox(faceCullingCard, container.NewPadded(basicInfo))
-
-	// ── Advanced tab ───────────────────────────────────────────────────────
+	basicTab := container.NewVBox(faceCullingCard, hiddenBlockCard, container.NewPadded(basicInfo))
 
 	debugCheck := widget.NewCheck("Debug mode — show engine log in a separate console window", func(v bool) {
 		working.DebugMode = v
 	})
 	debugCheck.SetChecked(working.DebugMode)
-
 	generalCard := widget.NewCard("General", "", debugCheck)
 
 	selectByModelCheck := widget.NewCheck("Enable \"select by model\" (experimental)", func(v bool) {
@@ -96,12 +102,8 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 	d.Show()
 }
 
-// ── Path list editor ─────────────────────────────────────────────────────────
-// Small reusable widget: a label, a list of paths, and Add/Remove controls.
-// Used for both the resource pack list and the data pack list.
-
 func newPathListEditor(parent fyne.Window, title string, initial []string, onChange func([]string)) fyne.CanvasObject {
-	paths := append([]string{}, initial...) // local copy
+	paths := append([]string{}, initial...)
 
 	label := widget.NewLabel(title)
 	label.TextStyle = fyne.TextStyle{Italic: true}
