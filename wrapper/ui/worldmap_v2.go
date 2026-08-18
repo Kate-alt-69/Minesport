@@ -1,22 +1,200 @@
 package ui
 
-import("image";"image/color";"math";"sync";"fyne.io/fyne/v2";"fyne.io/fyne/v2/canvas";"fyne.io/fyne/v2/driver/desktop";"fyne.io/fyne/v2/widget")
-type WorldMapV2 struct{widget.BaseWidget;imgLock sync.RWMutex;img *image.RGBA;minX,minZ,maxX,maxZ int;zoom,offsetX,offsetY float64;size fyne.Size;panning bool;panStartX,panStartY,panOffsetX,panOffsetY float64;dragging bool;selA,selB [2]int;hover [2]int;hasHover bool;bubble bool;bubbleCenter [2]int;bubbleRX,bubbleRZ int;hasBubble bool;OnSelectionChanged func(int,int,int,int);OnCursorMoved func(int,int);OnCenterPicked func(int,int)}
-func NewWorldMapV2()*WorldMapV2{m:=&WorldMapV2{zoom:1};m.ExtendBaseWidget(m);return m}
-func(m *WorldMapV2)LoadHeightmap(img *image.RGBA,minX,minZ,maxX,maxZ int){m.imgLock.Lock();m.img=img;m.minX,m.minZ,m.maxX,m.maxZ=minX,minZ,maxX,maxZ;m.imgLock.Unlock();m.FitToWindow()}
-func(m *WorldMapV2)SetMode2D(){m.Refresh()};func(m *WorldMapV2)SetMode3D(){m.Refresh()};func(m *WorldMapV2)SetBubbleMode(v bool){m.bubble=v;m.Refresh()};func(m *WorldMapV2)SetBubbleCenter(x,z int){m.bubbleCenter=[2]int{x,z};m.hasBubble=true;m.Refresh()};func(m *WorldMapV2)SetBubbleRadius(x,z int){m.bubbleRX,m.bubbleRZ=x,z;m.Refresh()}
-func(m *WorldMapV2)FitToWindow(){m.imgLock.RLock();img:=m.img;m.imgLock.RUnlock();if img==nil||img.Bounds().Dx()==0||img.Bounds().Dy()==0{return};zx:=float64(m.size.Width)/float64(img.Bounds().Dx());zy:=float64(m.size.Height)/float64(img.Bounds().Dy());m.zoom=math.Max(.05,math.Min(zx,zy)*.94);m.offsetX=(float64(m.size.Width)-float64(img.Bounds().Dx())*m.zoom)/2;m.offsetY=(float64(m.size.Height)-float64(img.Bounds().Dy())*m.zoom)/2;m.clampView();m.Refresh()}
-func(m *WorldMapV2)screenToWorld(sx,sy float64)(int,int){w,h:=float64(m.maxX-m.minX+1),float64(m.maxZ-m.minZ+1);if w<=0||h<=0{return 0,0};return m.minX+int(math.Floor((sx-m.offsetX)/m.zoom)),m.minZ+int(math.Floor((sy-m.offsetY)/m.zoom))}
-func(m *WorldMapV2)worldToScreen(x,z int)(float64,float64){return m.offsetX+float64(x-m.minX)*m.zoom,m.offsetY+float64(z-m.minZ)*m.zoom}
-func(m *WorldMapV2)blockRect(x0,z0,x1,z1 int)(float64,float64,float64,float64){a,b:=m.worldToScreen(x0,z0);c,d:=m.worldToScreen(x1+1,z1+1);return a,b,c,d}
-func(m *WorldMapV2)clampView(){if m.zoom<.05{m.zoom=.05};if m.zoom>64{m.zoom=64};m.imgLock.RLock();img:=m.img;m.imgLock.RUnlock();if img==nil{return};w,h:=float64(img.Bounds().Dx())*m.zoom,float64(img.Bounds().Dy())*m.zoom;pad:=math.Max(32,float64(m.size.Width)*.1);minX,maxX:=float64(m.size.Width)-w-pad,pad;minY,maxY:=float64(m.size.Height)-h-pad,pad;if w+pad*2<=float64(m.size.Width){m.offsetX=(float64(m.size.Width)-w)/2}else{m.offsetX=math.Min(maxX,math.Max(minX,m.offsetX))};if h+pad*2<=float64(m.size.Height){m.offsetY=(float64(m.size.Height)-h)/2}else{m.offsetY=math.Min(maxY,math.Max(minY,m.offsetY))}}
-func(m *WorldMapV2)MouseDown(ev *desktop.MouseEvent){x,y:=float64(ev.Position.X),float64(ev.Position.Y);if ev.Button==desktop.MouseButtonMiddle{m.panning=true;m.panStartX,m.panStartY=x,y;m.panOffsetX,m.panOffsetY=m.offsetX,m.offsetY;return};if ev.Button==desktop.MouseButtonSecondary&&m.bubble{wx,wz:=m.screenToWorld(x,y);m.bubbleCenter=[2]int{wx,wz};m.hasBubble=true;if m.OnCenterPicked!=nil{m.OnCenterPicked(wx,wz)};m.Refresh();return};if ev.Button==desktop.MouseButtonPrimary{wx,wz:=m.screenToWorld(x,y);m.dragging=true;m.selA=[2]int{wx,wz};m.selB=m.selA;m.Refresh()}}
-func(m *WorldMapV2)MouseUp(ev *desktop.MouseEvent){if ev.Button==desktop.MouseButtonMiddle{m.panning=false;return};if ev.Button!=desktop.MouseButtonPrimary||!m.dragging{return};m.dragging=false;if m.selA!=m.selB{minX,minZ,maxX,maxZ:=m.selA[0],m.selA[1],m.selB[0],m.selB[1];if minX>maxX{minX,maxX=maxX,minX};if minZ>maxZ{minZ,maxZ=maxZ,minZ};if m.OnSelectionChanged!=nil{m.OnSelectionChanged(minX,minZ,maxX,maxZ)}};m.Refresh()}
-func(m *WorldMapV2)MouseMoved(ev *desktop.MouseEvent){x,y:=float64(ev.Position.X),float64(ev.Position.Y);if m.panning{m.offsetX=m.panOffsetX+x-m.panStartX;m.offsetY=m.panOffsetY+y-m.panStartY;m.clampView();m.Refresh();return};wx,wz:=m.screenToWorld(x,y);if m.OnCursorMoved!=nil{m.OnCursorMoved(wx,wz)};if wx!=m.hover[0]||wz!=m.hover[1]||!m.hasHover{m.hover=[2]int{wx,wz};m.hasHover=true;m.Refresh()};if m.dragging{m.selB=[2]int{wx,wz};m.Refresh()}}
-func(m *WorldMapV2)MouseIn(*desktop.MouseEvent){};func(m *WorldMapV2)MouseOut(){m.hasHover=false;m.Refresh()}
-func(m *WorldMapV2)Scrolled(ev *fyne.ScrollEvent){dy:=ev.Scrolled.DY;if dy>3{dy=3};if dy< -3{dy=-3};old:=m.zoom;next:=math.Min(64,math.Max(.05,old*math.Pow(1.08,dy)));f:=next/old;cx,cy:=float64(ev.Position.X),float64(ev.Position.Y);m.offsetX=cx-(cx-m.offsetX)*f;m.offsetY=cy-(cy-m.offsetY)*f;m.zoom=next;m.clampView();m.Refresh()}
-func(m *WorldMapV2)CreateRenderer()fyne.WidgetRenderer{return &worldMapV2Renderer{m:m,bg:canvas.NewRectangle(color.NRGBA{15,18,22,255}),img:canvas.NewImageFromImage(image.NewRGBA(image.Rect(0,0,1,1))),sel:canvas.NewRectangle(color.NRGBA{90,255,140,45}),hover:canvas.NewRectangle(color.NRGBA{255,255,255,0}),bubble:canvas.NewRectangle(color.NRGBA{80,190,255,35})}}
-func(m *WorldMapV2)MinSize()fyne.Size{return fyne.NewSize(400,300)}
-type worldMapV2Renderer struct{m *WorldMapV2;bg *canvas.Rectangle;img *canvas.Image;sel,hover,bubble *canvas.Rectangle}
-func(r *worldMapV2Renderer)MinSize()fyne.Size{return r.m.MinSize()};func(r *worldMapV2Renderer)Destroy(){};func(r *worldMapV2Renderer)Objects()[]fyne.CanvasObject{return []fyne.CanvasObject{r.bg,r.img,r.sel,r.hover,r.bubble}};func(r *worldMapV2Renderer)Layout(s fyne.Size){r.m.size=s;r.Refresh()}
-func(r *worldMapV2Renderer)Refresh(){r.bg.Resize(r.m.size);r.m.imgLock.RLock();img:=r.m.img;r.m.imgLock.RUnlock();if img==nil{r.img.Hide()}else{r.img.Image=img;r.img.Move(fyne.NewPos(float32(r.m.offsetX),float32(r.m.offsetY)));r.img.Resize(fyne.NewSize(float32(img.Bounds().Dx())*float32(r.m.zoom),float32(img.Bounds().Dy())*float32(r.m.zoom)));r.img.ScaleMode=canvas.ImageScalePixels;r.img.Show()};if r.m.hasHover&&!r.m.panning{a,b,c,d:=r.m.blockRect(r.m.hover[0],r.m.hover[1],r.m.hover[0],r.m.hover[1]);r.hover.Move(fyne.NewPos(float32(a),float32(b)));r.hover.Resize(fyne.NewSize(float32(c-a),float32(d-b)));r.hover.StrokeColor=color.NRGBA{255,255,255,190};r.hover.StrokeWidth=1;r.hover.Show()}else{r.hover.Hide()};if r.m.dragging||r.m.selA!=r.m.selB{minX,maxX,minZ,maxZ:=r.m.selA[0],r.m.selB[0],r.m.selA[1],r.m.selB[1];if minX>maxX{minX,maxX=maxX,minX};if minZ>maxZ{minZ,maxZ=maxZ,minZ};a,b,c,d:=r.m.blockRect(minX,minZ,maxX,maxZ);r.sel.Move(fyne.NewPos(float32(a),float32(b)));r.sel.Resize(fyne.NewSize(float32(c-a),float32(d-b)));r.sel.StrokeColor=color.NRGBA{90,255,140,230};r.sel.StrokeWidth=1.5;r.sel.Show()}else{r.sel.Hide()};if r.m.bubble&&r.m.hasBubble{a,b,c,d:=r.m.blockRect(r.m.bubbleCenter[0]-r.m.bubbleRX,r.m.bubbleCenter[1]-r.m.bubbleRZ,r.m.bubbleCenter[0]+r.m.bubbleRX,r.m.bubbleCenter[1]+r.m.bubbleRZ);r.bubble.Move(fyne.NewPos(float32(a),float32(b)));r.bubble.Resize(fyne.NewSize(float32(c-a),float32(d-b)));r.bubble.StrokeColor=color.NRGBA{80,190,255,220};r.bubble.StrokeWidth=1.5;r.bubble.Show()}else{r.bubble.Hide()};r.bg.Refresh();r.img.Refresh();r.sel.Refresh();r.hover.Refresh();r.bubble.Refresh()}
+import (
+    "image"
+    "image/color"
+    "math"
+    "sync"
+
+    "fyne.io/fyne/v2"
+    "fyne.io/fyne/v2/canvas"
+    "fyne.io/fyne/v2/driver/desktop"
+    "fyne.io/fyne/v2/widget"
+)
+
+type WorldMapV2 struct {
+    widget.BaseWidget
+    imgLock sync.RWMutex
+    img *image.RGBA
+    minX, minZ, maxX, maxZ int
+    zoom, offsetX, offsetY float64
+    size fyne.Size
+    panning bool
+    panStartX, panStartY, panOffsetX, panOffsetY float64
+    dragging bool
+    selA, selB [2]int
+    hover [2]int
+    hasHover bool
+    bubble bool
+    bubbleCenter [2]int
+    bubbleRX, bubbleRZ int
+    hasBubble bool
+    OnSelectionChanged func(int, int, int, int)
+    OnCursorMoved func(int, int)
+    OnCenterPicked func(int, int)
+}
+
+func NewWorldMapV2() *WorldMapV2 {
+    m := &WorldMapV2{zoom: 1}
+    m.ExtendBaseWidget(m)
+    return m
+}
+
+func (m *WorldMapV2) LoadHeightmap(img *image.RGBA, minX, minZ, maxX, maxZ int) {
+    m.imgLock.Lock()
+    m.img = img
+    m.minX, m.minZ, m.maxX, m.maxZ = minX, minZ, maxX, maxZ
+    m.imgLock.Unlock()
+    m.FitToWindow()
+}
+func (m *WorldMapV2) SetMode2D() { m.Refresh() }
+func (m *WorldMapV2) SetMode3D() { m.Refresh() }
+func (m *WorldMapV2) SetBubbleMode(v bool) { m.bubble = v; m.Refresh() }
+func (m *WorldMapV2) SetBubbleCenter(x, z int) { m.bubbleCenter = [2]int{x, z}; m.hasBubble = true; m.Refresh() }
+func (m *WorldMapV2) SetBubbleRadius(x, z int) { m.bubbleRX, m.bubbleRZ = x, z; m.Refresh() }
+
+func (m *WorldMapV2) FitToWindow() {
+    m.imgLock.RLock(); img := m.img; m.imgLock.RUnlock()
+    if img == nil || img.Bounds().Dx() == 0 || img.Bounds().Dy() == 0 { return }
+    zx := float64(m.size.Width) / float64(img.Bounds().Dx())
+    zy := float64(m.size.Height) / float64(img.Bounds().Dy())
+    m.zoom = math.Max(.05, math.Min(zx, zy)*.94)
+    m.offsetX = (float64(m.size.Width)-float64(img.Bounds().Dx())*m.zoom)/2
+    m.offsetY = (float64(m.size.Height)-float64(img.Bounds().Dy())*m.zoom)/2
+    m.clampView()
+    m.Refresh()
+}
+
+func (m *WorldMapV2) screenToWorld(sx, sy float64) (int, int) {
+    w := m.maxX - m.minX + 1
+    h := m.maxZ - m.minZ + 1
+    if w <= 0 || h <= 0 { return 0, 0 }
+    wx := m.minX + int(math.Floor((sx-m.offsetX)/m.zoom))
+    wz := m.minZ + int(math.Floor((sy-m.offsetY)/m.zoom))
+    if wx < m.minX { wx = m.minX }
+    if wx > m.maxX { wx = m.maxX }
+    if wz < m.minZ { wz = m.minZ }
+    if wz > m.maxZ { wz = m.maxZ }
+    return wx, wz
+}
+
+func (m *WorldMapV2) worldToScreen(x, z int) (float64, float64) {
+    return m.offsetX + float64(x-m.minX)*m.zoom, m.offsetY + float64(z-m.minZ)*m.zoom
+}
+func (m *WorldMapV2) blockRect(x0, z0, x1, z1 int) (float64, float64, float64, float64) {
+    a, b := m.worldToScreen(x0, z0)
+    c, d := m.worldToScreen(x1+1, z1+1)
+    return a, b, c, d
+}
+
+func (m *WorldMapV2) clampView() {
+    if m.zoom < .05 { m.zoom = .05 }
+    if m.zoom > 64 { m.zoom = 64 }
+    m.imgLock.RLock(); img := m.img; m.imgLock.RUnlock()
+    if img == nil { return }
+    w := float64(img.Bounds().Dx()) * m.zoom
+    h := float64(img.Bounds().Dy()) * m.zoom
+    pad := math.Max(32, float64(m.size.Width)*.1)
+    minX, maxX := float64(m.size.Width)-w-pad, pad
+    minY, maxY := float64(m.size.Height)-h-pad, pad
+    if w+pad*2 <= float64(m.size.Width) { m.offsetX = (float64(m.size.Width)-w)/2 } else { m.offsetX = math.Min(maxX, math.Max(minX, m.offsetX)) }
+    if h+pad*2 <= float64(m.size.Height) { m.offsetY = (float64(m.size.Height)-h)/2 } else { m.offsetY = math.Min(maxY, math.Max(minY, m.offsetY)) }
+}
+
+func (m *WorldMapV2) MouseDown(ev *desktop.MouseEvent) {
+    x, y := float64(ev.Position.X), float64(ev.Position.Y)
+    if ev.Button == desktop.MouseButtonMiddle {
+        m.panning = true
+        m.panStartX, m.panStartY = x, y
+        m.panOffsetX, m.panOffsetY = m.offsetX, m.offsetY
+        return
+    }
+    if ev.Button == desktop.MouseButtonSecondary && m.bubble {
+        wx, wz := m.screenToWorld(x, y)
+        m.bubbleCenter = [2]int{wx, wz}
+        m.hasBubble = true
+        if m.OnCenterPicked != nil { m.OnCenterPicked(wx, wz) }
+        m.Refresh()
+        return
+    }
+    if ev.Button == desktop.MouseButtonPrimary {
+        wx, wz := m.screenToWorld(x, y)
+        m.dragging = true
+        m.selA = [2]int{wx, wz}
+        m.selB = m.selA
+        m.Refresh()
+    }
+}
+
+func (m *WorldMapV2) MouseUp(ev *desktop.MouseEvent) {
+    if ev.Button == desktop.MouseButtonMiddle { m.panning = false; return }
+    if ev.Button != desktop.MouseButtonPrimary || !m.dragging { return }
+    m.dragging = false
+    minX, minZ, maxX, maxZ := m.selA[0], m.selA[1], m.selB[0], m.selB[1]
+    if minX > maxX { minX, maxX = maxX, minX }
+    if minZ > maxZ { minZ, maxZ = maxZ, minZ }
+    if m.OnSelectionChanged != nil { m.OnSelectionChanged(minX, minZ, maxX, maxZ) }
+    m.Refresh()
+}
+
+func (m *WorldMapV2) MouseMoved(ev *desktop.MouseEvent) {
+    x, y := float64(ev.Position.X), float64(ev.Position.Y)
+    if m.panning {
+        m.offsetX = m.panOffsetX + x-m.panStartX
+        m.offsetY = m.panOffsetY + y-m.panStartY
+        m.clampView()
+        m.Refresh()
+        return
+    }
+    wx, wz := m.screenToWorld(x, y)
+    if m.OnCursorMoved != nil { m.OnCursorMoved(wx, wz) }
+    if wx != m.hover[0] || wz != m.hover[1] || !m.hasHover {
+        m.hover = [2]int{wx, wz}; m.hasHover = true; m.Refresh()
+    }
+    if m.dragging { m.selB = [2]int{wx, wz}; m.Refresh() }
+}
+func (m *WorldMapV2) MouseIn(*desktop.MouseEvent) {}
+func (m *WorldMapV2) MouseOut() { m.hasHover = false; m.Refresh() }
+
+func (m *WorldMapV2) Scrolled(ev *fyne.ScrollEvent) {
+    dy := ev.Scrolled.DY
+    if dy > 3 { dy = 3 }
+    if dy < -3 { dy = -3 }
+    old := m.zoom
+    next := math.Min(64, math.Max(.05, old*math.Pow(1.08, dy)))
+    factor := next / old
+    cx, cy := float64(ev.Position.X), float64(ev.Position.Y)
+    m.offsetX = cx - (cx-m.offsetX)*factor
+    m.offsetY = cy - (cy-m.offsetY)*factor
+    m.zoom = next
+    m.clampView()
+    m.Refresh()
+}
+
+func (m *WorldMapV2) CreateRenderer() fyne.WidgetRenderer {
+    return &worldMapV2Renderer{m:m, bg:canvas.NewRectangle(color.NRGBA{15,18,22,255}), img:canvas.NewImageFromImage(image.NewRGBA(image.Rect(0,0,1,1))), sel:canvas.NewRectangle(color.NRGBA{90,255,140,45}), hover:canvas.NewRectangle(color.NRGBA{255,255,255,0}), bubble:canvas.NewRectangle(color.NRGBA{80,190,255,35})}
+}
+func (m *WorldMapV2) MinSize() fyne.Size { return fyne.NewSize(400,300) }
+
+type worldMapV2Renderer struct { m *WorldMapV2; bg *canvas.Rectangle; img *canvas.Image; sel, hover, bubble *canvas.Rectangle }
+func (r *worldMapV2Renderer) MinSize() fyne.Size { return r.m.MinSize() }
+func (r *worldMapV2Renderer) Destroy() {}
+func (r *worldMapV2Renderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.bg,r.img,r.sel,r.hover,r.bubble} }
+func (r *worldMapV2Renderer) Layout(s fyne.Size) { r.m.size=s; r.Refresh() }
+func (r *worldMapV2Renderer) Refresh() {
+    r.bg.Resize(r.m.size)
+    r.m.imgLock.RLock(); img := r.m.img; r.m.imgLock.RUnlock()
+    if img == nil { r.img.Hide() } else { r.img.Image=img; r.img.Move(fyne.NewPos(float32(r.m.offsetX),float32(r.m.offsetY))); r.img.Resize(fyne.NewSize(float32(img.Bounds().Dx())*float32(r.m.zoom),float32(img.Bounds().Dy())*float32(r.m.zoom))); r.img.ScaleMode=canvas.ImageScalePixels; r.img.Show() }
+    if r.m.hasHover && !r.m.panning {
+        a,b,c,d := r.m.blockRect(r.m.hover[0],r.m.hover[1],r.m.hover[0],r.m.hover[1]); r.hover.Move(fyne.NewPos(float32(a),float32(b))); r.hover.Resize(fyne.NewSize(float32(c-a),float32(d-b))); r.hover.StrokeColor=color.NRGBA{255,255,255,190}; r.hover.StrokeWidth=1; r.hover.Show()
+    } else { r.hover.Hide() }
+    if r.m.dragging || r.m.selA != r.m.selB {
+        minX,maxX,minZ,maxZ := r.m.selA[0],r.m.selB[0],r.m.selA[1],r.m.selB[1]
+        if minX>maxX { minX,maxX=maxX,minX }; if minZ>maxZ { minZ,maxZ=maxZ,minZ }
+        a,b,c,d := r.m.blockRect(minX,minZ,maxX,maxZ); r.sel.Move(fyne.NewPos(float32(a),float32(b))); r.sel.Resize(fyne.NewSize(float32(c-a),float32(d-b))); r.sel.StrokeColor=color.NRGBA{90,255,140,230}; r.sel.StrokeWidth=1.5; r.sel.Show()
+    } else { r.sel.Hide() }
+    if r.m.bubble && r.m.hasBubble {
+        a,b,c,d := r.m.blockRect(r.m.bubbleCenter[0]-r.m.bubbleRX,r.m.bubbleCenter[1]-r.m.bubbleRZ,r.m.bubbleCenter[0]+r.m.bubbleRX,r.m.bubbleCenter[1]+r.m.bubbleRZ); r.bubble.Move(fyne.NewPos(float32(a),float32(b))); r.bubble.Resize(fyne.NewSize(float32(c-a),float32(d-b))); r.bubble.StrokeColor=color.NRGBA{80,190,255,220}; r.bubble.StrokeWidth=1.5; r.bubble.Show()
+    } else { r.bubble.Hide() }
+    r.bg.Refresh(); r.img.Refresh(); r.sel.Refresh(); r.hover.Refresh(); r.bubble.Refresh()
+}
