@@ -9,7 +9,6 @@ echo
 echo "Target: $(uname -s) / $(uname -m)"
 echo
 
-# ── Fabric bridge mod ─────────────────────────
 echo "[1/3] Building Fabric bridge mod..."
 cd bridge
 chmod +x gradlew
@@ -18,21 +17,25 @@ cd ..
 echo "Bridge mod built: bridge/build/libs/"
 echo
 
-# ── Java engine ──────────────────────────────
 echo "[2/3] Building Java engine..."
 cd engine
 chmod +x gradlew
 ./gradlew jar
-cp build/libs/minesport-engine-*.jar ../wrapper/
+ENGINE_JAR=$(find build/libs -maxdepth 1 -type f -name 'minesport-engine-*.jar' | head -n 1)
 cd ..
-echo "Java engine built: engine/build/libs/"
+if [[ -z "${ENGINE_JAR}" ]]; then
+    echo "ERROR: Java engine JAR was not produced!"
+    exit 1
+fi
+echo "Java engine built: engine/${ENGINE_JAR#build/libs/}"
 echo
 
-# ── Go wrapper ───────────────────────────────
 echo "[3/3] Building Go wrapper..."
 cd wrapper
 echo "  -> go mod tidy..."
 go mod tidy
+echo "  -> embedding Java engine into Minesport..."
+go run ./cmd/embed-engine -input "../engine/${ENGINE_JAR#build/libs/}" -output embedded_engine_generated.go
 
 if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && [ -z "${CC:-}" ]; then
     echo
@@ -47,21 +50,18 @@ if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && [ -z "
     exit 1
 fi
 
-# Release build. Windows uses build.bat so it can use the GUI subsystem.
-go build -trimpath -ldflags="-s -w" -o minesport .
+go build -tags minesport_embedded_engine -trimpath -ldflags="-s -w" -o minesport .
 cd ..
 echo
 
 echo "============================================"
 echo " Build complete!"
 echo "============================================"
-echo " Executables:"
-echo "   wrapper/minesport              (Go UI)"
-echo "   wrapper/minesport-engine-*.jar (Java engine)"
-echo "   bridge/build/libs/*.jar        (Bridge mod)"
+echo " wrapper/minesport              (engine embedded)"
+echo " bridge/build/libs/*.jar        (Bridge mod)"
 echo
-if [[ "${OSTYPE:-}" == "darwin"* ]]; then
-    echo " macOS runtime note: install Java 22+ and keep the engine JAR beside minesport."
-elif [[ "${OSTYPE:-}" == "linux-gnu"* ]]; then
-    echo " Linux runtime note: install Java 22+ and zenity for native file/folder pickers."
-fi
+echo " Run: cd wrapper && ./minesport"
+echo " Java engine: ./minesport --java-e"
+echo
+echo " Diagnostics: wrapper/minesport.log"
+echo "============================================"

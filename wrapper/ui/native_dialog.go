@@ -1,152 +1,142 @@
 package ui
 
 import (
-	"os/exec"
-	"runtime"
-	"strings"
+    "fmt"
+    "os"
+    "os/exec"
+    "path/filepath"
+    "runtime"
+    "strings"
+
+    "github.com/ncruces/zenity"
 )
 
-// nativeOpenFile opens the OS native file picker and returns the selected path.
-// filter format on Windows: "Description|*.ext|Description2|*.ext2"
+// nativeOpenFile uses a platform-native file dialog. ncruces/zenity provides
+// native Windows and macOS dialogs and a Zenity-compatible Unix backend.
 func nativeOpenFile(title, filter string) string {
-	switch runtime.GOOS {
-	case "windows":
-		return winOpenFile(title, filter)
-	case "linux":
-		return zenityOpenFile(title)
-	case "darwin":
-		return macOpenFile(title)
-	default:
-		return ""
-	}
+    var filters zenity.FileFilters
+    parts := strings.Split(filter, "|")
+    for i := 0; i+1 < len(parts); i += 2 {
+        patterns := strings.FieldsFunc(parts[i+1], func(r rune) bool { return r == ';' })
+        filters = append(filters, zenity.FileFilter{Name: parts[i], Patterns: patterns})
+    }
+
+    path, err := zenity.SelectFile(
+        zenity.Title(title),
+        zenity.FileFilters(filters),
+    )
+    if err != nil {
+        return ""
+    }
+    return path
 }
 
-// nativeOpenFolder opens the OS native folder picker.
 func nativeOpenFolder(title string) string {
-	switch runtime.GOOS {
-	case "windows":
-		return winOpenFolder(title)
-	case "linux":
-		return zenityOpenFolder(title)
-	case "darwin":
-		return macOpenFolder(title)
-	default:
-		return ""
-	}
+    path, err := zenity.SelectFile(
+        zenity.Title(title),
+        zenity.Directory(),
+    )
+    if err != nil {
+        return ""
+    }
+    return path
 }
 
-// ── Windows ───────────────────────────────────────────────────────────────────
+func openPath(path string) error {
+    if path == "" {
+        return fmt.Errorf("empty path")
+    }
 
-func winOpenFile(title, filter string) string {
-	// Build PowerShell filter string from "Desc|*.ext|Desc2|*.ext2"
-	// PowerShell OpenFileDialog uses the same pipe-separated format
-	script := `
-Add-Type -AssemblyName System.Windows.Forms
-$d = New-Object System.Windows.Forms.OpenFileDialog
-$d.Title = '` + title + `'
-$d.Filter = '` + filter + `'
-$d.Multiselect = $false
-$d.RestoreDirectory = $true
-if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    Write-Output $d.FileName
-}
-`
-	return runPowerShell(script)
+    switch runtime.GOOS {
+    case "windows":
+        return exec.Command("explorer.exe", path).Start()
+    case "darwin":
+        return exec.Command("open", path).Start()
+    default:
+        return exec.Command("xdg-open", path).Start()
+    }
 }
 
-func winOpenFolder(title string) string {
-	script := `
-Add-Type -AssemblyName System.Windows.Forms
-$d = New-Object System.Windows.Forms.FolderBrowserDialog
-$d.Description = '` + title + `'
-$d.UseDescriptionForTitle = $true
-$d.ShowNewFolderButton = $true
-if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    Write-Output $d.SelectedPath
-}
-`
-	return runPowerShell(script)
+func appAvailable(appName string) bool {
+    if runtime.GOOS == "darwin" {
+        switch appName {
+        case "Blender", "Blockbench", "MeshLab":
+            return true
+        }
+    }
+    _, err := resolveApp(appName)
+    return err == nil
 }
 
-func runPowerShell(script string) string {
-	cmd := exec.Command("powershell",
-		"-NoProfile",
-		"-NonInteractive",
-		"-WindowStyle", "Hidden",
-		"-Command", script,
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+func openWithApp(appName, filePath string) error {
+    if runtime.GOOS == "darwin" {
+        return exec.Command("open", "-a", appName, filePath).Start()
+    }
+
+    exe, err := resolveApp(appName)
+    if err != nil {
+        return err
+    }
+    return exec.Command(exe, filePath).Start()
 }
 
-// ── Linux (zenity) ────────────────────────────────────────────────────────────
+func resolveApp(appName string) (string, error) {
+    candidates := map[string][]string{
+        "Blender":    {"blender", "blender.exe"},
+        "Blockbench": {"blockbench", "Blockbench.exe"},
+        "MeshLab":    {"meshlab", "meshlab.exe"},
+    }
 
-func zenityOpenFile(title string) string {
-	out, err := exec.Command("zenity",
-		"--file-selection",
-		"--title="+title,
-		"--file-filter=level.dat",
-	).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
+    for _, name := range candidates[appName] {
+        if path, err := exec.LookPath(name); err == nil {
+            return path, nil
+        }
+    }
 
-func zenityOpenFolder(title string) string {
-	out, err := exec.Command("zenity",
-		"--file-selection",
-		"--directory",
-		"--title="+title,
-	).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
+    if runtime.GOOS == "windows" {
+        roots := []string{}
+        if pf := os.Getenv("ProgramFiles"); pf != "" {
+            roots = append(roots, pf)
+        }
+        if pf := os.Getenv("ProgramFiles(x86)"); pf != "" {
+            roots = append(roots, pf)
+        }
+        if local := os.Getenv("LOCALAPPDATA"); local != "" {
+            roots = append(roots, local)
+        }
 
-// ── macOS ─────────────────────────────────────────────────────────────────────
+        switch appName {
+        case "Blender":
+            for _, root := range roots {
+                for _, pattern := range []string{
+                    filepath.Join(root, "Blender Foundation", "Blender *", "blender.exe"),
+                    filepath.Join(root, "Blender Foundation", "Blender *", "blender-launcher.exe"),
+                } {
+                    if matches, _ := filepath.Glob(pattern); len(matches) > 0 {
+                        return matches[len(matches)-1], nil
+                    }
+                }
+            }
+        case "Blockbench":
+            for _, root := range roots {
+                for _, pattern := range []string{
+                    filepath.Join(root, "Programs", "Blockbench", "Blockbench.exe"),
+                    filepath.Join(root, "Blockbench", "Blockbench.exe"),
+                } {
+                    if matches, _ := filepath.Glob(pattern); len(matches) > 0 {
+                        return matches[0], nil
+                    }
+                }
+            }
+        case "MeshLab":
+            for _, root := range roots {
+                pattern := filepath.Join(root, "VCG", "MeshLab", "meshlab.exe")
+                if matches, _ := filepath.Glob(pattern); len(matches) > 0 {
+                    return matches[0], nil
+                }
+            }
+        }
+    }
 
-func macOpenFile(title string) string {
-	out, err := exec.Command("osascript", "-e",
-		`choose file with prompt "`+title+`" of type {"dat"}`,
-	).Output()
-	if err != nil {
-		return ""
-	}
-	// osascript returns "alias MacHD:Users:..." — convert to POSIX
-	path := strings.TrimSpace(string(out))
-	if strings.HasPrefix(path, "alias ") {
-		path = strings.TrimPrefix(path, "alias ")
-		posix, err2 := exec.Command("osascript", "-e",
-			`POSIX path of ("`+path+`" as alias)`,
-		).Output()
-		if err2 == nil {
-			return strings.TrimSpace(string(posix))
-		}
-	}
-	return path
-}
-
-func macOpenFolder(title string) string {
-	out, err := exec.Command("osascript", "-e",
-		`choose folder with prompt "`+title+`"`,
-	).Output()
-	if err != nil {
-		return ""
-	}
-	path := strings.TrimSpace(string(out))
-	if strings.HasPrefix(path, "alias ") {
-		path = strings.TrimPrefix(path, "alias ")
-		posix, err2 := exec.Command("osascript", "-e",
-			`POSIX path of ("`+path+`" as alias)`,
-		).Output()
-		if err2 == nil {
-			return strings.TrimSpace(string(posix))
-		}
-	}
-	return path
+    return "", fmt.Errorf("%s is not installed or could not be found", appName)
 }
