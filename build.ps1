@@ -80,13 +80,15 @@ if (-not $gccCmd -and -not $env:CC) {
     }
 }
 
-go build -ldflags="-H windowsgui" -o minesport.exe .
+# Release build: trim paths and strip DWARF/debug symbols to keep the
+# distributable Windows binary small, matching build.sh's release settings.
+go build -trimpath -ldflags="-H windowsgui -s -w" -o minesport.exe .
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Go build failed!" -ForegroundColor Red
     Pop-Location
     exit 1
 }
-Write-Host "Go wrapper built: wrapper\minesport.exe" -ForegroundColor Green
+Write-Host "Go wrapper built: wrapper\minesport.exe (stripped release build)" -ForegroundColor Green
 Pop-Location
 Write-Host ""
 
@@ -94,7 +96,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host " Build complete!" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "Executables:" -ForegroundColor Green
-Write-Host "  wrapper\minesport.exe          (Go UI)" -ForegroundColor Green
+Write-Host "  wrapper\minesport.exe          (Go UI, stripped release build)" -ForegroundColor Green
 Write-Host "  wrapper\minesport-engine-*.jar (Java engine)" -ForegroundColor Green
 Write-Host "  bridge\build\libs\*.jar        (Bridge mod)" -ForegroundColor Green
 Write-Host ""
