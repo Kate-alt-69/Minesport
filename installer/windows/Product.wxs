@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+      Id="*"
+      Name="Minesport"
+      Language="1033"
+      Version="0.1.0"
+      Manufacturer="Kastrick"
+      UpgradeCode="28E176EA-1E29-4EA0-B22A-BB77A9865AA8">
+
+    <Package
+        InstallerVersion="500"
+        Compressed="yes"
+        InstallScope="perMachine"
+        Platform="x64"
+        Description="Minesport Minecraft world exporter" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Minesport is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Condition Message="Minesport requires 64-bit Windows 10 or Windows 11.">
+      Installed OR (VersionNT64 &gt;= 1000)
+    </Condition>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Minesport">
+          <Component Id="MainExecutable" Guid="*">
+            <File
+                Id="MinesportExe"
+                Source="$(var.SourceDir)\wrapper\dist\minesport.exe"
+                KeyPath="yes">
+              <Shortcut
+                  Id="StartMenuShortcut"
+                  Directory="ProgramMenuFolder"
+                  Name="Minesport"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Advertise="no" />
+              <Shortcut
+                  Id="DesktopShortcut"
+                  Directory="DesktopFolder"
+                  Name="Minesport"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Advertise="no" />
+            </File>
+          </Component>
+
+          <Directory Id="TOOLS" Name="tools">
+            <Component Id="BlenderInstallerHelper" Guid="*">
+              <File
+                  Id="BlenderInstallScript"
+                  Source="$(var.SourceDir)\installer\windows\install-blender.ps1"
+                  KeyPath="yes" />
+            </Component>
+          </Directory>
+
+          <Directory Id="BRIDGE26DIR" Name="bridge26" />
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <Feature Id="CoreFeature" Title="Minesport" Level="1" Absent="disallow">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentGroupRef Id="Bridge26Files" />
+    </Feature>
+
+    <Feature
+        Id="BlenderFeature"
+        Title="Install Blender 5.2 LTS"
+        Description="Downloads Blender from the official Blender Foundation mirror."
+        Level="2">
+      <ComponentRef Id="BlenderInstallerHelper" />
+    </Feature>
+
+    <Feature
+        Id="TranslatorFeature"
+        Title="Minesport Blender translator"
+        Description="Installs the one-shot Minesport translator into detected Blender 4.3+ profiles."
+        Level="2">
+      <ComponentRef Id="MainExecutable" />
+    </Feature>
+
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <UIRef Id="WixUI_FeatureTree" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\installer\windows\license.rtf" />
+
+    <CustomAction
+        Id="InstallBlender"
+        Directory="INSTALLFOLDER"
+        ExeCommand='[SystemFolder]WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;[TOOLS]install-blender.ps1&quot;'
+        Execute="deferred"
+        Impersonate="no"
+        Return="ignore" />
+
+    <CustomAction
+        Id="InstallTranslator"
+        Directory="INSTALLFOLDER"
+        ExeCommand='&quot;[INSTALLFOLDER]minesport.exe&quot; --install-blender-translator'
+        Execute="deferred"
+        Impersonate="yes"
+        Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="InstallBlender" After="InstallFiles">
+        NOT Installed AND (&amp;BlenderFeature=3)
+      </Custom>
+      <Custom Action="InstallTranslator" After="InstallBlender">
+        NOT Installed AND (&amp;TranslatorFeature=3)
+      </Custom>
+    </InstallExecuteSequence>
+  </Product>
+</Wix>
