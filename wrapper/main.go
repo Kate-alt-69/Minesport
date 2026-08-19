@@ -7,16 +7,22 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"runtime/pprof"
+	"strings"
+	"time"
 
 	"github.com/kastrick/minesport/ui"
 	"github.com/kastrick/minesport/viewer"
 )
 
+var diagnosticsDir string
+
 func main() {
 	setupDiagnostics()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("PANIC: %v", r)
+			reportCrash(r)
 		}
 	}()
 
@@ -49,13 +55,95 @@ func setupDiagnostics() {
 	if err != nil {
 		return
 	}
-	logPath := filepath.Join(filepath.Dir(exe), "minesport.log")
+	diagnosticsDir = filepath.Dir(exe)
+	logPath := filepath.Join(diagnosticsDir, "minesport.log")
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err == nil {
-		log.SetOutput(f)
-		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
-		log.Printf("Minesport starting (GOOS=%s GOARCH=%s)", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return
 	}
+	log.SetOutput(f)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+	log.Printf("Minesport starting (GOOS=%s GOARCH=%s)", runtime.GOOS, runtime.GOARCH)
+}
+
+func reportCrash(panicValue any) {
+	now := time.Now()
+	stamp := now.Format("20060102-150405.000")
+	panicPath := filepath.Join(diagnosticsDir, "minesport-crash-"+stamp+".tmp")
+	heapPath := filepath.Join(diagnosticsDir, "minesport-heap-"+stamp+".tmp")
+
+	stack := debug.Stack()
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	var goroutines strings.Builder
+	if p := pprof.Lookup("goroutine"); p != nil {
+		_ = p.WriteTo(&goroutines, 2)
+	}
+
+	var b strings.Builder
+	fmt.Fprintln(&b, "Minesport crash report")
+	fmt.Fprintf(&b, "Time: %s\n", now.Format(time.RFC3339Nano))
+	fmt.Fprintf(&b, "OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(&b, "Go: %s\n", runtime.Version())
+	fmt.Fprintf(&b, "Executable: %s\n", executablePath())
+	fmt.Fprintf(&b, "Working directory: %s\n", workingDirectory())
+	fmt.Fprintf(&b, "Command line: %q\n\n", os.Args)
+	fmt.Fprintf(&b, "PANIC: %v\n\n", panicValue)
+	fmt.Fprintf(&b, "=== PANIC STACK ===\n%s\n", stack)
+	fmt.Fprintf(&b, "=== ALL GOROUTINES ===\n%s\n", goroutines.String())
+	fmt.Fprintln(&b, "=== MEMORY STATS ===")
+	fmt.Fprintf(&b, "Alloc=%d bytes\n", mem.Alloc)
+	fmt.Fprintf(&b, "TotalAlloc=%d bytes\n", mem.TotalAlloc)
+	fmt.Fprintf(&b, "Sys=%d bytes\n", mem.Sys)
+	fmt.Fprintf(&b, "HeapAlloc=%d bytes\n", mem.HeapAlloc)
+	fmt.Fprintf(&b, "HeapSys=%d bytes\n", mem.HeapSys)
+	fmt.Fprintf(&b, "HeapInuse=%d bytes\n", mem.HeapInuse)
+	fmt.Fprintf(&b, "HeapIdle=%d bytes\n", mem.HeapIdle)
+	fmt.Fprintf(&b, "HeapReleased=%d bytes\n", mem.HeapReleased)
+	fmt.Fprintf(&b, "HeapObjects=%d\n", mem.HeapObjects)
+	fmt.Fprintf(&b, "StackInuse=%d bytes\n", mem.StackInuse)
+	fmt.Fprintf(&b, "StackSys=%d bytes\n", mem.StackSys)
+	fmt.Fprintf(&b, "MSpanInuse=%d bytes\n", mem.MSpanInuse)
+	fmt.Fprintf(&b, "MCacheInuse=%d bytes\n", mem.MCacheInuse)
+	fmt.Fprintf(&b, "NumGC=%d\n", mem.NumGC)
+	fmt.Fprintf(&b, "Goroutines=%d\n", runtime.NumGoroutine())
+
+	if err := os.WriteFile(panicPath, []byte(b.String()), 0644); err != nil {
+		log.Printf("CRASH REPORT WRITE FAILED: %v", err)
+	} else {
+		log.Printf("Crash report: %s", panicPath)
+	}
+
+	runtime.GC()
+	if f, err := os.Create(heapPath); err == nil {
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Printf("HEAP DUMP WRITE FAILED: %v", err)
+		} else {
+			log.Printf("Heap dump: %s", heapPath)
+		}
+		_ = f.Close()
+	} else {
+		log.Printf("HEAP DUMP CREATE FAILED: %v", err)
+	}
+
+	log.Printf("PANIC: %v", panicValue)
+	log.Printf("PANIC STACK:\n%s", stack)
+	log.Printf("Crash diagnostics written; exiting.")
+}
+
+func executablePath() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "unknown"
+}
+
+func workingDirectory() string {
+	if p, err := os.Getwd(); err == nil {
+		return p
+	}
+	return "unknown"
 }
 
 func findJar() string {
