@@ -8,9 +8,9 @@ import java.util.*;
  * Detects multi-block structures without hard-coding block names.
  *
  * The resolver intentionally works from block-state semantics rather than
- * knowing that a particular block is a door, bed, etc.  Vanilla and mods
+ * knowing that a particular block is a door, bed, etc. Vanilla and mods
  * commonly express multi-block relationships with complementary state values
- * such as half=lower/upper or part=bottom/top.  Directional boolean states
+ * such as half=lower/upper or part=bottom/top. Directional boolean states
  * (north=true, south=true, ...) are also used as a generic connection signal.
  *
  * A structure is only created when there is an actual neighboring counterpart.
@@ -42,16 +42,22 @@ public final class MultiBlockStructureResolver {
         "down",  new int[]{0, -1, 0}
     );
 
+    private static final Map<String, String> OPPOSITE = Map.of(
+        "north", "south", "south", "north",
+        "east", "west", "west", "east",
+        "up", "down", "down", "up"
+    );
+
     private MultiBlockStructureResolver() {}
 
     /**
      * Returns a stable structure id for every block that belongs to a
-     * detected multi-block structure.  Blocks not belonging to one are absent.
+     * detected multi-block structure. Blocks not belonging to one are absent.
      */
     public static Map<BlockData, String> resolve(List<BlockData> blocks) {
         Map<Long, BlockData> index = new HashMap<>(Math.max(16, blocks.size() * 2));
         for (BlockData block : blocks) {
-            if (!block.isAir()) index.put(key(block.x, block.y, block.z), block);
+            if (!block.isAir()) index.put(SpatialKey.of(block.x, block.y, block.z), block);
         }
 
         Map<BlockData, Set<BlockData>> members = new IdentityHashMap<>();
@@ -60,29 +66,35 @@ public final class MultiBlockStructureResolver {
 
             // Explicit complementary-part state (door halves, bed halves,
             // many modded two-piece blocks, etc.).
-            for (String key : PART_KEYS) {
-                String value = block.prop(key);
+            for (String propKey : PART_KEYS) {
+                String value = block.prop(propKey);
                 String otherValue = COMPLEMENT.get(value);
                 if (otherValue == null) continue;
 
                 for (int[] dir : sixNeighbors()) {
-                    BlockData other = index.get(key(block.x + dir[0], block.y + dir[1], block.z + dir[2]));
+                    BlockData other = index.get(SpatialKey.of(block.x + dir[0], block.y + dir[1], block.z + dir[2]));
                     if (other == null || !sameFamily(block, other)) continue;
-                    if (other.prop(key).equals(otherValue)) {
+                    if (other.prop(propKey).equals(otherValue)) {
                         link(members, block, other);
                     }
                 }
             }
 
-            // Generic directional connection: if a block explicitly says it
-            // connects toward a neighboring block, treat that pair as one
-            // compound structure. This also works across different block IDs,
-            // which is useful for custom/modded connector pieces.
+            // Generic directional connections are only trusted when the
+            // neighbor reciprocates on the opposite direction, or both blocks
+            // share the same block id. This prevents arbitrary properties such
+            // as "north=true" on unrelated custom blocks from joining huge,
+            // incorrect compound structures.
             for (var entry : DIRECTION.entrySet()) {
-                if (!isConnectionEnabled(block, entry.getKey())) continue;
+                String direction = entry.getKey();
+                if (!isConnectionEnabled(block, direction)) continue;
                 int[] d = entry.getValue();
-                BlockData other = index.get(key(block.x + d[0], block.y + d[1], block.z + d[2]));
-                if (other != null && !other.isAir()) {
+                BlockData other = index.get(SpatialKey.of(block.x + d[0], block.y + d[1], block.z + d[2]));
+                if (other == null || other.isAir()) continue;
+
+                String opposite = OPPOSITE.get(direction);
+                boolean reciprocal = opposite != null && isConnectionEnabled(other, opposite);
+                if (reciprocal || block.blockId.equals(other.blockId)) {
                     link(members, block, other);
                 }
             }
@@ -143,11 +155,5 @@ public final class MultiBlockStructureResolver {
             new int[]{0, 1, 0}, new int[]{0, -1, 0},
             new int[]{0, 0, 1}, new int[]{0, 0, -1}
         );
-    }
-
-    private static long key(int x, int y, int z) {
-        return ((long) (x + 1048576) << 42)
-             | ((long) (y + 1048576) << 21)
-             | (long) (z + 1048576);
     }
 }
