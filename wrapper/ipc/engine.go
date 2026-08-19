@@ -33,6 +33,7 @@ type Engine struct {
     msgCh chan Response
     pendingMu sync.Mutex
     pendingReply chan Response
+    pendingType string
     commandMu sync.Mutex
     OnLog func(string)
     OnProgress func(int,string)
@@ -40,49 +41,65 @@ type Engine struct {
     OnError func(string)
 }
 
-func NewEngine(jarPath string) *Engine {
-    return &Engine{msgCh:make(chan Response,64),OnLog:func(s string){fmt.Println("[engine]",s)},OnProgress:func(int,string){},OnDone:func(Response){},OnError:func(s string){fmt.Println("[engine ERROR]",s)}}
-}
+func NewEngine(jarPath string) *Engine { return &Engine{msgCh:make(chan Response,64),OnLog:func(s string){fmt.Println("[engine]",s)},OnProgress:func(int,string){},OnDone:func(Response){},OnError:func(s string){fmt.Println("[engine ERROR]",s)}} }
 
 func (e *Engine) Start(jarPath string) error {
     e.mu.Lock(); defer e.mu.Unlock()
-    javaExe := "java"; if javaHome:=os.Getenv("JAVA_HOME"); javaHome!="" { javaExe=javaHome+"/bin/java" }
+    javaExe := "java"; if javaHome:=os.Getenv("JAVA_HOME"); javaHome!="" {javaExe=javaHome+"/bin/java"}
     e.cmd=exec.Command(javaExe,"-jar",jarPath,"--ipc")
     var err error
-    e.stdin,err=e.cmd.StdinPipe(); if err!=nil{return fmt.Errorf("stdin pipe: %w",err)}
-    stdout,err:=e.cmd.StdoutPipe(); if err!=nil{return fmt.Errorf("stdout pipe: %w",err)}
+    e.stdin,err=e.cmd.StdinPipe();if err!=nil{return fmt.Errorf("stdin pipe: %w",err)}
+    stdout,err:=e.cmd.StdoutPipe();if err!=nil{return fmt.Errorf("stdout pipe: %w",err)}
     e.cmd.Stderr=os.Stderr
     if err:=e.cmd.Start();err!=nil{return fmt.Errorf("start java: %w",err)}
     go e.readLoop(bufio.NewScanner(stdout)); go e.dispatch(); e.ready=true; return nil
 }
 
-func (e *Engine) readLoop(scanner *bufio.Scanner) {
+func(e *Engine)readLoop(scanner *bufio.Scanner){
     for scanner.Scan(){line:=scanner.Text();if line==""{continue};var resp Response;if err:=json.Unmarshal([]byte(line),&resp);err!=nil{resp=Response{Type:"log",Message:line}};e.msgCh<-resp}
     close(e.msgCh)
 }
 
-func (e *Engine) dispatch(){
+func(e *Engine)dispatch(){
     for resp:=range e.msgCh{
-        e.pendingMu.Lock();pending:=e.pendingReply;e.pendingMu.Unlock()
-        switch resp.Type{case "log":if e.OnLog!=nil{e.OnLog(resp.Message)};continue;case "progress":if e.OnProgress!=nil{e.OnProgress(resp.Percent,resp.Message)};continue;case "info":if e.OnLog!=nil{e.OnLog("Engine version: "+resp.Version)};continue}
-        if pending!=nil{pending<-resp;continue}
-        switch resp.Type{case "done":if e.OnDone!=nil{e.OnDone(resp)};case "error":if e.OnError!=nil{e.OnError(resp.Message)}}
+        e.pendingMu.Lock();pending:=e.pendingReply;expected:=e.pendingType;e.pendingMu.Unlock()
+        switch resp.Type{
+        case "log":if e.OnLog!=nil{e.OnLog(resp.Message)};continue
+        case "progress":if e.OnProgress!=nil{e.OnProgress(resp.Percent,resp.Message)};continue
+        case "info":if e.OnLog!=nil{e.OnLog("Engine version: "+resp.Version)};continue
+        }
+
+        // Only deliver the response belonging to the command that is waiting.
+        // This matters because Java processes export synchronously: a heightmap
+        // or listBlocks request sent while an export is finishing may sit in
+        // stdin behind the export's final "done" message. Routing "done" into
+        // that pending request used to make the caller interpret an export
+        // completion as its heightmap/list response and then lose the real reply.
+        if pending!=nil && (resp.Type==expected || resp.Type=="error") {
+            pending<-resp
+            continue
+        }
+
+        switch resp.Type{
+        case "done":if e.OnDone!=nil{e.OnDone(resp)}
+        case "error":if e.OnError!=nil{e.OnError(resp.Message)}
+        }
     }
-    e.pendingMu.Lock();if e.pendingReply!=nil{close(e.pendingReply);e.pendingReply=nil};e.pendingMu.Unlock()
+    e.pendingMu.Lock();if e.pendingReply!=nil{close(e.pendingReply);e.pendingReply=nil;e.pendingType=""};e.pendingMu.Unlock()
     e.mu.Lock();e.ready=false;e.mu.Unlock()
 }
 
-func (e *Engine) Send(req Request) error {
-    e.mu.Lock();defer e.mu.Unlock();if !e.ready{return fmt.Errorf("engine not started")};data,err:=json.Marshal(req);if err!=nil{return err};_,err=fmt.Fprintln(e.stdin,string(data));return err
-}
+func(e *Engine)Send(req Request)error{e.mu.Lock();defer e.mu.Unlock();if !e.ready{return fmt.Errorf("engine not started")};data,err:=json.Marshal(req);if err!=nil{return err};_,err=fmt.Fprintln(e.stdin,string(data));return err}
 
-func (e *Engine) SendCommand(payload map[string]interface{})(*Response,error){
+func(e *Engine)SendCommand(payload map[string]interface{})(*Response,error){
     e.commandMu.Lock();defer e.commandMu.Unlock()
     e.mu.Lock();if !e.ready||e.stdin==nil{e.mu.Unlock();return nil,fmt.Errorf("engine not started")};e.mu.Unlock()
 
+    command,_:=payload["command"].(string)
+    expected:=command
     reply:=make(chan Response,1)
-    e.pendingMu.Lock();e.pendingReply=reply;e.pendingMu.Unlock()
-    defer func(){e.pendingMu.Lock();if e.pendingReply==reply{e.pendingReply=nil};e.pendingMu.Unlock()}()
+    e.pendingMu.Lock();e.pendingReply=reply;e.pendingType=expected;e.pendingMu.Unlock()
+    defer func(){e.pendingMu.Lock();if e.pendingReply==reply{e.pendingReply=nil;e.pendingType=""};e.pendingMu.Unlock()}()
 
     e.mu.Lock();data,err:=json.Marshal(payload);if err!=nil{e.mu.Unlock();return nil,err};_,err=fmt.Fprintln(e.stdin,string(data));e.mu.Unlock();if err!=nil{return nil,err}
     resp,ok:=<-reply;if !ok{return nil,fmt.Errorf("engine closed before response")};return &resp,nil
