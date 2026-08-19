@@ -1,85 +1,281 @@
-name: Minesport Build
+name: Minesport Compile Check
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minesport-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  java-engine:
-    name: Java engine
+  fabric-bridge:
+    name: Fabric bridge · Java 21
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compile and test bridge
+        working-directory: bridge
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean build
+
+      - name: Upload bridge JAR
+        uses: actions/upload-artifact@v7
+        with:
+          name: fabric-bridge
+          path: bridge/build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 7
+
+  java-engine:
+    name: Java engine · Java 22
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 22
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '22'
-      - name: Build engine
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compile and test engine
         working-directory: engine
-        run: ./gradlew jar --no-daemon
-      - name: Build bridge
-        working-directory: bridge
-        run: ./gradlew jar --no-daemon
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean build
+
+      - name: Upload engine JAR for wrapper jobs
+        uses: actions/upload-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs/minesport-engine-*.jar
+          if-no-files-found: error
+          retention-days: 7
+
+  blender-translator:
+    name: Blender translator · Python syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Validate pyproject
+        run: python -c "import pathlib,tomllib; tomllib.loads(pathlib.Path('wrapper/blendertranslator/pyproject.toml').read_text(encoding='utf-8')); print('pyproject.toml OK')"
+
+      - name: Compile translator Python
+        run: python -m compileall -q wrapper/blendertranslator/minesport_translator
 
   wrapper:
-    name: Wrapper (${{ matrix.os }})
+    name: Wrapper release · ${{ matrix.name }}
+    needs: java-engine
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            artifact: minesport-linux-amd64
-            package: minesport
-          - os: windows-latest
-            artifact: minesport-windows-amd64
-            package: minesport.exe
-          - os: macos-latest
-            artifact: minesport-macos
-            package: minesport
+          - name: Linux amd64
+            os: ubuntu-latest
+            binary: minesport
+          - name: Windows amd64
+            os: windows-latest
+            binary: minesport.exe
+          - name: macOS
+            os: macos-latest
+            binary: minesport
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Checkout
+        uses: actions/checkout@v7
         with:
-          go-version: '1.26'
+          persist-credentials: false
+
+      - name: Download compiled engine
+        uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: wrapper/go.mod
+          cache-dependency-path: wrapper/go.sum
+
       - name: Install Linux Fyne/OpenGL dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev zenity
-      - name: Check macOS compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libgl1-mesa-dev xorg-dev
+
+      - name: Check Windows C compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          gcc --version
+          if ($LASTEXITCODE -ne 0) { throw 'gcc is required for Fyne/CGO' }
+
+      - name: Check macOS C compiler
         if: runner.os == 'macOS'
         run: clang --version
-      - name: Build wrapper
+
+      - name: Verify Go module files are tidy
         working-directory: wrapper
         shell: bash
         env:
           CGO_ENABLED: '1'
         run: |
           go mod tidy
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            go build -trimpath -ldflags='-H windowsgui -s -w' -o minesport.exe .
-          else
-            go build -trimpath -ldflags='-s -w' -o minesport .
-          fi
-      - name: Upload wrapper
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: wrapper/${{ matrix.package }}
+          git diff --exit-code -- go.mod go.sum
 
-  cross-check:
-    name: Go portability checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-      - name: Install Linux Fyne/OpenGL dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
-      - name: Build-check Linux
+      - name: Compile all Go packages
         working-directory: wrapper
+        shell: bash
         env:
           CGO_ENABLED: '1'
-        run: go build ./...
+        run: go test ./...
+
+      - name: Generate embedded engine source
+        working-directory: wrapper
+        shell: bash
+        run: |
+          engine_jars=(../engine/build/libs/minesport-engine-*.jar)
+          engine_jar="${engine_jars[0]}"
+          if [ ! -f "$engine_jar" ]; then
+            echo "ERROR: engine JAR artifact is missing" >&2
+            exit 1
+          fi
+          echo "Embedding: $engine_jar"
+          go run ./cmd/embed-engine -input "$engine_jar" -output embedded_engine_generated.go
+
+      - name: Compile release configuration
+        working-directory: wrapper
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          mkdir -p dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            go build -tags minesport_embedded_engine -trimpath -ldflags='-H windowsgui -s -w' -o dist/minesport.exe .
+          else
+            go build -tags minesport_embedded_engine -trimpath -ldflags='-s -w' -o dist/minesport .
+          fi
+
+      - name: Compile all packages with embedded-engine tag
+        working-directory: wrapper
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: go test -tags minesport_embedded_engine ./...
+
+      - name: Validate build script syntax
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash -n build.sh
+
+      - name: Validate PowerShell build script syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE 'build.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'build.ps1 contains syntax errors'
+          }
+          Write-Host 'build.ps1 syntax OK'
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: minesport-${{ runner.os }}-${{ runner.arch }}
+          path: wrapper/dist/${{ matrix.binary }}
+          if-no-files-found: error
+          retention-days: 7
+
+  compile-clean:
+    name: Compile cleanly
+    if: always()
+    needs:
+      - fabric-bridge
+      - java-engine
+      - blender-translator
+      - wrapper
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BRIDGE_RESULT: ${{ needs.fabric-bridge.result }}
+      ENGINE_RESULT: ${{ needs.java-engine.result }}
+      TRANSLATOR_RESULT: ${{ needs.blender-translator.result }}
+      WRAPPER_RESULT: ${{ needs.wrapper.result }}
+    steps:
+      - name: Report compile status
+        run: |
+          echo "Fabric bridge:      $BRIDGE_RESULT"
+          echo "Java engine:        $ENGINE_RESULT"
+          echo "Blender translator: $TRANSLATOR_RESULT"
+          echo "Wrapper matrix:     $WRAPPER_RESULT"
+
+          {
+            echo "## Minesport compile report"
+            echo
+            echo "| Component | Result |"
+            echo "|---|---|"
+            echo "| Fabric bridge | $BRIDGE_RESULT |"
+            echo "| Java engine | $ENGINE_RESULT |"
+            echo "| Blender translator | $TRANSLATOR_RESULT |"
+            echo "| Wrapper: Linux + Windows + macOS | $WRAPPER_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$BRIDGE_RESULT" = "success" ] && \
+             [ "$ENGINE_RESULT" = "success" ] && \
+             [ "$TRANSLATOR_RESULT" = "success" ] && \
+             [ "$WRAPPER_RESULT" = "success" ]; then
+            echo "✅ Everything compiled cleanly." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "❌ One or more compile jobs failed. Open the failed job above for the exact compiler output." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 1
