@@ -59,7 +59,7 @@ jobs:
           - minecraft: '26.2'
             fabric_api: '0.157.0+26.2'
           - minecraft: '26.3-snapshot-7'
-            fabric_api: '0.156.3+26.3'
+            fabric_api: '0.157.0+26.3'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -83,7 +83,7 @@ jobs:
             "-Pminecraft_version=${{ matrix.minecraft }}" \
             "-Ploader_version=0.19.3" \
             "-Pfabric_api_version=${{ matrix.fabric_api }}" \
-            "-Ploom_version=1.17.17" \
+            "-Ploom_version=1.17.18" \
             --no-daemon \
             --stacktrace
 

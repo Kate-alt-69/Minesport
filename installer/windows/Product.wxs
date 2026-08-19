@@ -32,13 +32,13 @@
                 KeyPath="yes">
               <Shortcut
                   Id="StartMenuShortcut"
-                  Directory="ProgramMenuFolder"
+                  Directory="CommonProgramsFolder"
                   Name="Minesport"
                   WorkingDirectory="INSTALLFOLDER"
                   Advertise="no" />
               <Shortcut
                   Id="DesktopShortcut"
-                  Directory="DesktopFolder"
+                  Directory="CommonDesktopFolder"
                   Name="Minesport"
                   WorkingDirectory="INSTALLFOLDER"
                   Advertise="no" />
@@ -58,8 +58,8 @@
         </Directory>
       </Directory>
 
-      <Directory Id="ProgramMenuFolder" />
-      <Directory Id="DesktopFolder" />
+      <Directory Id="CommonProgramsFolder" />
+      <Directory Id="CommonDesktopFolder" />
     </Directory>
 
     <Feature Id="CoreFeature" Title="Minesport" Level="1" Absent="disallow">
@@ -70,7 +70,7 @@
     <Feature
         Id="BlenderFeature"
         Title="Install Blender 5.2 LTS"
-        Description="Downloads Blender from the official Blender Foundation mirror."
+        Description="Downloads Blender from the official Blender Foundation mirror and verifies its SHA-256 checksum."
         Level="2">
       <ComponentRef Id="BlenderInstallerHelper" />
     </Feature>
@@ -83,6 +83,15 @@
       <ComponentRef Id="MainExecutable" />
     </Feature>
 
+    <Feature
+        Id="BridgeBuildFeature"
+        Title="Compile Fabric 26.x bridge(s)"
+        Description="Compiles Minesport bridges for detected Minecraft 26.x Fabric installations on this computer."
+        Level="2">
+      <ComponentRef Id="MainExecutable" />
+    </Feature>
+
+    <Property Id="INSTALLLEVEL" Value="1" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <UIRef Id="WixUI_FeatureTree" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\installer\windows\license.rtf" />
@@ -103,12 +112,23 @@
         Impersonate="yes"
         Return="ignore" />
 
+    <CustomAction
+        Id="BuildDetectedBridges"
+        Directory="INSTALLFOLDER"
+        ExeCommand='&quot;[INSTALLFOLDER]minesport.exe&quot; --build-bridges-detected'
+        Execute="deferred"
+        Impersonate="yes"
+        Return="ignore" />
+
     <InstallExecuteSequence>
       <Custom Action="InstallBlender" After="InstallFiles">
         NOT Installed AND (&amp;BlenderFeature=3)
       </Custom>
       <Custom Action="InstallTranslator" After="InstallBlender">
         NOT Installed AND (&amp;TranslatorFeature=3)
+      </Custom>
+      <Custom Action="BuildDetectedBridges" After="InstallTranslator">
+        NOT Installed AND (&amp;BridgeBuildFeature=3)
       </Custom>
     </InstallExecuteSequence>
   </Product>

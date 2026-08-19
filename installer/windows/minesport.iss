@@ -31,6 +31,7 @@ RestartApplications=no
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
 Name: "blender"; Description: "Install Blender 5.2 LTS (downloads from blender.org)"; GroupDescription: "Optional integrations:"; Flags: unchecked
 Name: "translator"; Description: "Install the Minesport Blender translator for detected Blender 4.3+ profiles"; GroupDescription: "Optional integrations:"; Flags: unchecked
+Name: "fabricbridge"; Description: "Compile Minesport Fabric bridges for detected Minecraft 26.x Fabric installations"; GroupDescription: "Optional integrations:"; Flags: unchecked
 
 [Dirs]
 Name: "{app}\bridge26"
@@ -47,7 +48,8 @@ Name: "{autodesktop}\Minesport"; Filename: "{app}\minesport.exe"; WorkingDir: "{
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\install-blender.ps1"""; StatusMsg: "Installing Blender 5.2 LTS..."; Flags: waituntilterminated; Tasks: blender
-Filename: "{app}\minesport.exe"; Parameters: "--install-blender-translator"; StatusMsg: "Installing Minesport Blender translator..."; Flags: waituntilterminated runhidden; Tasks: translator
+Filename: "{app}\minesport.exe"; Parameters: "--install-blender-translator"; StatusMsg: "Installing Minesport Blender translator..."; Flags: waituntilterminated runhidden runascurrentuser; Tasks: translator
+Filename: "{app}\minesport.exe"; Parameters: "--build-bridges-detected"; StatusMsg: "Compiling Minesport Fabric bridge(s)..."; Flags: waituntilterminated runhidden runascurrentuser; Tasks: fabricbridge
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\bridge26"

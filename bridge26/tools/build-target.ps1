@@ -6,7 +6,7 @@ param(
 
     [string]$GradleVersion = "9.5.1",
 
-    [string]$LoomVersion = "1.17.17"
+    [string]$LoomVersion = "1.17.18"
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,13 +138,36 @@ function Ensure-Gradle([string]$Version) {
     return $exe
 }
 
+function New-WritableProject([string]$SourceProject, [string]$GameVersion) {
+    $base = if ($env:LOCALAPPDATA) {
+        Join-Path $env:LOCALAPPDATA "Minesport\bridge-build"
+    } else {
+        Join-Path $env:TEMP "Minesport\bridge-build"
+    }
+    $safeVersion = $GameVersion -replace '[^A-Za-z0-9._-]', '_'
+    $workspace = Join-Path $base $safeVersion
+
+    if (Test-Path $workspace) {
+        Remove-Item $workspace -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $workspace | Out-Null
+
+    Get-ChildItem -Path $SourceProject -Force |
+        Where-Object { $_.Name -notin @('build', '.gradle') } |
+        ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $workspace -Recurse -Force
+        }
+
+    return $workspace
+}
+
 if ($MinecraftVersion -notmatch '^26\.') {
     throw "The dynamic bridge builder targets Minecraft 26.x. Use the legacy bridge for 1.21.x worlds."
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$projectDir = Split-Path -Parent $scriptDir
-if (-not (Test-Path (Join-Path $projectDir "build.gradle"))) {
+$sourceProjectDir = Split-Path -Parent $scriptDir
+if (-not (Test-Path (Join-Path $sourceProjectDir "build.gradle"))) {
     throw "Could not locate the bridge26 Gradle project."
 }
 
@@ -158,11 +181,13 @@ Write-Step "Java: $javaExe"
 $loader = Resolve-LoaderVersion $MinecraftVersion
 $fabricApi = Resolve-FabricApiVersion $MinecraftVersion
 $gradle = Ensure-Gradle $GradleVersion
+$projectDir = New-WritableProject $sourceProjectDir $MinecraftVersion
 
 Write-Step "Minecraft:  $MinecraftVersion"
 Write-Step "Loader:     $loader"
 Write-Step "Fabric API: $fabricApi"
 Write-Step "Loom:       $LoomVersion"
+Write-Step "Workspace:  $projectDir"
 
 & $gradle `
     -p $projectDir `
@@ -175,7 +200,7 @@ Write-Step "Loom:       $LoomVersion"
     --stacktrace
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Fabric bridge compilation failed with exit code $LASTEXITCODE."
+    throw "Fabric bridge compilation failed with exit code $LASTEXITCODE. Build workspace kept at $projectDir"
 }
 
 $jar = Get-ChildItem -Path (Join-Path $projectDir "build\libs") -Filter "*.jar" -File |

@@ -9,7 +9,7 @@ fi
 MC_VERSION="$1"
 OUTPUT_DIR="${2:-}"
 GRADLE_VERSION="${MINESPORT_GRADLE_VERSION:-9.5.1}"
-LOOM_VERSION="${MINESPORT_LOOM_VERSION:-1.17.17}"
+LOOM_VERSION="${MINESPORT_LOOM_VERSION:-1.17.18}"
 
 if [[ ! "$MC_VERSION" =~ ^26\. ]]; then
   echo "The dynamic bridge builder targets Minecraft 26.x. Use the legacy bridge for 1.21.x worlds." >&2
@@ -17,7 +17,7 @@ if [[ ! "$MC_VERSION" =~ ^26\. ]]; then
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+SOURCE_PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -107,10 +107,27 @@ else
   fi
 fi
 
+SAFE_VERSION="${MC_VERSION//[^A-Za-z0-9._-]/_}"
+WORK_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/minesport/bridge-build"
+PROJECT_DIR="$WORK_ROOT/$SAFE_VERSION"
+rm -rf "$PROJECT_DIR"
+mkdir -p "$PROJECT_DIR"
+
+shopt -s dotglob nullglob
+for entry in "$SOURCE_PROJECT_DIR"/*; do
+  base="$(basename "$entry")"
+  if [[ "$base" == "build" || "$base" == ".gradle" ]]; then
+    continue
+  fi
+  cp -R "$entry" "$PROJECT_DIR/"
+done
+shopt -u dotglob nullglob
+
 echo "[Minesport Bridge] Minecraft:  $MC_VERSION"
 echo "[Minesport Bridge] Loader:     $LOADER_VERSION"
 echo "[Minesport Bridge] Fabric API: $FABRIC_API_VERSION"
 echo "[Minesport Bridge] Loom:       $LOOM_VERSION"
+echo "[Minesport Bridge] Workspace:  $PROJECT_DIR"
 
 "$GRADLE_BIN" \
   -p "$PROJECT_DIR" \
