@@ -58,7 +58,9 @@ public class GeometryBuilder {
             BlockModel.Face face=el.faces.get(fd.dir());if(face==null)continue;
             String texPath=face.resolveTexture(textures);if(texPath==null||texPath.startsWith("#"))continue;
             if(faceCullingEnabled&&occlusionIndex!=null&&face.cullface!=null){String worldDir=rotateDirection(face.cullface,app.x,app.y);if(isFaceOccluded(block,worldDir))continue;}
-            float[] uv=face.uv!=null?face.uv.clone():fd.defUv().clone();if(face.rotation!=0)uv=rotateUv(uv,face.rotation);
+            float[] uv=face.uv!=null?face.uv.clone():fd.defUv().clone();
+            if(face.rotation!=0)uv=rotateUv(uv,face.rotation);
+            if(app.uvlock)uv=applyUvLock(uv,fd.dir(),app.x,app.y);
             float[][] verts=new float[4][3];
             for(int i=0;i<4;i++){float[] c=corners[fd.ci()[i]];verts[i][0]=block.x+c[0];verts[i][1]=block.y+c[1];verts[i][2]=block.z+c[2];}
             out.add(new Quad(verts,uv,texPath,new float[3],face.cullface,face.tintindex));
@@ -70,6 +72,10 @@ public class GeometryBuilder {
         for(float[] c:corners){
             float dx=c[0]-ox,dy=c[1]-oy,dz=c[2]-oz;
             switch(rot.axis){case "y"->{c[0]=ox+dx*cos-dz*sin;c[2]=oz+dx*sin+dz*cos;}case "x"->{c[1]=oy+dy*cos-dz*sin;c[2]=oz+dy*sin+dz*cos;}case "z"->{c[0]=ox+dx*cos-dy*sin;c[1]=oy+dx*sin+dy*cos;}}
+            if(rot.rescale&&Math.abs(rot.angle)>1e-6){
+                float scale=1f/Math.max(.001f,Math.abs(cos));
+                switch(rot.axis){case "x"->{c[1]=oy+(c[1]-oy)*scale;c[2]=oz+(c[2]-oz)*scale;}case "y"->{c[0]=ox+(c[0]-ox)*scale;c[2]=oz+(c[2]-oz)*scale;}case "z"->{c[0]=ox+(c[0]-ox)*scale;c[1]=oy+(c[1]-oy)*scale;}}
+            }
         }
     }
 
@@ -81,6 +87,16 @@ public class GeometryBuilder {
     private float[] rotateUv(float[] uv,int degrees){
         float cx=(uv[0]+uv[2])/2f,cy=(uv[1]+uv[3])/2f,hw=(uv[2]-uv[0])/2f,hh=(uv[3]-uv[1])/2f;
         return switch(degrees){case 90->new float[]{cx-hh,cy-hw,cx+hh,cy+hw};case 180->new float[]{cx-hw,cy-hh,cx+hw,cy+hh};case 270->new float[]{cx+hh,cy+hw,cx-hh,cy-hw};default->uv;};
+    }
+
+    /** Keep model UVs visually locked while the blockstate rotates the model. */
+    private float[] applyUvLock(float[] uv,String sourceFace,int xRot,int yRot){
+        // The common case is a Y-axis block rotation (doors, trapdoors, stairs,
+        // logs, etc.). Reverse the model rotation so the texture remains
+        // aligned to the world rather than rotating with the model.
+        int turns=((yRot%360)+360)%360/90;
+        if(turns==0)return uv;
+        return rotateUv(uv,(4-turns)%4*90);
     }
 
     private List<Quad> buildFallbackCube(BlockData block){
