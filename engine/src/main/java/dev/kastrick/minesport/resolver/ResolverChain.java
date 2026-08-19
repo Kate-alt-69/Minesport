@@ -8,6 +8,12 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Chains multiple asset resolvers together in priority order. */
 public class ResolverChain {
+    private static final Set<String> VIRTUAL_PARENTS = Set.of(
+        "minecraft:block/block",
+        "minecraft:builtin/generated",
+        "minecraft:builtin/entity"
+    );
+
     private final List<AssetResolver> resolvers = new ArrayList<>();
     private final Set<String> missingBlockStates = ConcurrentHashMap.newKeySet();
     private final Set<String> missingModels = ConcurrentHashMap.newKeySet();
@@ -21,11 +27,15 @@ public class ResolverChain {
             BlockState bs = r.resolveBlockState(blockId);
             if (bs != null) return bs;
         }
-        if (missingBlockStates.add(blockId)) System.err.println("[ResolverChain] No blockstate found for: " + blockId);
+        if (missingBlockStates.add(blockId)) {
+            System.err.println("[ResolverChain] No blockstate found for: " + blockId);
+        }
         return null;
     }
 
-    public BlockModel resolveModel(String modelPath) { return resolveModel(modelPath, new HashSet<>()); }
+    public BlockModel resolveModel(String modelPath) {
+        return resolveModel(modelPath, new HashSet<>());
+    }
 
     private BlockModel resolveModel(String modelPath, Set<String> visited) {
         String normalized = normalizeModelPath(modelPath);
@@ -42,6 +52,19 @@ public class ResolverChain {
             BlockModel model = r.resolveModel(normalized);
             if (model == null) continue;
 
+            // Resolver implementations historically returned an empty model
+            // when an asset was absent. Treat that as a miss so a higher-priority
+            // resource pack can override a child while a lower-priority vanilla
+            // or mod resolver supplies the missing model. Virtual Minecraft
+            // parents are intentionally allowed to be empty.
+            if (model.isEmpty() && (model.parentId == null || model.parentId.isBlank())
+                    && !VIRTUAL_PARENTS.contains(normalized)) {
+                continue;
+            }
+
+            // Model inheritance can cross resolver boundaries. A resource-pack
+            // model may inherit vanilla/mod geometry; resolve the parent through
+            // the whole chain rather than only the current resolver.
             if (model.parentId != null && !model.parentId.isEmpty()) {
                 BlockModel parent = resolveModel(model.parentId, visited);
                 if (parent != null) {
@@ -52,7 +75,9 @@ public class ResolverChain {
             return model;
         }
 
-        if (missingModels.add(normalized)) System.err.println("[ResolverChain] No model found for: " + normalized);
+        if (missingModels.add(normalized)) {
+            System.err.println("[ResolverChain] No model found for: " + normalized);
+        }
         return null;
     }
 
@@ -65,7 +90,9 @@ public class ResolverChain {
             BufferedImage img = r.resolveTexture(normalized);
             if (img != null) return img;
         }
-        if (missingTextures.add(texturePath)) System.err.println("[ResolverChain] No texture found for: " + texturePath);
+        if (missingTextures.add(texturePath)) {
+            System.err.println("[ResolverChain] No texture found for: " + texturePath);
+        }
         return null;
     }
 
