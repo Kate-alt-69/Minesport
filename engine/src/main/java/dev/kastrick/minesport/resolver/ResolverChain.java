@@ -4,6 +4,7 @@ import dev.kastrick.minesport.model.*;
 
 import java.awt.image.BufferedImage;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Chains multiple asset resolvers together in priority order. */
 public class ResolverChain {
@@ -24,9 +25,7 @@ public class ResolverChain {
         return null;
     }
 
-    public BlockModel resolveModel(String modelPath) {
-        return resolveModel(modelPath, new HashSet<>());
-    }
+    public BlockModel resolveModel(String modelPath) { return resolveModel(modelPath, new HashSet<>()); }
 
     private BlockModel resolveModel(String modelPath, Set<String> visited) {
         String normalized = normalizeModelPath(modelPath);
@@ -43,10 +42,6 @@ public class ResolverChain {
             BlockModel model = r.resolveModel(normalized);
             if (model == null) continue;
 
-            // Models can inherit from a parent supplied by a lower-priority
-            // resolver (e.g. a resource pack child model inheriting vanilla
-            // block/cube_all). Resolve the parent through the WHOLE chain,
-            // not just the current resolver.
             if (model.parentId != null && !model.parentId.isEmpty()) {
                 BlockModel parent = resolveModel(model.parentId, visited);
                 if (parent != null) {
