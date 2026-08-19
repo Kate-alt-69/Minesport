@@ -6,11 +6,10 @@ import java.util.zip.GZIPInputStream;
 
 /**
  * Reads Minecraft's Named Binary Tag (NBT) format.
- * Supports both raw and GZIP-compressed NBT (level.dat is always GZIP).
+ * Supports both raw and GZIP-compressed NBT.
  */
 public class NbtReader {
 
-    // ── Tag type constants ────────────────────────────────────────────────────
     public static final byte TAG_END        = 0;
     public static final byte TAG_BYTE       = 1;
     public static final byte TAG_SHORT      = 2;
@@ -25,9 +24,11 @@ public class NbtReader {
     public static final byte TAG_INT_ARRAY  = 11;
     public static final byte TAG_LONG_ARRAY = 12;
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    // Corrupt region files should fail the individual chunk, not take down the
+    // whole process with an attacker/corruption-induced huge allocation.
+    private static final int MAX_LIST_ENTRIES = 1_000_000;
+    private static final int MAX_ARRAY_ENTRIES = 16_000_000;
 
-    /** Read a GZIP-compressed NBT file (level.dat). */
     public static NbtCompound readGzip(File file) throws IOException {
         try (var gzip = new GZIPInputStream(new FileInputStream(file));
              var data = new DataInputStream(new BufferedInputStream(gzip))) {
@@ -35,21 +36,18 @@ public class NbtReader {
         }
     }
 
-    /** Read raw (uncompressed) NBT from a byte array (chunk data from .mca). */
     public static NbtCompound readBytes(byte[] bytes) throws IOException {
         try (var data = new DataInputStream(new ByteArrayInputStream(bytes))) {
             return readRoot(data);
         }
     }
 
-    // ── Internal ──────────────────────────────────────────────────────────────
-
     private static NbtCompound readRoot(DataInputStream in) throws IOException {
         byte type = in.readByte();
         if (type != TAG_COMPOUND) {
             throw new IOException("Expected root TAG_Compound, got: " + type);
         }
-        readString(in); // root name (usually empty or "")
+        readString(in);
         return readCompound(in);
     }
 
@@ -85,7 +83,10 @@ public class NbtReader {
     private static List<Object> readList(DataInputStream in) throws IOException {
         byte elementType = in.readByte();
         int size = in.readInt();
-        var list = new ArrayList<>(size);
+        if (size < 0 || size > MAX_LIST_ENTRIES) {
+            throw new IOException("Invalid NBT list length: " + size);
+        }
+        var list = new ArrayList<Object>(size);
         for (int i = 0; i < size; i++) {
             list.add(readPayload(in, elementType));
         }
@@ -101,6 +102,7 @@ public class NbtReader {
 
     private static byte[] readByteArray(DataInputStream in) throws IOException {
         int len = in.readInt();
+        if (len < 0 || len > MAX_ARRAY_ENTRIES) throw new IOException("Invalid NBT byte-array length: " + len);
         byte[] arr = new byte[len];
         in.readFully(arr);
         return arr;
@@ -108,6 +110,7 @@ public class NbtReader {
 
     private static int[] readIntArray(DataInputStream in) throws IOException {
         int len = in.readInt();
+        if (len < 0 || len > MAX_ARRAY_ENTRIES) throw new IOException("Invalid NBT int-array length: " + len);
         int[] arr = new int[len];
         for (int i = 0; i < len; i++) arr[i] = in.readInt();
         return arr;
@@ -115,6 +118,7 @@ public class NbtReader {
 
     private static long[] readLongArray(DataInputStream in) throws IOException {
         int len = in.readInt();
+        if (len < 0 || len > MAX_ARRAY_ENTRIES) throw new IOException("Invalid NBT long-array length: " + len);
         long[] arr = new long[len];
         for (int i = 0; i < len; i++) arr[i] = in.readLong();
         return arr;
