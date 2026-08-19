@@ -2,6 +2,7 @@ package ui
 
 import (
     "fmt"
+    "os"
     "path/filepath"
     "strings"
 
@@ -16,8 +17,7 @@ import (
 )
 
 // RunModern is the production UI entrypoint. It reuses the stable Minesport
-// inspector/map UI, but replaces the legacy export window with the newer
-// minimal progress and completion flow.
+// inspector/map controls and adds the Blender translation controls around them.
 func RunModern(jarPath string) {
     a := app.NewWithID("kastrick.dev.minesport")
     w := a.NewWindow("Minesport — by Kastrick")
@@ -27,7 +27,7 @@ func RunModern(jarPath string) {
     ms := &MinesportApp{window: w, fyneApp: a}
     ms.settings = LoadSettings()
     ms.engine = ipc.NewEngine(jarPath)
-    w.SetContent(ms.buildUI())
+    w.SetContent(ms.buildModernUI())
 
     ms.exportBtn.OnTapped = ms.onExportModern
 
@@ -66,7 +66,20 @@ func RunModern(jarPath string) {
         ms.statusLabel.SetText("Ready")
     }
 
-    w.ShowAndRun()
+    w.Show()
+    maybePromptBlenderTranslator(ms)
+    a.Run()
+}
+
+func (ms *MinesportApp) buildModernUI() fyne.CanvasObject {
+    inspector := ms.buildInspector()
+    blender := buildBlenderInspectorCard(ms.window, ms.settings)
+    left := container.NewBorder(blender, nil, nil, nil, inspector)
+    main := ms.buildMainArea()
+    ms.updateMetaHUD(ms.selectionSizeText())
+    split := container.NewHSplit(left, main)
+    split.SetOffset(0.29)
+    return split
 }
 
 func (ms *MinesportApp) onExportModern() {
@@ -75,13 +88,74 @@ func (ms *MinesportApp) onExportModern() {
         return
     }
 
+    name := sanitizeExportName(ms.exportNameEntry.Text)
+    if name == "" {
+        name = sanitizeExportName(ms.worldName)
+        if name == "" {
+            name = "Minesport_Export"
+        }
+    }
+
+    extension := ".gltf"
+    if strings.Contains(ms.formatSelect.Selected, "OBJ") {
+        extension = ".obj"
+    }
+
+    if ms.outputPath == "" {
+        home, _ := os.UserHomeDir()
+        ms.outputPath = filepath.Join(home, "Minesport_Exports")
+        ms.outputLabel.SetText(ms.outputPath)
+    }
+    if err := os.MkdirAll(ms.outputPath, 0o755); err != nil {
+        dialog.ShowError(err, ms.window)
+        return
+    }
+
+    desired := filepath.Join(ms.outputPath, name+extension)
+    if !exportFilesExist(desired) {
+        ms.startModernExport(desired)
+        return
+    }
+
+    existing := existingExportFile(desired)
+    message := widget.NewLabel(fmt.Sprintf(
+        "%s already exists in %s.\n\nDo you want to replace it?",
+        filepath.Base(existing),
+        filepath.Dir(existing),
+    ))
+    message.Wrapping = fyne.TextWrapWord
+    ms.exportBtn.Disable()
+
+    d := dialog.NewCustomConfirm(
+        "File already exists",
+        "YES",
+        "NO",
+        container.NewPadded(message),
+        func(replace bool) {
+            if replace {
+                if err := removeExportFiles(desired); err != nil {
+                    dialog.ShowError(fmt.Errorf("could not replace export: %w", err), ms.window)
+                    ms.exportBtn.Enable()
+                    return
+                }
+                ms.startModernExport(desired)
+                return
+            }
+            ms.startModernExport(nextExportPath(desired))
+        },
+        ms.window,
+    )
+    d.Show()
+}
+
+func (ms *MinesportApp) startModernExport(outputPath string) {
     ms.exportBtn.Disable()
     ms.progressBar.SetValue(0)
     ms.statusLabel.SetText("Preparing export…")
     ms.showModernExportProgress()
 
     format := "gltf"
-    if strings.Contains(ms.formatSelect.Selected, "OBJ") {
+    if strings.HasSuffix(strings.ToLower(outputPath), ".obj") {
         format = "obj"
     }
 
@@ -95,7 +169,7 @@ func (ms *MinesportApp) onExportModern() {
 
     p := ipc.ExportParams{
         WorldPath:  ms.worldPath,
-        OutputPath: filepath.Join(ms.outputPath, ms.worldName+"_export."+format),
+        OutputPath: outputPath,
         Format:     format,
         ExportMode: mode,
     }
@@ -132,6 +206,10 @@ func (ms *MinesportApp) onExportModern() {
     }
     if len(ms.settings.DataPackPaths) > 0 {
         options["dataPacks"] = PathListString(ms.settings.DataPackPaths)
+    }
+    if ms.settings.BlenderExportEnabled {
+        options["blenderExport"] = "true"
+        options["blenderAnimationMode"] = blenderAnimationMode(ms.window)
     }
     p.Options = options
 
@@ -185,8 +263,16 @@ func (ms *MinesportApp) updateModernExportProgress(pct int, msg string) {
     verts := estimatedBlocks * 24
     data := estimatedBlocks * 80
 
-    ms.exportDetail.SetText(fmt.Sprintf("Blocks %s / ~%s", formatCount(estimatedBlocks), formatCount(blocks)))
-    ms.exportStats.SetText(fmt.Sprintf("Estimated vertices  ~%s\nEstimated geometry  ~%s KB", formatCount(verts), formatCount(data/1024)))
+    ms.exportDetail.SetText(fmt.Sprintf(
+        "Blocks %s / ~%s",
+        formatCount(estimatedBlocks),
+        formatCount(blocks),
+    ))
+    ms.exportStats.SetText(fmt.Sprintf(
+        "Estimated vertices  ~%s\nEstimated geometry  ~%s KB",
+        formatCount(verts),
+        formatCount(data/1024),
+    ))
 }
 
 func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg string) {
@@ -206,7 +292,12 @@ func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg strin
     ms.progressBar.SetValue(1)
     ms.statusLabel.SetText("Done")
     ms.stateIcon.SetResource(theme.ConfirmIcon())
-    ms.updateMetaHUD(fmt.Sprintf("%s blocks · %s faces · ≤%s verts", formatCount(resp.BlockCount), formatCount(resp.QuadCount), formatCount(resp.VertexCount)))
+    ms.updateMetaHUD(fmt.Sprintf(
+        "%s blocks · %s faces · ≤%s verts",
+        formatCount(resp.BlockCount),
+        formatCount(resp.QuadCount),
+        formatCount(resp.VertexCount),
+    ))
 
     if ms.exportWindow != nil {
         ms.exportWindow.Close()
@@ -217,11 +308,19 @@ func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg strin
     ms.window.RequestFocus()
     ms.exportBtn.Enable()
 
-    format := "gltf"
-    if strings.Contains(ms.formatSelect.Selected, "OBJ") {
-        format = "obj"
+    exportedPath := resp.Output
+    if exportedPath == "" {
+        name := sanitizeExportName(ms.exportNameEntry.Text)
+        if name == "" {
+            name = "Minesport_Export"
+        }
+        ext := ".gltf"
+        if strings.Contains(ms.formatSelect.Selected, "OBJ") {
+            ext = ".obj"
+        }
+        exportedPath = filepath.Join(ms.outputPath, name+ext)
     }
-    exportedPath := filepath.Join(ms.outputPath, ms.worldName+"_export."+format)
+
     ms.showModernExportComplete(exportedPath, resp)
 }
 
@@ -247,20 +346,25 @@ func (ms *MinesportApp) showModernExportComplete(exportedPath string, resp ipc.R
                 _ = openPath(exportedPath)
             }),
         )
-        widget.ShowPopUpMenuAtRelativePosition(menu, ms.window.Canvas(), fyne.NewPos(0, openFolder.Size().Height), openFolder)
+        widget.ShowPopUpMenuAtRelativePosition(
+            menu,
+            ms.window.Canvas(),
+            fyne.NewPos(0, openFolder.Size().Height),
+            openFolder,
+        )
     }
 
     buttons := []fyne.CanvasObject{openFolder}
     addAppButton := func(label, appName string) {
-        b := widget.NewButton(label, func() {
+        button := widget.NewButton(label, func() {
             if err := openWithApp(appName, exportedPath); err != nil {
                 dialog.ShowError(err, ms.window)
             }
         })
         if !appAvailable(appName) {
-            b.Disable()
+            button.Disable()
         }
-        buttons = append(buttons, b)
+        buttons = append(buttons, button)
     }
 
     addAppButton("Open with Blender", "Blender")

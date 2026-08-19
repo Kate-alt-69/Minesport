@@ -12,239 +12,637 @@ import java.util.*;
 /** IPC mode for the Go wrapper. */
 public class IpcMode {
     private static final Gson GSON = new Gson();
-    private static final PrintWriter OUT = new PrintWriter(new BufferedWriter(new OutputStreamWriter(System.out)), true);
+    private static final PrintWriter OUT = new PrintWriter(
+        new BufferedWriter(new OutputStreamWriter(System.out)),
+        true
+    );
     private static final int MAX_CUSTOM_SELECTION = 5_000_000;
 
     public static void run() {
-        send("info", j -> j.addProperty("version", "0.1.0"));
+        send("info", json -> json.addProperty("version", "0.1.0"));
         log("Minesport engine ready (IPC mode)");
+
         try (var reader = new BufferedReader(new InputStreamReader(System.in))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
                 if (line.isEmpty()) continue;
+
                 try {
-                    JsonObject req = GSON.fromJson(line, JsonObject.class);
-                    String command = req.has("command") ? req.get("command").getAsString() : "";
+                    JsonObject request = GSON.fromJson(line, JsonObject.class);
+                    String command = request.has("command")
+                        ? request.get("command").getAsString()
+                        : "";
+
                     switch (command) {
-                        case "ping" -> send("pong", j -> j.addProperty("message", "pong"));
-                        case "export" -> handleExport(req);
-                        case "heightmap" -> handleHeightmap(req);
-                        case "listBlocks" -> handleListBlocks(req);
-                        case "quit" -> { log("Engine shutting down."); return; }
+                        case "ping" -> send("pong", json -> json.addProperty("message", "pong"));
+                        case "export" -> handleExport(request);
+                        case "heightmap" -> handleHeightmap(request);
+                        case "listBlocks" -> handleListBlocks(request);
+                        case "quit" -> {
+                            log("Engine shutting down.");
+                            return;
+                        }
                         default -> error("Unknown command: " + command);
                     }
-                } catch (JsonSyntaxException e) {
-                    error("Invalid JSON: " + e.getMessage());
-                } catch (Exception e) {
-                    error("Command failed: " + e.getMessage());
+                } catch (JsonSyntaxException exception) {
+                    error("Invalid JSON: " + exception.getMessage());
+                } catch (Exception exception) {
+                    error("Command failed: " + exception.getMessage());
                 }
             }
-        } catch (IOException e) {
-            error("IPC stdin error: " + e.getMessage());
+        } catch (IOException exception) {
+            error("IPC stdin error: " + exception.getMessage());
         }
     }
 
-    private static void handleExport(JsonObject req) {
-        String worldPath=getString(req,"worldPath","");
-        int minX=getInt(req,"minX",-256), minY=getInt(req,"minY",-64), minZ=getInt(req,"minZ",-256);
-        int maxX=getInt(req,"maxX",256), maxY=getInt(req,"maxY",320), maxZ=getInt(req,"maxZ",256);
-        String format=getString(req,"format","gltf").toLowerCase();
-        String exportMode=getString(req,"exportMode","grouped");
-        String outputPath=getString(req,"outputPath","");
-        if(worldPath.isEmpty()){error("worldPath is required");return;}
+    private static void handleExport(JsonObject request) {
+        String worldPath = getString(request, "worldPath", "");
+        int minX = getInt(request, "minX", -256);
+        int minY = getInt(request, "minY", -64);
+        int minZ = getInt(request, "minZ", -256);
+        int maxX = getInt(request, "maxX", 256);
+        int maxY = getInt(request, "maxY", 320);
+        int maxZ = getInt(request, "maxZ", 256);
+        String format = getString(request, "format", "gltf").toLowerCase();
+        String exportMode = getString(request, "exportMode", "grouped");
+        String outputPath = getString(request, "outputPath", "");
 
-        File worldFolder=new File(worldPath);
-        if(!worldFolder.exists()||!new File(worldFolder,"level.dat").exists()){error("World not found or invalid: "+worldPath);return;}
-        if(outputPath.isEmpty()){
-            String home=System.getProperty("user.home");
-            String ext=format.equals("gltf")?".gltf":".obj";
-            outputPath=home+File.separator+"Minesport_Exports"+File.separator+worldFolder.getName()+"_export"+ext;
+        if (worldPath.isEmpty()) {
+            error("worldPath is required");
+            return;
         }
-        File outFile=new File(outputPath);
-        File parent=outFile.getParentFile(); if(parent!=null) parent.mkdirs();
 
-        File tempDir=null;
+        File worldFolder = new File(worldPath);
+        if (!worldFolder.exists() || !new File(worldFolder, "level.dat").exists()) {
+            error("World not found or invalid: " + worldPath);
+            return;
+        }
+
+        if (outputPath.isEmpty()) {
+            String home = System.getProperty("user.home");
+            String extension = format.equals("gltf") ? ".gltf" : ".obj";
+            outputPath = home
+                + File.separator + "Minesport_Exports"
+                + File.separator + worldFolder.getName() + "_export" + extension;
+        }
+
+        File outFile = new File(outputPath);
+        File parent = outFile.getParentFile();
+        if (parent != null) parent.mkdirs();
+
+        File tempDir = null;
         try {
             log("Creating temp copy...");
-            tempDir=WorldCopier.copyToTemp(worldFolder,msg->log(msg));
-            progress(10,"World copy ready");
+            tempDir = WorldCopier.copyToTemp(worldFolder, IpcMode::log);
+            progress(10, "World copy ready");
 
             log("Scanning region files...");
-            File regionDir=new File(tempDir,"region");
-            if(!regionDir.exists()){error("No region folder found in world");return;}
-            File[] mcaFiles=regionDir.listFiles((d,n)->n.endsWith(".mca"));
-            if(mcaFiles==null||mcaFiles.length==0){error("No .mca region files found");return;}
+            File regionDir = new File(tempDir, "region");
+            if (!regionDir.exists()) {
+                error("No region folder found in world");
+                return;
+            }
 
-            log("Found "+mcaFiles.length+" region file(s)");
-            var allBlocks=new ArrayList<BlockData>();
-            for(int fi=0;fi<mcaFiles.length;fi++){
-                File mca=mcaFiles[fi];
-                log("Reading: "+mca.getName());
-                List<BlockData> regionBlocks=RegionReader.readRegion(mca,minX,minY,minZ,maxX,maxY,maxZ,null);
+            File[] mcaFiles = regionDir.listFiles((directory, name) -> name.endsWith(".mca"));
+            if (mcaFiles == null || mcaFiles.length == 0) {
+                error("No .mca region files found");
+                return;
+            }
+
+            log("Found " + mcaFiles.length + " region file(s)");
+            var allBlocks = new ArrayList<BlockData>();
+            for (int fileIndex = 0; fileIndex < mcaFiles.length; fileIndex++) {
+                File mca = mcaFiles[fileIndex];
+                log("Reading: " + mca.getName());
+                List<BlockData> regionBlocks = RegionReader.readRegion(
+                    mca,
+                    minX, minY, minZ,
+                    maxX, maxY, maxZ,
+                    null
+                );
                 allBlocks.addAll(regionBlocks);
-                int pct=10+(int)((fi+1.0)/mcaFiles.length*30);
-                progress(pct,"Read "+mca.getName());
+                int percent = 10 + (int)((fileIndex + 1.0) / mcaFiles.length * 30);
+                progress(percent, "Read " + mca.getName());
             }
-            log("Total blocks: "+allBlocks.size());
+            log("Total blocks: " + allBlocks.size());
 
-            Integer cx=getOptionalInt(req,"centerX"), cy=getOptionalInt(req,"centerY"), cz=getOptionalInt(req,"centerZ");
-            Integer rx=getOptionalInt(req,"radiusX"), ry=getOptionalInt(req,"radiusY"), rz=getOptionalInt(req,"radiusZ");
-            if(cx!=null&&cy!=null&&cz!=null&&rx!=null&&ry!=null&&rz!=null){
-                int before=allBlocks.size();
-                allBlocks.removeIf(b->!insideEllipsoid(b,cx,cy,cz,Math.max(rx,1),Math.max(ry,1),Math.max(rz,1)));
-                log("Bubble selection: "+allBlocks.size()+" / "+before+" blocks kept (center "+cx+","+cy+","+cz+" · radius "+rx+","+ry+","+rz+")");
+            Integer centerX = getOptionalInt(request, "centerX");
+            Integer centerY = getOptionalInt(request, "centerY");
+            Integer centerZ = getOptionalInt(request, "centerZ");
+            Integer radiusX = getOptionalInt(request, "radiusX");
+            Integer radiusY = getOptionalInt(request, "radiusY");
+            Integer radiusZ = getOptionalInt(request, "radiusZ");
+
+            if (
+                centerX != null && centerY != null && centerZ != null &&
+                radiusX != null && radiusY != null && radiusZ != null
+            ) {
+                int before = allBlocks.size();
+                allBlocks.removeIf(block -> !insideEllipsoid(
+                    block,
+                    centerX, centerY, centerZ,
+                    Math.max(radiusX, 1),
+                    Math.max(radiusY, 1),
+                    Math.max(radiusZ, 1)
+                ));
+                log(
+                    "Bubble selection: " + allBlocks.size() + " / " + before
+                    + " blocks kept (center " + centerX + "," + centerY + "," + centerZ
+                    + " · radius " + radiusX + "," + radiusY + "," + radiusZ + ")"
+                );
             }
 
-            String customSelectionFile=req.has("options")&&req.getAsJsonObject("options").has("customSelectionFile")
-                ?req.getAsJsonObject("options").get("customSelectionFile").getAsString():null;
-            if(customSelectionFile!=null&&!customSelectionFile.isBlank()){
-                Set<Long> exact=loadCustomSelection(new File(customSelectionFile));
-                int before=allBlocks.size();
-                allBlocks.removeIf(b->!exact.contains(SpatialKey.of(b.x,b.y,b.z)));
-                log("Custom selection: "+allBlocks.size()+" / "+before+" blocks kept ("+exact.size()+" coordinate(s) requested)");
+            String customSelectionFile = getStringOption(request, "customSelectionFile", null);
+            if (customSelectionFile != null && !customSelectionFile.isBlank()) {
+                Set<Long> exact = loadCustomSelection(new File(customSelectionFile));
+                int before = allBlocks.size();
+                allBlocks.removeIf(block -> !exact.contains(SpatialKey.of(block.x, block.y, block.z)));
+                log(
+                    "Custom selection: " + allBlocks.size() + " / " + before
+                    + " blocks kept (" + exact.size() + " coordinate(s) requested)"
+                );
             }
-            progress(40,"Region scan complete");
+            progress(40, "Region scan complete");
 
             log("Resolving multipart connections...");
             MultipartResolver.resolve(allBlocks);
-            progress(45,"Multipart resolved");
+            progress(45, "Multipart resolved");
 
             log("Setting up resolvers...");
-            var chain=new ResolverChain();
-            List<File> resourcePackPaths=getPathList(req,"resourcePacks");
-            if(!resourcePackPaths.isEmpty()){
-                ResourcePackResolver rp=ResourcePackResolver.load(resourcePackPaths,msg->log(msg));
-                if(!rp.isEmpty()){chain.addResolver(rp);log("Resource pack override active ("+resourcePackPaths.size()+" pack(s))");}
+            var chain = new ResolverChain();
+
+            List<File> resourcePackPaths = getPathList(request, "resourcePacks");
+            if (!resourcePackPaths.isEmpty()) {
+                ResourcePackResolver resourcePacks = ResourcePackResolver.load(resourcePackPaths, IpcMode::log);
+                if (!resourcePacks.isEmpty()) {
+                    chain.addResolver(resourcePacks);
+                    log("Resource pack override active (" + resourcePackPaths.size() + " pack(s))");
+                }
             }
 
-            String mcVersion=readMcVersion(tempDir);
-            log("MC version: "+mcVersion);
-            File mcJar=VanillaResolver.findMinecraftJar(mcVersion);
-            if(mcJar!=null&&mcJar.exists()){log("Vanilla resolver: "+mcJar.getName());chain.addResolver(new VanillaResolver(mcJar));}
-            else log("[WARN] minecraft.jar not found — vanilla blocks use fallback geometry");
-
-            ModsLocator.LocatedMods located=ModsLocator.locate(worldFolder);
-            File modsFolder=located!=null?located.modsFolder():null;
-            if(modsFolder==null){for(File c:ModsLocator.candidatePaths(mcVersion)){if(c.exists()){modsFolder=c;break;}}}
-            if(modsFolder!=null){
-                FabricResolver fab=FabricResolver.load(modsFolder,msg->log(msg));
-                if(!fab.getNamespaces().isEmpty()){chain.addResolver(fab);log("Fabric mod namespaces: "+fab.getNamespaces());chain.addResolver(new PolymerResolver(fab));}
-                QuiltResolver quilt=QuiltResolver.load(modsFolder,msg->log(msg));
-                if(!quilt.getNamespaces().isEmpty()){chain.addResolver(quilt);log("Quilt mod namespaces: "+quilt.getNamespaces());}
-                ForgeResolver forge=ForgeResolver.load(modsFolder,msg->log(msg));
-                if(!forge.getNamespaces().isEmpty()){chain.addResolver(forge);log("Forge/NeoForge mod namespaces: "+forge.getNamespaces());}
+            String mcVersion = readMcVersion(tempDir);
+            log("MC version: " + mcVersion);
+            File mcJar = VanillaResolver.findMinecraftJar(mcVersion);
+            if (mcJar != null && mcJar.exists()) {
+                log("Vanilla resolver: " + mcJar.getName());
+                chain.addResolver(new VanillaResolver(mcJar));
+            } else {
+                log("[WARN] minecraft.jar not found — vanilla blocks use fallback geometry");
             }
 
-            List<File> dataPackPaths=getPathList(req,"dataPacks");
-            if(dataPackPaths.isEmpty()) dataPackPaths=dev.kastrick.minesport.datapack.DataPackBlockTagReader.discoverWorldDataPacks(tempDir);
-            if(!dataPackPaths.isEmpty()){
-                var tagReader=dev.kastrick.minesport.datapack.DataPackBlockTagReader.load(dataPackPaths,msg->log(msg));
-                if(!tagReader.isEmpty())log("Data pack block tags found: "+tagReader.getTagIds());
+            ModsLocator.LocatedMods located = ModsLocator.locate(worldFolder);
+            File modsFolder = located != null ? located.modsFolder() : null;
+            if (modsFolder == null) {
+                for (File candidate : ModsLocator.candidatePaths(mcVersion)) {
+                    if (candidate.exists()) {
+                        modsFolder = candidate;
+                        break;
+                    }
+                }
             }
-            progress(50,"Resolvers ready");
 
-            boolean optimize=getBoolOption(req,"optimize",false);
-            boolean faceCulling=getBoolOption(req,"faceCulling",false);
-            boolean hiddenBlockCulling=getBoolOption(req,"hiddenBlockCulling",false);
-            var geoBuilder=new GeometryBuilder(chain);
-            if(faceCulling){log("Face culling enabled");geoBuilder.enableFaceCulling(allBlocks);}
-            if(hiddenBlockCulling){log("Hidden block culling enabled (experimental)");geoBuilder.enableHiddenBlockCulling(allBlocks);}
+            if (modsFolder != null) {
+                FabricResolver fabric = FabricResolver.load(modsFolder, IpcMode::log);
+                if (!fabric.getNamespaces().isEmpty()) {
+                    chain.addResolver(fabric);
+                    log("Fabric mod namespaces: " + fabric.getNamespaces());
+                    chain.addResolver(new PolymerResolver(fabric));
+                }
 
-            ObjExporter.ExportMode mode=switch(exportMode){case "merged"->ObjExporter.ExportMode.ALL_MERGED;case "individual"->ObjExporter.ExportMode.INDIVIDUAL;default->ObjExporter.ExportMode.GROUPED_BY_TYPE;};
-            log("Exporting as "+format.toUpperCase()+"...");
+                QuiltResolver quilt = QuiltResolver.load(modsFolder, IpcMode::log);
+                if (!quilt.getNamespaces().isEmpty()) {
+                    chain.addResolver(quilt);
+                    log("Quilt mod namespaces: " + quilt.getNamespaces());
+                }
+
+                ForgeResolver forge = ForgeResolver.load(modsFolder, IpcMode::log);
+                if (!forge.getNamespaces().isEmpty()) {
+                    chain.addResolver(forge);
+                    log("Forge/NeoForge mod namespaces: " + forge.getNamespaces());
+                }
+            }
+
+            List<File> dataPackPaths = getPathList(request, "dataPacks");
+            if (dataPackPaths.isEmpty()) {
+                dataPackPaths = dev.kastrick.minesport.datapack.DataPackBlockTagReader
+                    .discoverWorldDataPacks(tempDir);
+            }
+            if (!dataPackPaths.isEmpty()) {
+                var tagReader = dev.kastrick.minesport.datapack.DataPackBlockTagReader.load(
+                    dataPackPaths,
+                    IpcMode::log
+                );
+                if (!tagReader.isEmpty()) {
+                    log("Data pack block tags found: " + tagReader.getTagIds());
+                }
+            }
+            progress(50, "Resolvers ready");
+
+            boolean optimize = getBoolOption(request, "optimize", false);
+            boolean faceCulling = getBoolOption(request, "faceCulling", false);
+            boolean hiddenBlockCulling = getBoolOption(request, "hiddenBlockCulling", false);
+            boolean blenderExport = getBoolOption(request, "blenderExport", false);
+            String blenderAnimationMode = getStringOption(
+                request,
+                "blenderAnimationMode",
+                "animate_export"
+            );
+
+            var geometryBuilder = new GeometryBuilder(chain);
+            if (faceCulling) {
+                log("Face culling enabled");
+                geometryBuilder.enableFaceCulling(allBlocks);
+            }
+            if (hiddenBlockCulling) {
+                log("Hidden block culling enabled (experimental)");
+                geometryBuilder.enableHiddenBlockCulling(allBlocks);
+            }
+
+            ObjExporter.ExportMode mode = switch (exportMode) {
+                case "merged" -> ObjExporter.ExportMode.ALL_MERGED;
+                case "individual" -> ObjExporter.ExportMode.INDIVIDUAL;
+                default -> ObjExporter.ExportMode.GROUPED_BY_TYPE;
+            };
+
+            log("Exporting as " + format.toUpperCase() + "...");
             ObjExporter.ExportStats stats;
-            if(format.equals("gltf")){
-                stats=new GltfExporter(chain).export(allBlocks,geoBuilder,outFile,mode,optimize,(doneCount,total)->{int pct=50+(int)((doneCount/(double)total)*45);progress(pct,"Building geometry "+doneCount+"/"+total);});
+            if (format.equals("gltf")) {
+                stats = new GltfExporter(chain).export(
+                    allBlocks,
+                    geometryBuilder,
+                    outFile,
+                    mode,
+                    optimize,
+                    (doneCount, total) -> {
+                        int percent = 50 + (int)((doneCount / (double)total) * 45);
+                        progress(percent, "Building geometry " + doneCount + "/" + total);
+                    }
+                );
                 GltfPostProcessor.fixSamplers(outFile);
                 log("glTF sampler normalization complete");
-            }else{
-                stats=ObjExporter.exportWithGeometry(allBlocks,geoBuilder,outFile,mode,optimize,(doneCount,total)->{int pct=50+(int)((doneCount/(double)total)*45);progress(pct,"Building geometry "+doneCount+"/"+total);});
+            } else {
+                stats = ObjExporter.exportWithGeometry(
+                    allBlocks,
+                    geometryBuilder,
+                    outFile,
+                    mode,
+                    optimize,
+                    (doneCount, total) -> {
+                        int percent = 50 + (int)((doneCount / (double)total) * 45);
+                        progress(percent, "Building geometry " + doneCount + "/" + total);
+                    }
+                );
             }
-            progress(100,"Done");
-            log("Export stats: "+stats.blockCount()+" blocks, "+stats.quadCount()+" faces, ≤"+stats.vertexCount()+" vertices");
-            done(outFile.getAbsolutePath(),stats);
-        } catch(Exception e){
-            StringWriter sw=new StringWriter();e.printStackTrace(new PrintWriter(sw));error("Export failed: "+e.getMessage()+"\n"+sw);
-        } finally { if(tempDir!=null) WorldCopier.cleanupTemp(tempDir); }
+
+            if (blenderExport) {
+                File metadata = BlenderMetadataExporter.write(
+                    outFile,
+                    allBlocks,
+                    mode,
+                    format,
+                    blenderAnimationMode
+                );
+                log("Blender translation metadata: " + metadata.getName());
+            }
+
+            progress(100, "Done");
+            log(
+                "Export stats: " + stats.blockCount() + " blocks, "
+                + stats.quadCount() + " faces, ≤" + stats.vertexCount() + " vertices"
+            );
+            done(outFile.getAbsolutePath(), stats);
+        } catch (Exception exception) {
+            StringWriter stack = new StringWriter();
+            exception.printStackTrace(new PrintWriter(stack));
+            error("Export failed: " + exception.getMessage() + "\n" + stack);
+        } finally {
+            if (tempDir != null) WorldCopier.cleanupTemp(tempDir);
+        }
     }
 
-    private static String readMcVersion(File tempDir){
-        try{var levelDat=new File(tempDir,"level.dat");var root=dev.kastrick.minesport.nbt.NbtReader.readGzip(levelDat);if(root.has("Data")){try{return root.getCompound("Data").getCompound("Version").getString("Name","1.21.10");}catch(Exception ignored){}}}catch(Exception ignored){}
+    private static String readMcVersion(File tempDir) {
+        try {
+            var levelDat = new File(tempDir, "level.dat");
+            var root = dev.kastrick.minesport.nbt.NbtReader.readGzip(levelDat);
+            if (root.has("Data")) {
+                try {
+                    return root.getCompound("Data")
+                        .getCompound("Version")
+                        .getString("Name", "1.21.10");
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
         return "1.21.10";
     }
 
-    private static void send(String type,java.util.function.Consumer<JsonObject> builder){JsonObject obj=new JsonObject();obj.addProperty("type",type);builder.accept(obj);OUT.println(GSON.toJson(obj));}
-    private static void log(String msg){send("log",j->j.addProperty("message",msg));}
-    private static void progress(int pct,String msg){send("progress",j->{j.addProperty("percent",pct);j.addProperty("message",msg);});}
-    private static void done(String outputPath,ObjExporter.ExportStats stats){send("done",j->{j.addProperty("output",outputPath);if(stats!=null){j.addProperty("blockCount",stats.blockCount());j.addProperty("quadCount",stats.quadCount());j.addProperty("vertexCount",stats.vertexCount());}});}
-    private static void error(String msg){send("error",j->j.addProperty("message",msg));}
-    private static String getString(JsonObject obj,String key,String fallback){return obj.has(key)?obj.get(key).getAsString():fallback;}
+    private static void send(String type, java.util.function.Consumer<JsonObject> builder) {
+        JsonObject object = new JsonObject();
+        object.addProperty("type", type);
+        builder.accept(object);
+        OUT.println(GSON.toJson(object));
+    }
 
-    private static Set<Long> loadCustomSelection(File file)throws IOException{
-        Set<Long> result=new HashSet<>(); if(!file.exists())return result;
-        try(var reader=new com.google.gson.stream.JsonReader(new BufferedReader(new FileReader(file)))){
+    private static void log(String message) {
+        send("log", json -> json.addProperty("message", message));
+    }
+
+    private static void progress(int percent, String message) {
+        send("progress", json -> {
+            json.addProperty("percent", percent);
+            json.addProperty("message", message);
+        });
+    }
+
+    private static void done(String outputPath, ObjExporter.ExportStats stats) {
+        send("done", json -> {
+            json.addProperty("output", outputPath);
+            if (stats != null) {
+                json.addProperty("blockCount", stats.blockCount());
+                json.addProperty("quadCount", stats.quadCount());
+                json.addProperty("vertexCount", stats.vertexCount());
+            }
+        });
+    }
+
+    private static void error(String message) {
+        send("error", json -> json.addProperty("message", message));
+    }
+
+    private static String getString(JsonObject object, String key, String fallback) {
+        return object.has(key) ? object.get(key).getAsString() : fallback;
+    }
+
+    private static Set<Long> loadCustomSelection(File file) throws IOException {
+        Set<Long> result = new HashSet<>();
+        if (!file.exists()) return result;
+
+        try (var reader = new com.google.gson.stream.JsonReader(
+            new BufferedReader(new FileReader(file))
+        )) {
             reader.beginArray();
-            while(reader.hasNext()){
-                if(result.size()>=MAX_CUSTOM_SELECTION)throw new IOException("Custom selection exceeds "+MAX_CUSTOM_SELECTION+" blocks");
-                reader.beginObject(); int x=0,y=0,z=0; boolean hasX=false,hasY=false,hasZ=false;
-                while(reader.hasNext()){
-                    switch(reader.nextName()){
-                        case "x"-> {x=reader.nextInt();hasX=true;}
-                        case "y"-> {y=reader.nextInt();hasY=true;}
-                        case "z"-> {z=reader.nextInt();hasZ=true;}
-                        default->reader.skipValue();
+            while (reader.hasNext()) {
+                if (result.size() >= MAX_CUSTOM_SELECTION) {
+                    throw new IOException(
+                        "Custom selection exceeds " + MAX_CUSTOM_SELECTION + " blocks"
+                    );
+                }
+
+                reader.beginObject();
+                int x = 0, y = 0, z = 0;
+                boolean hasX = false, hasY = false, hasZ = false;
+                while (reader.hasNext()) {
+                    switch (reader.nextName()) {
+                        case "x" -> {
+                            x = reader.nextInt();
+                            hasX = true;
+                        }
+                        case "y" -> {
+                            y = reader.nextInt();
+                            hasY = true;
+                        }
+                        case "z" -> {
+                            z = reader.nextInt();
+                            hasZ = true;
+                        }
+                        default -> reader.skipValue();
                     }
                 }
                 reader.endObject();
-                if(!hasX||!hasY||!hasZ)throw new IOException("Custom selection entry is missing x, y, or z");
-                result.add(SpatialKey.of(x,y,z));
+
+                if (!hasX || !hasY || !hasZ) {
+                    throw new IOException("Custom selection entry is missing x, y, or z");
+                }
+                result.add(SpatialKey.of(x, y, z));
             }
             reader.endArray();
         }
         return result;
     }
 
-    private static int getInt(JsonObject obj,String key,int fallback){return obj.has(key)?obj.get(key).getAsInt():fallback;}
-    private static Integer getOptionalInt(JsonObject obj,String key){return(obj.has(key)&&!obj.get(key).isJsonNull())?obj.get(key).getAsInt():null;}
-    private static boolean insideEllipsoid(BlockData b,int cx,int cy,int cz,int rx,int ry,int rz){double dx=(b.x+0.5-cx)/(double)rx,dy=(b.y+0.5-cy)/(double)ry,dz=(b.z+0.5-cz)/(double)rz;return dx*dx+dy*dy+dz*dz<=1.0;}
-    private static boolean getBoolOption(JsonObject req,String key,boolean fallback){if(!req.has("options")||!req.get("options").isJsonObject())return fallback;JsonObject options=req.getAsJsonObject("options");if(!options.has(key))return fallback;return Boolean.parseBoolean(options.get(key).getAsString());}
-
-    private static List<File> getPathList(JsonObject req,String key){
-        List<File> result=new ArrayList<>();if(!req.has("options")||!req.get("options").isJsonObject())return result;JsonObject options=req.getAsJsonObject("options");if(!options.has(key))return result;String raw=options.get(key).getAsString();if(raw==null||raw.isBlank())return result;
-        for(String part:raw.split(";")){String trimmed=part.trim();if(trimmed.isEmpty())continue;File f=new File(trimmed);if(f.exists())result.add(f);else log("[WARN] Path not found, skipping: "+trimmed);}return result;
+    private static int getInt(JsonObject object, String key, int fallback) {
+        return object.has(key) ? object.get(key).getAsInt() : fallback;
     }
 
-    private static void handleHeightmap(JsonObject req){
-        String worldPath=getString(req,"worldPath","");int scale=getInt(req,"scale",4);if(worldPath.isEmpty()){error("worldPath required");return;}
-        File regionDir=new File(worldPath,"region");if(!regionDir.exists()){error("No region folder: "+worldPath);return;}
-        try{
-            log("Generating heightmap (scale="+scale+")...");String b64=dev.kastrick.minesport.region.HeightmapGenerator.generateBase64Png(regionDir,scale);if(b64==null){error("No region files found");return;}
-            File[] mcaFiles=regionDir.listFiles((d,n)->n.endsWith(".mca"));int minRX=Integer.MAX_VALUE,minRZ=Integer.MAX_VALUE,maxRX=Integer.MIN_VALUE,maxRZ=Integer.MIN_VALUE;
-            if(mcaFiles!=null)for(File f:mcaFiles){String[] p=f.getName().split("\\.");if(p.length<4)continue;try{int rx=Integer.parseInt(p[1]),rz=Integer.parseInt(p[2]);minRX=Math.min(minRX,rx);minRZ=Math.min(minRZ,rz);maxRX=Math.max(maxRX,rx);maxRZ=Math.max(maxRZ,rz);}catch(NumberFormatException ignored){}}
-            if(minRX==Integer.MAX_VALUE){error("No valid region coordinates found");return;}
-            final int minX=minRX*512,minZ=minRZ*512,maxX=(maxRX+1)*512,maxZ=(maxRZ+1)*512;final String imgData=b64;
-            send("heightmap",j->{j.addProperty("image",imgData);j.addProperty("minX",minX);j.addProperty("minZ",minZ);j.addProperty("maxX",maxX);j.addProperty("maxZ",maxZ);j.addProperty("scale",scale);});
-        }catch(Exception e){error("Heightmap failed: "+e.getMessage());}
+    private static Integer getOptionalInt(JsonObject object, String key) {
+        return object.has(key) && !object.get(key).isJsonNull()
+            ? object.get(key).getAsInt()
+            : null;
     }
 
-    private static void handleListBlocks(JsonObject req){
-        String worldPath=getString(req,"worldPath","");int minX=getInt(req,"minX",-256),minY=getInt(req,"minY",-64),minZ=getInt(req,"minZ",-256),maxX=getInt(req,"maxX",256),maxY=getInt(req,"maxY",320),maxZ=getInt(req,"maxZ",256);
-        if(worldPath.isEmpty()){error("worldPath required");return;}
-        File worldFolder=new File(worldPath);if(!worldFolder.exists()||!new File(worldFolder,"level.dat").exists()){error("World not found or invalid: "+worldPath);return;}
-        File tempWorldCopy=null;
-        try{
-            log("Preparing block list for 3D preview...");tempWorldCopy=WorldCopier.copyToTemp(worldFolder,msg->log(msg));File regionDir=new File(tempWorldCopy,"region");if(!regionDir.exists()){error("No region folder found in world");return;}
-            File[] mcaFiles=regionDir.listFiles((d,n)->n.endsWith(".mca"));if(mcaFiles==null||mcaFiles.length==0){error("No .mca region files found");return;}
-            var allBlocks=new ArrayList<BlockData>();for(File mca:mcaFiles)allBlocks.addAll(RegionReader.readRegion(mca,minX,minY,minZ,maxX,maxY,maxZ,null));
-            Integer cx=getOptionalInt(req,"centerX"),cy=getOptionalInt(req,"centerY"),cz=getOptionalInt(req,"centerZ"),rx=getOptionalInt(req,"radiusX"),ry=getOptionalInt(req,"radiusY"),rz=getOptionalInt(req,"radiusZ");
-            if(cx!=null&&cy!=null&&cz!=null&&rx!=null&&ry!=null&&rz!=null){int fcx=cx,fcy=cy,fcz=cz,frx=Math.max(rx,1),fry=Math.max(ry,1),frz=Math.max(rz,1);allBlocks.removeIf(b->!insideEllipsoid(b,fcx,fcy,fcz,frx,fry,frz));}
-            allBlocks.removeIf(BlockData::isAir);log("Block list: "+allBlocks.size()+" solid block(s)");
-            File outFile=File.createTempFile("minesport_blocks_",".json");outFile.deleteOnExit();
-            try(var writer=new com.google.gson.stream.JsonWriter(new BufferedWriter(new FileWriter(outFile)))){
-                writer.beginArray();for(BlockData b:allBlocks){writer.beginObject();writer.name("x").value(b.x);writer.name("y").value(b.y);writer.name("z").value(b.z);writer.name("id").value(b.blockId);int[] color=dev.kastrick.minesport.region.HeightmapGenerator.colorForBlock(b.blockId);writer.name("r").value(color[0]);writer.name("g").value(color[1]);writer.name("b").value(color[2]);writer.endObject();}writer.endArray();
+    private static boolean insideEllipsoid(
+        BlockData block,
+        int centerX, int centerY, int centerZ,
+        int radiusX, int radiusY, int radiusZ
+    ) {
+        double dx = (block.x + 0.5 - centerX) / (double)radiusX;
+        double dy = (block.y + 0.5 - centerY) / (double)radiusY;
+        double dz = (block.z + 0.5 - centerZ) / (double)radiusZ;
+        return dx * dx + dy * dy + dz * dz <= 1.0;
+    }
+
+    private static boolean getBoolOption(JsonObject request, String key, boolean fallback) {
+        String value = getStringOption(request, key, null);
+        return value == null ? fallback : Boolean.parseBoolean(value);
+    }
+
+    private static String getStringOption(JsonObject request, String key, String fallback) {
+        if (!request.has("options") || !request.get("options").isJsonObject()) {
+            return fallback;
+        }
+        JsonObject options = request.getAsJsonObject("options");
+        if (!options.has(key) || options.get(key).isJsonNull()) {
+            return fallback;
+        }
+        return options.get(key).getAsString();
+    }
+
+    private static List<File> getPathList(JsonObject request, String key) {
+        List<File> result = new ArrayList<>();
+        String raw = getStringOption(request, key, null);
+        if (raw == null || raw.isBlank()) return result;
+
+        for (String part : raw.split(";")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            File file = new File(trimmed);
+            if (file.exists()) {
+                result.add(file);
+            } else {
+                log("[WARN] Path not found, skipping: " + trimmed);
             }
-            send("blocksReady",j->{j.addProperty("file",outFile.getAbsolutePath());j.addProperty("count",allBlocks.size());});
-        }catch(Exception e){error("List blocks failed: "+e.getMessage());}finally{if(tempWorldCopy!=null)WorldCopier.cleanupTemp(tempWorldCopy);}
+        }
+        return result;
+    }
+
+    private static void handleHeightmap(JsonObject request) {
+        String worldPath = getString(request, "worldPath", "");
+        int scale = getInt(request, "scale", 4);
+        if (worldPath.isEmpty()) {
+            error("worldPath required");
+            return;
+        }
+
+        File regionDir = new File(worldPath, "region");
+        if (!regionDir.exists()) {
+            error("No region folder: " + worldPath);
+            return;
+        }
+
+        try {
+            log("Generating heightmap (scale=" + scale + ")...");
+            String base64 = dev.kastrick.minesport.region.HeightmapGenerator
+                .generateBase64Png(regionDir, scale);
+            if (base64 == null) {
+                error("No region files found");
+                return;
+            }
+
+            File[] mcaFiles = regionDir.listFiles((directory, name) -> name.endsWith(".mca"));
+            int minRegionX = Integer.MAX_VALUE;
+            int minRegionZ = Integer.MAX_VALUE;
+            int maxRegionX = Integer.MIN_VALUE;
+            int maxRegionZ = Integer.MIN_VALUE;
+
+            if (mcaFiles != null) {
+                for (File file : mcaFiles) {
+                    String[] parts = file.getName().split("\\.");
+                    if (parts.length < 4) continue;
+                    try {
+                        int regionX = Integer.parseInt(parts[1]);
+                        int regionZ = Integer.parseInt(parts[2]);
+                        minRegionX = Math.min(minRegionX, regionX);
+                        minRegionZ = Math.min(minRegionZ, regionZ);
+                        maxRegionX = Math.max(maxRegionX, regionX);
+                        maxRegionZ = Math.max(maxRegionZ, regionZ);
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+
+            if (minRegionX == Integer.MAX_VALUE) {
+                error("No valid region coordinates found");
+                return;
+            }
+
+            final int minX = minRegionX * 512;
+            final int minZ = minRegionZ * 512;
+            final int maxX = (maxRegionX + 1) * 512;
+            final int maxZ = (maxRegionZ + 1) * 512;
+            final String imageData = base64;
+
+            send("heightmap", json -> {
+                json.addProperty("image", imageData);
+                json.addProperty("minX", minX);
+                json.addProperty("minZ", minZ);
+                json.addProperty("maxX", maxX);
+                json.addProperty("maxZ", maxZ);
+                json.addProperty("scale", scale);
+            });
+        } catch (Exception exception) {
+            error("Heightmap failed: " + exception.getMessage());
+        }
+    }
+
+    private static void handleListBlocks(JsonObject request) {
+        String worldPath = getString(request, "worldPath", "");
+        int minX = getInt(request, "minX", -256);
+        int minY = getInt(request, "minY", -64);
+        int minZ = getInt(request, "minZ", -256);
+        int maxX = getInt(request, "maxX", 256);
+        int maxY = getInt(request, "maxY", 320);
+        int maxZ = getInt(request, "maxZ", 256);
+
+        if (worldPath.isEmpty()) {
+            error("worldPath required");
+            return;
+        }
+
+        File worldFolder = new File(worldPath);
+        if (!worldFolder.exists() || !new File(worldFolder, "level.dat").exists()) {
+            error("World not found or invalid: " + worldPath);
+            return;
+        }
+
+        File tempWorldCopy = null;
+        try {
+            log("Preparing block list for 3D preview...");
+            tempWorldCopy = WorldCopier.copyToTemp(worldFolder, IpcMode::log);
+            File regionDir = new File(tempWorldCopy, "region");
+            if (!regionDir.exists()) {
+                error("No region folder found in world");
+                return;
+            }
+
+            File[] mcaFiles = regionDir.listFiles((directory, name) -> name.endsWith(".mca"));
+            if (mcaFiles == null || mcaFiles.length == 0) {
+                error("No .mca region files found");
+                return;
+            }
+
+            var allBlocks = new ArrayList<BlockData>();
+            for (File mca : mcaFiles) {
+                allBlocks.addAll(RegionReader.readRegion(
+                    mca,
+                    minX, minY, minZ,
+                    maxX, maxY, maxZ,
+                    null
+                ));
+            }
+
+            Integer centerX = getOptionalInt(request, "centerX");
+            Integer centerY = getOptionalInt(request, "centerY");
+            Integer centerZ = getOptionalInt(request, "centerZ");
+            Integer radiusX = getOptionalInt(request, "radiusX");
+            Integer radiusY = getOptionalInt(request, "radiusY");
+            Integer radiusZ = getOptionalInt(request, "radiusZ");
+
+            if (
+                centerX != null && centerY != null && centerZ != null &&
+                radiusX != null && radiusY != null && radiusZ != null
+            ) {
+                int cx = centerX;
+                int cy = centerY;
+                int cz = centerZ;
+                int rx = Math.max(radiusX, 1);
+                int ry = Math.max(radiusY, 1);
+                int rz = Math.max(radiusZ, 1);
+                allBlocks.removeIf(block -> !insideEllipsoid(block, cx, cy, cz, rx, ry, rz));
+            }
+
+            allBlocks.removeIf(BlockData::isAir);
+            log("Block list: " + allBlocks.size() + " solid block(s)");
+
+            File outFile = File.createTempFile("minesport_blocks_", ".json");
+            outFile.deleteOnExit();
+            try (var writer = new com.google.gson.stream.JsonWriter(
+                new BufferedWriter(new FileWriter(outFile))
+            )) {
+                writer.beginArray();
+                for (BlockData block : allBlocks) {
+                    writer.beginObject();
+                    writer.name("x").value(block.x);
+                    writer.name("y").value(block.y);
+                    writer.name("z").value(block.z);
+                    writer.name("id").value(block.blockId);
+                    int[] color = dev.kastrick.minesport.region.HeightmapGenerator
+                        .colorForBlock(block.blockId);
+                    writer.name("r").value(color[0]);
+                    writer.name("g").value(color[1]);
+                    writer.name("b").value(color[2]);
+                    writer.endObject();
+                }
+                writer.endArray();
+            }
+
+            final int count = allBlocks.size();
+            send("blocksReady", json -> {
+                json.addProperty("file", outFile.getAbsolutePath());
+                json.addProperty("count", count);
+            });
+        } catch (Exception exception) {
+            error("List blocks failed: " + exception.getMessage());
+        } finally {
+            if (tempWorldCopy != null) WorldCopier.cleanupTemp(tempWorldCopy);
+        }
     }
 }

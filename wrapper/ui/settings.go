@@ -19,18 +19,75 @@ type Settings struct {
 
     // HiddenBlockCullingEnabled enables the experimental world-visibility pass
     // that omits blocks proven to be completely enclosed by six neighboring
-    // FULL_BLOCKs. It is independent of face culling.
+    // full faces. It is independent of face culling.
     HiddenBlockCullingEnabled bool `json:"hiddenBlockCullingEnabled"`
+
+    // BlenderExportEnabled exposes Blender translation metadata controls in the
+    // World Inspector. The translator itself is one-shot: it creates Blender-
+    // native collections, actions, bones and nodes, then does not run per-frame.
+    BlenderExportEnabled bool `json:"blenderExportEnabled"`
+
+    // BlenderTranslatorPrompted prevents the first-launch installer prompt from
+    // nagging after the user explicitly answers it. Install/repair remains
+    // available from Settings -> Advanced -> Model -> Blender Export.
+    BlenderTranslatorPrompted bool `json:"blenderTranslatorPrompted"`
 
     ResourcePackPaths []string `json:"resourcePackPaths"`
     DataPackPaths []string `json:"dataPackPaths"`
 }
 
 func DefaultSettings() Settings {
-    return Settings{DebugMode:false,SelectByModel:false,OptimizeOutputEnabled:false,HiddenBlockCullingEnabled:false,ResourcePackPaths:nil,DataPackPaths:nil}
+    return Settings{
+        DebugMode: false,
+        SelectByModel: false,
+        OptimizeOutputEnabled: false,
+        HiddenBlockCullingEnabled: false,
+        BlenderExportEnabled: false,
+        BlenderTranslatorPrompted: false,
+        ResourcePackPaths: nil,
+        DataPackPaths: nil,
+    }
 }
 
-func settingsPath()(string,error){dir,err:=os.UserConfigDir();if err!=nil{return "",err};return filepath.Join(dir,"minesport","settings.json"),nil}
-func LoadSettings()Settings{path,err:=settingsPath();if err!=nil{return DefaultSettings()};data,err:=os.ReadFile(path);if err!=nil{return DefaultSettings()};var s Settings;if err:=json.Unmarshal(data,&s);err!=nil{return DefaultSettings()};return s}
-func(s Settings)Save()error{path,err:=settingsPath();if err!=nil{return err};if err:=os.MkdirAll(filepath.Dir(path),0o755);err!=nil{return err};data,err:=json.MarshalIndent(s,"","  ");if err!=nil{return err};return os.WriteFile(path,data,0o644)}
-func PathListString(paths []string)string{return strings.Join(paths,";")}
+func settingsPath() (string, error) {
+    dir, err := os.UserConfigDir()
+    if err != nil {
+        return "", err
+    }
+    return filepath.Join(dir, "minesport", "settings.json"), nil
+}
+
+func LoadSettings() Settings {
+    path, err := settingsPath()
+    if err != nil {
+        return DefaultSettings()
+    }
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return DefaultSettings()
+    }
+    var settings Settings
+    if err := json.Unmarshal(data, &settings); err != nil {
+        return DefaultSettings()
+    }
+    return settings
+}
+
+func (settings Settings) Save() error {
+    path, err := settingsPath()
+    if err != nil {
+        return err
+    }
+    if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+        return err
+    }
+    data, err := json.MarshalIndent(settings, "", "  ")
+    if err != nil {
+        return err
+    }
+    return os.WriteFile(path, data, 0o644)
+}
+
+func PathListString(paths []string) string {
+    return strings.Join(paths, ";")
+}

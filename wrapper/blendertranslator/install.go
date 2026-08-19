@@ -1,0 +1,166 @@
+package blendertranslator
+
+import (
+    "embed"
+    "fmt"
+    "io/fs"
+    "os"
+    "path/filepath"
+    "runtime"
+    "sort"
+    "strconv"
+    "strings"
+)
+
+// The translator is bundled into Minesport so release builds do not depend on
+// loose Python files beside minesport.exe.
+//
+//go:embed minesport_translator/*.py
+var translatorFiles embed.FS
+
+type Target struct {
+    Version   string
+    AddonsDir string
+}
+
+func DiscoverTargets() []Target {
+    roots := blenderProfileRoots()
+    seen := map[string]bool{}
+    var targets []Target
+
+    for _, root := range roots {
+        entries, err := os.ReadDir(root)
+        if err != nil {
+            continue
+        }
+        for _, entry := range entries {
+            if !entry.IsDir() || !supportedVersion(entry.Name()) {
+                continue
+            }
+            addons := filepath.Join(root, entry.Name(), "scripts", "addons")
+            key := filepath.Clean(addons)
+            if seen[key] {
+                continue
+            }
+            seen[key] = true
+            targets = append(targets, Target{Version: entry.Name(), AddonsDir: addons})
+        }
+    }
+
+    // Windows Blender installs expose the version in the installation folder.
+    // Add a target even when the user has not opened that version yet, so the
+    // first-launch Minesport prompt can create its user add-on directory.
+    if runtime.GOOS == "windows" {
+        programFiles := os.Getenv("ProgramFiles")
+        appData := os.Getenv("APPDATA")
+        if programFiles != "" && appData != "" {
+            installRoot := filepath.Join(programFiles, "Blender Foundation")
+            entries, _ := os.ReadDir(installRoot)
+            for _, entry := range entries {
+                if !entry.IsDir() {
+                    continue
+                }
+                version := strings.TrimSpace(strings.TrimPrefix(entry.Name(), "Blender "))
+                if version == entry.Name() || !supportedVersion(version) {
+                    continue
+                }
+                addons := filepath.Join(appData, "Blender Foundation", "Blender", version, "scripts", "addons")
+                key := filepath.Clean(addons)
+                if !seen[key] {
+                    seen[key] = true
+                    targets = append(targets, Target{Version: version, AddonsDir: addons})
+                }
+            }
+        }
+    }
+
+    sort.Slice(targets, func(i, j int) bool { return targets[i].Version < targets[j].Version })
+    return targets
+}
+
+func Install() ([]string, error) {
+    targets := DiscoverTargets()
+    var installed []string
+
+    for _, target := range targets {
+        destination := filepath.Join(target.AddonsDir, "minesport_translator")
+        if err := os.MkdirAll(destination, 0o755); err != nil {
+            return installed, fmt.Errorf("create Blender %s add-on folder: %w", target.Version, err)
+        }
+
+        err := fs.WalkDir(translatorFiles, "minesport_translator", func(path string, entry fs.DirEntry, walkErr error) error {
+            if walkErr != nil {
+                return walkErr
+            }
+            if entry.IsDir() {
+                return nil
+            }
+            data, err := translatorFiles.ReadFile(path)
+            if err != nil {
+                return err
+            }
+            return os.WriteFile(filepath.Join(destination, filepath.Base(path)), data, 0o644)
+        })
+        if err != nil {
+            return installed, fmt.Errorf("install Blender %s translator: %w", target.Version, err)
+        }
+        installed = append(installed, destination)
+    }
+
+    return installed, nil
+}
+
+func StatusText() string {
+    targets := DiscoverTargets()
+    if len(targets) == 0 {
+        return "Translator: no Blender 4.3+ profile detected yet"
+    }
+
+    installed := 0
+    for _, target := range targets {
+        if _, err := os.Stat(filepath.Join(target.AddonsDir, "minesport_translator", "__init__.py")); err == nil {
+            installed++
+        }
+    }
+
+    if installed == len(targets) {
+        return fmt.Sprintf("Translator: installed for %d Blender profile(s)", installed)
+    }
+    return fmt.Sprintf("Translator: installed for %d / %d detected Blender profile(s)", installed, len(targets))
+}
+
+func blenderProfileRoots() []string {
+    home, _ := os.UserHomeDir()
+    switch runtime.GOOS {
+    case "windows":
+        if appData := os.Getenv("APPDATA"); appData != "" {
+            return []string{filepath.Join(appData, "Blender Foundation", "Blender")}
+        }
+    case "darwin":
+        if home != "" {
+            return []string{filepath.Join(home, "Library", "Application Support", "Blender")}
+        }
+    default:
+        if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+            return []string{filepath.Join(xdg, "blender")}
+        }
+        if home != "" {
+            return []string{filepath.Join(home, ".config", "blender")}
+        }
+    }
+    return nil
+}
+
+func supportedVersion(value string) bool {
+    value = strings.TrimSpace(value)
+    parts := strings.Split(value, ".")
+    if len(parts) < 2 {
+        return false
+    }
+    major, err1 := strconv.Atoi(parts[0])
+    minor, err2 := strconv.Atoi(parts[1])
+    if err1 != nil || err2 != nil {
+        return false
+    }
+    return major > 4 || (major == 4 && minor >= 3)
+}
