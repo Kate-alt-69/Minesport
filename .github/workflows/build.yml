@@ -1,0 +1,59 @@
+name: Minesport Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  java-engine:
+    name: Java engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '22'
+      - name: Build engine
+        working-directory: engine
+        run: ./gradlew jar --no-daemon
+      - name: Build bridge
+        working-directory: bridge
+        run: ./gradlew jar --no-daemon
+
+  go-wrapper:
+    name: Go wrapper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Install Fyne/OpenGL build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+      - name: Build wrapper
+        working-directory: wrapper
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          go mod tidy
+          go build -trimpath -ldflags='-s -w' -o minesport .
+
+  windows-wrapper:
+    name: Windows wrapper
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Build release wrapper
+        working-directory: wrapper
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          go mod tidy
+          go build -trimpath -ldflags='-H windowsgui -s -w' -o minesport.exe .
