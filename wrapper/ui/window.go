@@ -41,6 +41,7 @@ type MinesportApp struct {
 
     worldNameLabel *widget.Label
     worldMetaLabel *widget.Label
+    exportNameEntry *widget.Entry
     formatSelect *widget.Select
     modeSelect *widget.Select
     minXRange, minYRange, minZRange *AxisRange
@@ -98,8 +99,9 @@ func (ms *MinesportApp) buildUI() fyne.CanvasObject {
 func (ms *MinesportApp) buildInspector() fyne.CanvasObject {
     ms.worldNameLabel=widget.NewLabel("No world selected"); ms.worldNameLabel.TextStyle=fyne.TextStyle{Bold:true}
     ms.worldMetaLabel=widget.NewLabel("Select a Minecraft save to begin")
+    ms.exportNameEntry=widget.NewEntry(); ms.exportNameEntry.SetText("Minesport_Export"); ms.exportNameEntry.SetPlaceHolder("Export name")
     selectBtn:=widget.NewButtonWithIcon("Select world",theme.FolderOpenIcon(),ms.onSelectWorld); selectBtn.Importance=widget.HighImportance
-    worldCard:=widget.NewCard("WORLD INSPECTOR","",container.NewVBox(ms.worldNameLabel,ms.worldMetaLabel,container.NewPadded(selectBtn)))
+    worldCard:=widget.NewCard("WORLD INSPECTOR","",container.NewVBox(ms.worldNameLabel,ms.worldMetaLabel,compactEntryRow("Export name",ms.exportNameEntry),widget.NewLabel("Used for the exported filename and imported 3D object name."),container.NewPadded(selectBtn)))
 
     ms.selectionModeSelect=widget.NewSelect([]string{"Box selection","Bubble selection"},func(choice string){
         if ms.boxCoordGroup == nil || ms.bubbleCoordGroup == nil { return }
@@ -132,6 +134,7 @@ func (ms *MinesportApp) buildInspector() fyne.CanvasObject {
     side:=container.NewVBox(worldCard,selectionCard,exportCard,outputCard,container.NewPadded(ms.exportBtn));return container.NewVScroll(container.NewPadded(side))
 }
 
+func compactEntryRow(label string,e *widget.Entry) fyne.CanvasObject{return container.NewBorder(nil,nil,widget.NewLabel(label),nil,e)}
 func compactNumberRow(label string,e *StepperEntry) fyne.CanvasObject{return container.NewBorder(nil,nil,widget.NewLabel(label),nil,e)}
 func compactSelectRow(label string,s *widget.Select) fyne.CanvasObject{return container.NewBorder(nil,nil,widget.NewLabel(label),nil,s)}
 func (ms *MinesportApp) applyOptimizeGate(){if ms.optimizeCheck==nil{return};ms.optimizeCheck.Enable();ms.optimizeHint.Show()}
@@ -141,7 +144,6 @@ func (ms *MinesportApp) buildMainArea() fyne.CanvasObject {
     ms.viewToggle3D=widget.NewButtonWithIcon("3D preview",theme.ViewFullScreenIcon(),ms.onExplore3D);ms.viewToggle3D.Disable()
     ms.fitBtn=widget.NewButtonWithIcon("Fit",theme.ZoomFitIcon(),func(){ms.worldMap.FitToWindow()});ms.settingsBtn=widget.NewButtonWithIcon("Settings",theme.SettingsIcon(),ms.onOpenSettings)
     toolbar:=container.NewBorder(nil,nil,container.NewHBox(ms.viewToggle2D,ms.viewToggle3D),container.NewHBox(ms.fitBtn,ms.settingsBtn),widget.NewLabel("LMB select · MMB pan · scroll zoom"))
-
     ms.worldMap=NewWorldMapV2()
     ms.worldMap.OnSelectionChanged=func(minX,minZ,maxX,maxZ int){ms.minXRange.Front.SetText(fmt.Sprintf("%d",minX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",maxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",minZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",maxZ));ms.updateMetaHUD(ms.selectionSizeText())}
     ms.worldMap.OnCursorMoved=func(x,z int){ms.cursorLabel.SetText(fmt.Sprintf("X %d  ·  Z %d",x,z))}
@@ -158,22 +160,49 @@ func(ms *MinesportApp)updateMetaHUD(text string){if ms.metaHUD!=nil{ms.metaHUD.S
 func(ms *MinesportApp)selectionSizeText()string{var w,h,d int;if ms.selectionModeSelect!=nil&&ms.selectionModeSelect.Selected=="Bubble selection"{w=2*ms.radiusX.Int(32)+1;h=2*ms.radiusY.Int(32)+1;d=2*ms.radiusZ.Int(32)+1}else{a,b:=ms.minXRange.Bounds();c,e:=ms.minYRange.Bounds();f,g:=ms.minZRange.Bounds();w=b-a+1;h=e-c+1;d=g-f+1};if w<0{w=-w};if h<0{h=-h};if d<0{d=-d};return fmt.Sprintf("%s blocks  ·  %s × %s × %s",formatCount(w*h*d),formatCount(w),formatCount(h),formatCount(d))}
 func formatCount(n int)string{if n<0{n=0};s:=fmt.Sprintf("%d",n);out:="";for i,c:=range s{if i>0&&(len(s)-i)%3==0{out+=","};out+=string(c)};return out}
 
-func(ms *MinesportApp)onSelectWorld(){ShowWorldPicker(ms.window,func(worldPath,modsPath string){ms.worldPath=worldPath;ms.modsPath=modsPath;ms.worldName=filepath.Base(worldPath);ms.worldNameLabel.SetText(ms.worldName);ms.worldMetaLabel.SetText(ms.detectWorldMeta(worldPath));if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)};ms.exportBtn.Enable();ms.autoDetectBtn.Enable();ms.viewToggle3D.Enable();go ms.generateHeightmap(worldPath)})}
+func(ms *MinesportApp)onSelectWorld(){ShowWorldPicker(ms.window,func(worldPath,modsPath string){ms.worldPath=worldPath;ms.modsPath=modsPath;ms.worldName=filepath.Base(worldPath);ms.worldNameLabel.SetText(ms.worldName);ms.worldMetaLabel.SetText(ms.detectWorldMeta(worldPath));if strings.TrimSpace(ms.exportNameEntry.Text)==""||ms.exportNameEntry.Text=="Minesport_Export"{ms.exportNameEntry.SetText(sanitizeExportName(ms.worldName)+"_export")};if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)};ms.exportBtn.Enable();ms.autoDetectBtn.Enable();ms.viewToggle3D.Enable();go ms.generateHeightmap(worldPath)})}
 func(ms *MinesportApp)onSelectOutput(){go func(){f:=nativeOpenFolder("Select Output Folder");if f!=""{ms.outputPath=f;ms.outputLabel.SetText(f)}}()}
 func(ms *MinesportApp)onAutoDetect(){if ms.worldPath==""{return};go func(){r,e:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":ms.worldPath,"scale":1});if e!=nil||r==nil||r.Type!="heightmap"{return};ms.minXRange.Front.SetText(fmt.Sprintf("%d",r.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",r.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",r.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",r.MaxZ))}()}
 
 func(ms *MinesportApp)onExport(){
     if ms.worldPath==""{dialog.ShowError(fmt.Errorf("no world selected"),ms.window);return}
+    name:=sanitizeExportName(ms.exportNameEntry.Text);if name==""{name=sanitizeExportName(ms.worldName);if name==""{name="Minesport_Export"}}
+    ext:=".gltf";if strings.Contains(ms.formatSelect.Selected,"OBJ"){ext=".obj"}
+    if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)}
+    _=os.MkdirAll(ms.outputPath,0755)
+    desired:=filepath.Join(ms.outputPath,name+ext)
+    if exportFilesExist(desired){
+        existing:=existingExportFile(desired);dir:=filepath.Dir(existing)
+        msg:=fmt.Sprintf("%s already exists in %s.\n\nDo you want to replace it?",filepath.Base(existing),dir)
+        ms.exportBtn.Disable()
+        content:=container.NewVBox(widget.NewLabel(msg))
+        d:=dialog.NewCustomConfirm("File already exists","YES","NO",content,func(replace bool){
+            if replace{if err:=removeExportFiles(desired);err!=nil{dialog.ShowError(fmt.Errorf("could not replace export: %w",err),ms.window);ms.exportBtn.Enable();return};ms.startExport(desired);return}
+            ms.startExport(nextExportPath(desired))
+        },ms.window)
+        d.Show();return
+    }
+    ms.startExport(desired)
+}
+
+func(ms *MinesportApp)startExport(outputPath string){
     ms.exportBtn.Disable();ms.progressBar.SetValue(0);ms.statusLabel.SetText("Preparing export…");ms.showExportProgress()
-    format:="gltf";if strings.Contains(ms.formatSelect.Selected,"OBJ"){format="obj"};mode:="grouped";switch ms.modeSelect.Selected{case "Individual blocks":mode="individual";case "Merged":mode="merged"}
-    p:=ipc.ExportParams{WorldPath:ms.worldPath,OutputPath:filepath.Join(ms.outputPath,ms.worldName+"_export."+format),Format:format,ExportMode:mode}
+    format:="gltf";if strings.HasSuffix(strings.ToLower(outputPath),".obj"){format="obj"};mode:="grouped";switch ms.modeSelect.Selected{case "Individual blocks":mode="individual";case "Merged":mode="merged"}
+    p:=ipc.ExportParams{WorldPath:ms.worldPath,OutputPath:outputPath,Format:format,ExportMode:mode}
     if ms.selectionModeSelect.Selected=="Bubble selection"{cx,cy,cz:=ms.centerX.Int(0),ms.centerY.Int(64),ms.centerZ.Int(0);rx,ry,rz:=ms.radiusX.Int(32),ms.radiusY.Int(32),ms.radiusZ.Int(32);p.MinX,p.MaxX=cx-rx,cx+rx;p.MinY,p.MaxY=cy-ry,cy+ry;p.MinZ,p.MaxZ=cz-rz,cz+rz;p.CenterX,p.CenterY,p.CenterZ=&cx,&cy,&cz;p.RadiusX,p.RadiusY,p.RadiusZ=&rx,&ry,&rz}else{p.MinX,p.MaxX=ms.minXRange.Bounds();p.MinY,p.MaxY=ms.minYRange.Bounds();p.MinZ,p.MaxZ=ms.minZRange.Bounds()}
     options:=map[string]string{"faceCulling":strconv.FormatBool(ms.settings.OptimizeOutputEnabled)}
     if ms.optimizeCheck.Checked{options["optimize"]="true"};if ms.settings.HiddenBlockCullingEnabled{options["hiddenBlockCulling"]="true"};if ms.customSelectionFile!=""{options["customSelectionFile"]=ms.customSelectionFile};if len(ms.settings.ResourcePackPaths)>0{options["resourcePacks"]=PathListString(ms.settings.ResourcePackPaths)};if len(ms.settings.DataPackPaths)>0{options["dataPacks"]=PathListString(ms.settings.DataPackPaths)};p.Options=options
     if err:=ms.engine.Export(p);err!=nil{ms.finishExport(ipc.Response{},false,err.Error())}
 }
 
-func(ms *MinesportApp)showExportProgress(){if ms.exportWindow!=nil{return};w:=ms.fyneApp.NewWindow("Minesport — Exporting");w.Resize(fyne.NewSize(620,330));w.SetFixedSize(true);ms.exportTitle=widget.NewLabel("Exporting world…");ms.exportTitle.TextStyle=fyne.TextStyle{Bold:true};ms.exportStage=widget.NewLabel("Preparing…");ms.exportDetail=widget.NewLabel("");ms.exportBar=widget.NewProgressBar();ms.exportStats=widget.NewLabel("");hideBtn:=widget.NewButton("Hide",func(){w.Hide()});card:=widget.NewCard("LIVE EXPORT","",container.NewVBox(ms.exportStage,ms.exportBar,ms.exportDetail,widget.NewSeparator(),ms.exportStats,canvas.NewText("Main window is hidden while the exporter runs.",color.NRGBA{150,160,170,255})));w.SetContent(container.NewBorder(container.NewPadded(ms.exportTitle),container.NewPadded(hideBtn),nil,nil,container.NewPadded(card)));ms.exportWindow=w;ms.window.Hide();w.Show()}
+func exportFilesExist(path string)bool{for _,p:=range relatedExportFiles(path){if _,err:=os.Stat(p);err==nil{return true}};return false}
+func existingExportFile(path string)string{for _,p:=range relatedExportFiles(path){if _,err:=os.Stat(p);err==nil{return p}};return path}
+func relatedExportFiles(path string)[]string{ext:=strings.ToLower(filepath.Ext(path));base:=strings.TrimSuffix(path,filepath.Ext(path));switch ext{case ".obj":return []string{path,base+".mtl"};case ".gltf":return []string{path,base+".bin"};default:return []string{path}}}
+func removeExportFiles(path string)error{for _,p:=range relatedExportFiles(path){if err:=os.Remove(p);err!=nil&&!os.IsNotExist(err){return err}};return nil}
+func nextExportPath(path string)string{ext:=filepath.Ext(path);base:=strings.TrimSuffix(path,ext);for i:=1;;i++{candidate:=fmt.Sprintf("%s (%d)%s",base,i,ext);if !exportFilesExist(candidate){return candidate}}}
+func sanitizeExportName(name string)string{name=strings.TrimSpace(name);name=strings.NewReplacer("<","_",">","_",":","_","\"","_","/","_","\\","_","|","_","?","_","*","_").Replace(name);name=strings.Trim(name," .");if name=="."||name==".."{return ""};return name}
+
+func(ms *MinesportApp)showExportProgress(){if ms.exportWindow!=nil{return};w:=ms.fyneApp.NewWindow("Minesport — Exporting");w.Resize(fyne.NewSize(620,330));w.SetFixedSize(true);ms.exportTitle=widget.NewLabel("Exporting world…");ms.exportTitle.TextStyle=fyne.TextStyle{Bold:true};ms.exportStage=widget.NewLabel("Preparing…");ms.exportDetail=widget.NewLabel("");ms.exportBar=widget.NewProgressBar();ms.exportStats=widget.NewLabel("");hideBtn:=widget.NewButton("Hide",func(){w.Hide()});card:=widget.NewCard("LIVE EXPORT","",container.NewVBox(ms.exportStage,ms.exportBar,ms.exportDetail,widget.NewSeparator(),ms.exportStats));w.SetContent(container.NewBorder(container.NewPadded(ms.exportTitle),container.NewPadded(hideBtn),nil,nil,container.NewPadded(card)));ms.exportWindow=w;ms.window.Hide();w.CenterOnScreen();w.Show()}
 func(ms *MinesportApp)updateExportProgress(pct int,msg string){if ms.exportWindow==nil{return};ms.exportBar.SetValue(float64(pct)/100);ms.exportStage.SetText(msg);blocks:=ms.estimateBlocks();estimatedBlocks:=int(float64(blocks)*float64(pct)/100);verts:=estimatedBlocks*24;data:=estimatedBlocks*80;ms.exportDetail.SetText(fmt.Sprintf("Blocks %s / ~%s",formatCount(estimatedBlocks),formatCount(blocks)));ms.exportStats.SetText(fmt.Sprintf("Estimated vertices  ~%s\nEstimated geometry data  ~%s KB",formatCount(verts),formatCount(data/1024)))}
 func(ms *MinesportApp)estimateBlocks()int{var w,h,d int;if ms.selectionModeSelect.Selected=="Bubble selection"{w=2*ms.radiusX.Int(32)+1;h=2*ms.radiusY.Int(32)+1;d=2*ms.radiusZ.Int(32)+1}else{a,b:=ms.minXRange.Bounds();c,e:=ms.minYRange.Bounds();f,g:=ms.minZRange.Bounds();w=b-a+1;h=e-c+1;d=g-f+1};if w<1{w=1};if h<1{h=1};if d<1{d=1};return w*h*d}
 func(ms *MinesportApp)finishExport(resp ipc.Response,ok bool,msg string){if ok{ms.progressBar.SetValue(1);ms.statusLabel.SetText("Done");ms.stateIcon.SetResource(theme.ConfirmIcon());ms.updateExportProgress(100,"Export complete");ms.updateMetaHUD(fmt.Sprintf("%s blocks · %s faces · ≤%s verts",formatCount(resp.BlockCount),formatCount(resp.QuadCount),formatCount(resp.VertexCount)));if ms.exportWindow!=nil{ms.exportWindow.Close();ms.exportWindow=nil};ms.window.Show();ms.exportBtn.Enable()}else{ms.statusLabel.SetText("Failed");ms.stateIcon.SetResource(theme.ErrorIcon());if ms.exportWindow!=nil{ms.exportStage.SetText("Export failed");ms.exportDetail.SetText(msg);ms.exportWindow.Show()}else{ms.window.Show()};ms.exportBtn.Enable()}}
@@ -186,8 +215,5 @@ func(ms *MinesportApp)closeDebugConsole(){if ms.debugWindow!=nil{ms.debugWindow.
 func(ms *MinesportApp)syncBubblePreview(){if ms.worldMap==nil{return};ms.worldMap.SetBubbleCenter(ms.centerX.Int(0),ms.centerZ.Int(0));ms.worldMap.SetBubbleRadius(ms.radiusX.Int(32),ms.radiusZ.Int(32))}
 func(ms *MinesportApp)detectWorldMeta(path string)string{for _,l:=range launcher.DiscoverAll(){for _,i:=range launcher.DiscoverInstances(l){if strings.HasPrefix(path,i.MinecraftDir){ms.mcVersion=i.Version;ms.loaderType=string(i.Loader);poly:="";if i.HasPolymer(){poly=" · Polymer"};return fmt.Sprintf("MC %s · %s%s",i.Version,i.Loader,poly)}}};return "Minecraft world"}
 
-// makeEntry/intEntry keep the selection popup independent from the internal
-// StepperEntry implementation details while still using the same modern
-// numeric control everywhere in the sidebar and dialogs.
 func (ms *MinesportApp) makeEntry(value string) *StepperEntry { return NewStepperEntry(value) }
 func (ms *MinesportApp) intEntry(e *StepperEntry, fallback int) int { if e == nil { return fallback }; return e.Int(fallback) }
