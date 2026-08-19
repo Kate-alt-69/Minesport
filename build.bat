@@ -83,7 +83,8 @@ if errorlevel 1 (
 )
 endlocal
 
-go build -ldflags="-H windowsgui" -o minesport.exe .
+:: Release build: strip debug symbols/DWARF and trim embedded source paths.
+go build -trimpath -ldflags="-H windowsgui -s -w" -o minesport.exe .
 if errorlevel 1 (
     echo ERROR: Go build failed!
     cd ..
@@ -97,7 +98,7 @@ echo ============================================
 echo  Build complete!
 echo ============================================
 echo  Executables:
-echo    wrapper\minesport.exe          (Go UI)
+echo    wrapper\minesport.exe          (Go UI, stripped release build)
 echo    wrapper\minesport-engine-*.jar (Java engine)
 echo    bridge\build\libs\*.jar        (Bridge mod)
 echo.
