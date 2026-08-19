@@ -6,3 +6,5 @@
 /**/build
 **.log
 **.tmp
+/**/go.mod
+/**/go.sum
