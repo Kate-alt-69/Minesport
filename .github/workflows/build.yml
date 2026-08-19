@@ -23,37 +23,63 @@ jobs:
         working-directory: bridge
         run: ./gradlew jar --no-daemon
 
-  go-wrapper:
-    name: Go wrapper
+  wrapper:
+    name: Wrapper (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: minesport-linux-amd64
+            package: minesport
+          - os: windows-latest
+            artifact: minesport-windows-amd64
+            package: minesport.exe
+          - os: macos-latest
+            artifact: minesport-macos
+            package: minesport
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Install Linux Fyne/OpenGL dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev zenity
+      - name: Check macOS compiler
+        if: runner.os == 'macOS'
+        run: clang --version
+      - name: Build wrapper
+        working-directory: wrapper
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          go mod tidy
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            go build -trimpath -ldflags='-H windowsgui -s -w' -o minesport.exe .
+          else
+            go build -trimpath -ldflags='-s -w' -o minesport .
+          fi
+      - name: Upload wrapper
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: wrapper/${{ matrix.package }}
+
+  cross-check:
+    name: Go portability checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-      - name: Install Fyne/OpenGL build dependencies
+      - name: Install Linux Fyne/OpenGL dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
-      - name: Build wrapper
+      - name: Build-check Linux
         working-directory: wrapper
         env:
           CGO_ENABLED: '1'
-        run: |
-          go mod tidy
-          go build -trimpath -ldflags='-s -w' -o minesport .
-
-  windows-wrapper:
-    name: Windows wrapper
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-      - name: Build release wrapper
-        working-directory: wrapper
-        shell: pwsh
-        env:
-          CGO_ENABLED: '1'
-        run: |
-          go mod tidy
-          go build -trimpath -ldflags='-H windowsgui -s -w' -o minesport.exe .
+        run: go build ./...
