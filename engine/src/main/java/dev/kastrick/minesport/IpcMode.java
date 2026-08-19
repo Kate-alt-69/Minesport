@@ -144,14 +144,10 @@ public class IpcMode {
             }
             progress(50,"Resolvers ready");
 
-            // Face culling, hidden-block culling, and mesh optimization are
-            // deliberately separate controls. "optimize" means vertex welding/
-            // atlas work in the exporters. "faceCulling" only removes hidden
-            // faces. "hiddenBlockCulling" can remove completely enclosed blocks.
             boolean optimize=getBoolOption(req,"optimize",false);
             boolean faceCulling=getBoolOption(req,"faceCulling",false);
             boolean hiddenBlockCulling=getBoolOption(req,"hiddenBlockCulling",false);
-            var geoBuilder=new dev.kastrick.minesport.GeometryBuilder(chain);
+            var geoBuilder=new GeometryBuilder(chain);
             if(faceCulling){log("Face culling enabled");geoBuilder.enableFaceCulling(allBlocks);}
             if(hiddenBlockCulling){log("Hidden block culling enabled (experimental)");geoBuilder.enableHiddenBlockCulling(allBlocks);}
 
@@ -160,6 +156,8 @@ public class IpcMode {
             ObjExporter.ExportStats stats;
             if(format.equals("gltf")){
                 stats=new GltfExporter(chain).export(allBlocks,geoBuilder,outFile,mode,optimize,(doneCount,total)->{int pct=50+(int)((doneCount/(double)total)*45);progress(pct,"Building geometry "+doneCount+"/"+total);});
+                GltfPostProcessor.fixSamplers(outFile);
+                log("glTF sampler normalization complete");
             }else{
                 stats=ObjExporter.exportWithGeometry(allBlocks,geoBuilder,outFile,mode,optimize,(doneCount,total)->{int pct=50+(int)((doneCount/(double)total)*45);progress(pct,"Building geometry "+doneCount+"/"+total);});
             }
@@ -224,6 +222,7 @@ public class IpcMode {
             log("Generating heightmap (scale="+scale+")...");String b64=dev.kastrick.minesport.region.HeightmapGenerator.generateBase64Png(regionDir,scale);if(b64==null){error("No region files found");return;}
             File[] mcaFiles=regionDir.listFiles((d,n)->n.endsWith(".mca"));int minRX=Integer.MAX_VALUE,minRZ=Integer.MAX_VALUE,maxRX=Integer.MIN_VALUE,maxRZ=Integer.MIN_VALUE;
             if(mcaFiles!=null)for(File f:mcaFiles){String[] p=f.getName().split("\\.");if(p.length<4)continue;try{int rx=Integer.parseInt(p[1]),rz=Integer.parseInt(p[2]);minRX=Math.min(minRX,rx);minRZ=Math.min(minRZ,rz);maxRX=Math.max(maxRX,rx);maxRZ=Math.max(maxRZ,rz);}catch(NumberFormatException ignored){}}
+            if(minRX==Integer.MAX_VALUE){error("No valid region coordinates found");return;}
             final int minX=minRX*512,minZ=minRZ*512,maxX=(maxRX+1)*512,maxZ=(maxRZ+1)*512;final String imgData=b64;
             send("heightmap",j->{j.addProperty("image",imgData);j.addProperty("minX",minX);j.addProperty("minZ",minZ);j.addProperty("maxX",maxX);j.addProperty("maxZ",maxZ);j.addProperty("scale",scale);});
         }catch(Exception e){error("Heightmap failed: "+e.getMessage());}
