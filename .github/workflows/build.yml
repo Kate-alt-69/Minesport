@@ -2,13 +2,14 @@ name: Minesport Compile Check
 
 on:
   push:
-    branches: [main, compat-staging]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: minesport-ci-${{ github.workflow }}-${{ github.ref }}
@@ -28,7 +29,7 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v6
-      - name: Prove 1.21.9 compatibility
+      - name: Prove 1.21.9 source compatibility
         working-directory: bridge
         run: |
           chmod +x gradlew
@@ -36,13 +37,13 @@ jobs:
             -Pminecraft_version=1.21.9 \
             -Ploader_version=0.18.5 \
             '-Pfabric_version=0.134.1+1.21.9'
-      - name: Build bundled 1.21.10 bridge
+      - name: Build canonical bundled 1.21.10 bridge
         working-directory: bridge
         run: ./gradlew --no-daemon --stacktrace clean build
-      - name: Stage bundled bridge
+      - name: Stage canonical bundled bridge
         run: |
           mkdir -p dist/bundled-bridge
-          jar="$(find bridge/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' | head -n 1)"
+          jar="$(find bridge/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' -print -quit)"
           test -n "$jar"
           cp "$jar" dist/bundled-bridge/minesport-bridge-0.1.0.jar
       - uses: actions/upload-artifact@v7
@@ -71,7 +72,7 @@ jobs:
         run: go test ./bridgecompat
 
   fabric-bridge-recipes:
-    name: Dynamic recipe · ${{ matrix.minecraft }} · Java ${{ matrix.java }}
+    name: Dynamic bridge · ${{ matrix.minecraft }} · Java ${{ matrix.java }}
     needs: bridge-recipe-tests
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -93,7 +94,6 @@ jobs:
           - { minecraft: '26.1', java: '25' }
           - { minecraft: '26.1.2', java: '25' }
           - { minecraft: '26.2', java: '25' }
-          - { minecraft: '26.3-snapshot-7', java: '25' }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -107,7 +107,7 @@ jobs:
           go-version-file: wrapper/go.mod
           cache-dependency-path: wrapper/go.sum
       - uses: gradle/actions/setup-gradle@v6
-      - name: Prepare and compile from canonical 1.21.10 source
+      - name: Generate and compile from canonical 1.21.10 source
         working-directory: wrapper
         env:
           MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
@@ -149,7 +149,7 @@ jobs:
           retention-days: 7
 
   blender-translator:
-    name: Blender translator · Python syntax
+    name: Blender translator · Python 3.13
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -159,7 +159,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - name: Validate translator project
+      - name: Validate translator project and syntax
         run: |
           python -c "import pathlib,tomllib; tomllib.loads(pathlib.Path('wrapper/blendertranslator/pyproject.toml').read_text(encoding='utf-8')); print('pyproject.toml OK')"
           python -m compileall -q wrapper/blendertranslator/minesport_translator
@@ -168,7 +168,7 @@ jobs:
     name: Wrapper release · ${{ matrix.name }}
     needs: java-engine
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -210,7 +210,7 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
-      - name: Compile all Go packages
+      - name: Test all Go packages
         working-directory: wrapper
         shell: bash
         env:
@@ -225,7 +225,7 @@ jobs:
           engine_jar="${engine_jars[0]}"
           test -f "$engine_jar"
           go run ./cmd/embed-engine -input "$engine_jar" -output embedded_engine_generated.go
-      - name: Compile release configuration
+      - name: Compile actual release configuration
         working-directory: wrapper
         shell: bash
         env:
@@ -237,21 +237,33 @@ jobs:
           else
             go build -tags minesport_embedded_engine -trimpath -ldflags='-s -w' -o dist/minesport .
           fi
-      - name: Compile all packages with embedded-engine tag
+      - name: Test all packages with embedded-engine tag
         working-directory: wrapper
         shell: bash
         env:
           CGO_ENABLED: '1'
           MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
         run: go test -tags minesport_embedded_engine ./...
-      - name: Validate Bash packaging scripts
+      - name: Smoke test release CLI
+        working-directory: wrapper
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./dist/minesport.exe --help
+            ./dist/minesport.exe --install-blender-translator
+          else
+            ./dist/minesport --help
+            ./dist/minesport --install-blender-translator
+          fi
+      - name: Validate Bash build and packaging scripts
         if: runner.os == 'Linux'
         shell: bash
         run: |
           bash -n build.sh
           bash -n installer/linux/build-deb.sh
           bash -n installer/linux/build-appimage.sh
-      - name: Validate PowerShell scripts
+          ./build.sh --help >/dev/null
+      - name: Validate PowerShell and batch build scripts
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -264,10 +276,12 @@ jobs:
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($file,[ref]$tokens,[ref]$errors) | Out-Null
             if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error "$file: $($_.Message)" }
+              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
               throw "$file contains syntax errors"
             }
           }
+          & (Join-Path $env:GITHUB_WORKSPACE 'build.bat') --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'build.bat --help failed.' }
       - uses: actions/upload-artifact@v7
         with:
           name: minesport-${{ runner.os }}-${{ runner.arch }}
@@ -279,7 +293,7 @@ jobs:
     name: Windows installers · MSI + EXE
     needs: [wrapper, fabric-bridge-bundled]
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -292,6 +306,17 @@ jobs:
         with:
           name: fabric-bridge-1.21.10
           path: dist/bundled-bridge
+      - name: Smoke test packaged runtime data path
+        shell: pwsh
+        run: |
+          $bridgeData = Join-Path $env:RUNNER_TEMP 'minesport-bridge-data'
+          New-Item -ItemType Directory -Force -Path (Join-Path $bridgeData 'bundled\1.21.10') | Out-Null
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'bridge-versions\manifest.json') (Join-Path $bridgeData 'manifest.json')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'dist\bundled-bridge\minesport-bridge-0.1.0.jar') (Join-Path $bridgeData 'bundled\1.21.10\minesport-bridge-0.1.0.jar')
+          $env:MINESPORT_BRIDGE_DATA = $bridgeData
+          $binary = Join-Path $env:GITHUB_WORKSPACE 'wrapper\dist\minesport.exe'
+          $process = Start-Process -FilePath $binary -ArgumentList @('--build-bridge', '1.21.10') -NoNewWindow -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Bundled bridge CLI smoke test failed with exit code $($process.ExitCode)." }
       - name: Locate WiX and Inno Setup
         shell: pwsh
         run: |
@@ -326,6 +351,7 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.0-Setup-x64.exe'
           if (-not (Test-Path $msi)) { throw "Missing MSI: $msi" }
           if (-not (Test-Path $exe)) { throw "Missing setup EXE: $exe" }
+          if ((Get-Item $msi).Length -le 0 -or (Get-Item $exe).Length -le 0) { throw 'An installer output is empty.' }
       - uses: actions/upload-artifact@v7
         with:
           name: minesport-windows-installers
@@ -339,7 +365,7 @@ jobs:
     name: Linux packages · DEB + AppImage
     needs: [wrapper, fabric-bridge-bundled]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -361,10 +387,28 @@ jobs:
           chmod +x wrapper/dist/minesport installer/linux/build-deb.sh installer/linux/build-appimage.sh
           installer/linux/build-deb.sh
           installer/linux/build-appimage.sh
-      - name: Verify Linux outputs
+      - name: Inspect and smoke test DEB
         run: |
-          test -n "$(find dist/installer -maxdepth 1 -type f -name 'Minesport-*.deb' -print -quit)"
-          test -n "$(find dist/installer -maxdepth 1 -type f -name 'Minesport-*.AppImage' -print -quit)"
+          deb="$(find dist/installer -maxdepth 1 -type f -name 'Minesport-*.deb' -print -quit)"
+          test -n "$deb"
+          dpkg-deb --info "$deb" >/dev/null
+          dpkg-deb --contents "$deb" | grep -q 'usr/lib/kastrick_software/minesport/minesport'
+          dpkg-deb --contents "$deb" | grep -q 'bridge-data/bundled/1.21.10/minesport-bridge-0.1.0.jar'
+          root="$RUNNER_TEMP/minesport-deb-root"
+          rm -rf "$root"
+          mkdir -p "$root"
+          dpkg-deb -x "$deb" "$root"
+          "$root/usr/lib/kastrick_software/minesport/minesport" --help >/dev/null
+          MINESPORT_BRIDGE_DATA="$root/usr/share/kastrick_software/minesport/bridge-data" \
+            "$root/usr/lib/kastrick_software/minesport/minesport" --build-bridge 1.21.10
+      - name: Inspect and smoke test AppImage
+        run: |
+          appimage="$(find dist/installer -maxdepth 1 -type f -name 'Minesport-*.AppImage' -print -quit)"
+          test -n "$appimage"
+          test -x "$appimage"
+          file "$appimage"
+          APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --help >/dev/null
+          APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --build-bridge 1.21.10
           ls -lh dist/installer
       - uses: actions/upload-artifact@v7
         with:
@@ -400,6 +444,8 @@ jobs:
       LINUX_INSTALLER_RESULT: ${{ needs.linux-installer.result }}
     steps:
       - name: Report compile status
+        id: verdict
+        continue-on-error: true
         run: |
           {
             echo "## Minesport compile report"
@@ -408,7 +454,7 @@ jobs:
             echo "|---|---|"
             echo "| Bundled bridge · 1.21.9–1.21.10 | $BUNDLED_BRIDGE_RESULT |"
             echo "| Recipe engine tests | $RECIPE_TEST_RESULT |"
-            echo "| Generated bridges · 1.21.x + 26.1/26.2 | $RECIPE_BRIDGE_RESULT |"
+            echo "| Dynamic bridges · 1.21–1.21.8, 1.21.11, 26.1.x, 26.2 | $RECIPE_BRIDGE_RESULT |"
             echo "| Java engine | $ENGINE_RESULT |"
             echo "| Blender translator | $TRANSLATOR_RESULT |"
             echo "| Wrapper · Linux + Windows + macOS | $WRAPPER_RESULT |"
@@ -424,8 +470,34 @@ jobs:
              [ "$WRAPPER_RESULT" = success ] && \
              [ "$WIN_INSTALLER_RESULT" = success ] && \
              [ "$LINUX_INSTALLER_RESULT" = success ]; then
-            echo '✅ Everything compiled and packaged cleanly.' | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
+            echo 'result=success' >> "$GITHUB_OUTPUT"
+            echo '✅ Everything supported compiled, tested, and packaged cleanly.' | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'result=failure' >> "$GITHUB_OUTPUT"
+            echo '❌ One or more required compile/package jobs failed.' | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          echo '❌ One or more compile/package jobs failed.' | tee -a "$GITHUB_STEP_SUMMARY"
-          exit 1
+      - name: Publish connector-visible CI status
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERDICT: ${{ steps.verdict.outputs.result }}
+        run: |
+          state="$VERDICT"
+          if [ "$state" != success ]; then state=failure; fi
+          description='Supported builds, tests, and packages passed'
+          if [ "$state" != success ]; then description='One or more required CI jobs failed'; fi
+          payload="$(printf '{\"state\":\"%s\",\"context\":\"Minesport/full-ci\",\"description\":\"%s\",\"target_url\":\"https://github.com/%s/actions/runs/%s\"}' "$state" "$description" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d "$payload"
+      - name: Enforce final verdict
+        if: always()
+        env:
+          VERDICT: ${{ steps.verdict.outputs.result }}
+        run: |
+          test "$VERDICT" = success

@@ -18,6 +18,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.Property;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -182,22 +183,21 @@ public final class MinesportBridge implements ClientModInitializer {
             }
 
             StringBuilder text = new StringBuilder(vanillaId.toString());
-            if (!vanillaState.getValues().isEmpty()) {
-                text.append("[");
-                var iterator = vanillaState.getValues().entrySet().iterator();
-                while (iterator.hasNext()) {
-                    var entry = iterator.next();
-                    text.append(entry.getKey().getName()).append("=").append(entry.getValue());
-                    if (iterator.hasNext()) {
-                        text.append(",");
-                    }
-                }
-                text.append("]");
+            var values = new ArrayList<String>();
+            for (var property : vanillaState.getProperties()) {
+                values.add(property.getName() + "=" + propertyValue(vanillaState, property));
+            }
+            if (!values.isEmpty()) {
+                text.append("[").append(String.join(",", values)).append("]");
             }
             return text.toString();
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private static <T extends Comparable<T>> String propertyValue(BlockState state, Property<T> property) {
+        return String.valueOf(state.getValue(property));
     }
 
     private List<String> loadedMods() {

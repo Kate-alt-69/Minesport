@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "Adapt the canonical 1.21.10 bridge to Minecraft 1.21.2 through 1.21.4.",
+  "description": "Adapt the canonical 1.21.10 bridge to Minecraft 1.21 and 1.21.1.",
   "operations": [
     {"op": "set_property", "file": "gradle.properties", "key": "minecraft_version", "value": "${minecraft_version}"},
     {"op": "set_property", "file": "gradle.properties", "key": "loader_version", "value": "${loader_version}"},
@@ -10,6 +10,7 @@
     {"op": "overlay", "source": "bridge-versions/shared/build-java21.gradle", "target": "build.gradle"},
     {"op": "overlay", "source": "bridge-versions/shared/fabric-mod-java21.json", "target": "src/main/resources/fabric.mod.json"},
     {"op": "overlay", "source": "bridge-versions/1.21.0-1.21.4/overlays/BlockGeometryExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"},
+    {"op": "overlay", "source": "bridge-versions/1.21.0-1.21.1/overlays/TextureExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/TextureExtractor.java"},
     {"op": "rename_at", "file": "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java", "line": 52, "column": 67, "from": "id()", "to": "getId()"}
   ]
 }

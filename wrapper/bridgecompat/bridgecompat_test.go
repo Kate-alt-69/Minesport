@@ -96,8 +96,9 @@ func TestRenameAtRejectsStaleCoordinates(t *testing.T) {
 }
 
 func TestProjectMacroStaysInsideWorkspace(t *testing.T) {
-	if got := projectRelative("&PROJECT&/dependencies/Compat.java"); got != "dependencies/Compat.java" {
-		t.Fatalf("projectRelative returned %q", got)
+	want := filepath.Join("dependencies", "Compat.java")
+	if got := projectRelative("&PROJECT&/dependencies/Compat.java"); got != want {
+		t.Fatalf("projectRelative returned %q, want %q", got, want)
 	}
 	if _, err := safeJoin(t.TempDir(), projectRelative("&PROJECT&/../escape.java")); err == nil {
 		t.Fatal("project macro allowed path traversal")
@@ -120,19 +121,20 @@ func TestManifestCoversRequestedCompatibilityFamilies(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]string{
-		"1.21":    "1.21.0-1.21.4",
-		"1.21.1":  "1.21.0-1.21.4",
-		"1.21.2":  "1.21.0-1.21.4",
-		"1.21.3":  "1.21.0-1.21.4",
-		"1.21.4":  "1.21.0-1.21.4",
-		"1.21.5":  "1.21.5",
-		"1.21.6":  "1.21.6",
-		"1.21.7":  "1.21.7-1.21.8",
-		"1.21.8":  "1.21.7-1.21.8",
-		"1.21.11": "1.21.11",
-		"26.1":    "26.1",
-		"26.1.2":  "26.1",
-		"26.2":    "26.2",
+		"1.21":            "1.21.0-1.21.1",
+		"1.21.1":          "1.21.0-1.21.1",
+		"1.21.2":          "1.21.2-1.21.4",
+		"1.21.3":          "1.21.2-1.21.4",
+		"1.21.4":          "1.21.2-1.21.4",
+		"1.21.5":          "1.21.5",
+		"1.21.6":          "1.21.6",
+		"1.21.7":          "1.21.7-1.21.8",
+		"1.21.8":          "1.21.7-1.21.8",
+		"1.21.11":         "1.21.11",
+		"26.1":            "26.1",
+		"26.1.2":          "26.1",
+		"26.2":            "26.2",
+		"26.3-snapshot-7": "26.3-snapshot-experimental",
 	}
 	for version, want := range cases {
 		profile, err := ProfileForVersion(version, manifest)

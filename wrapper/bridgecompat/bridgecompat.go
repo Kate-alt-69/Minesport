@@ -16,9 +16,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -367,7 +367,9 @@ func applyOperation(workspace string, manifest Manifest, operation PatchOperatio
 	case "regex_replace":
 		file, err := workspacePath(workspace, expand(operation.File)); if err != nil { return err }
 		data, err := os.ReadFile(file); if err != nil { return err }
-		rx, err := regexp.Compile(expand(operation.Pattern)); if err != nil { return err }
+		pattern := expand(operation.Pattern)
+		rx, err := regexp.Compile(pattern); if err != nil { return err }
+		if !rx.Match(data) { return fmt.Errorf("expected regex %q was not found in %s", pattern, file) }
 		return os.WriteFile(file, rx.ReplaceAll(data, []byte(expand(operation.Replacement))), 0o644)
 	case "replace_tree", "rename_package":
 		root, err := workspacePath(workspace, expand(operation.Root)); if err != nil { return err }
@@ -445,7 +447,7 @@ func downloadPinnedModule(endpoint, expectedSHA string) ([]byte, error) {
 	if len(data) > maxModuleBytes { return nil, fmt.Errorf("module exceeds %d byte limit", maxModuleBytes) }
 	actual := sha256.Sum256(data)
 	if !strings.EqualFold(hex.EncodeToString(actual[:]), expectedSHA) { return nil, fmt.Errorf("module SHA-256 mismatch") }
-	if !json.Valid([]byte(`"`+strings.ReplaceAll(strings.ReplaceAll(string(data), `\`, `\\`), `"`, `\"`)+`"`)) { return nil, fmt.Errorf("module is not valid UTF-8 text") }
+	if !utf8.Valid(data) { return nil, fmt.Errorf("module is not valid UTF-8 text") }
 	return data, nil
 }
 
@@ -488,11 +490,10 @@ func resolveFabricAPI(version string) (string, error) {
 	data, err := httpGet("https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml"); if err != nil { return "", err }
 	var metadata mavenMetadata
 	if err := xml.Unmarshal(data, &metadata); err != nil { return "", err }
-	matches := make([]string, 0)
-	for _, candidate := range metadata.Versions { if strings.HasSuffix(candidate, "+"+version) { matches = append(matches, candidate) } }
-	sort.Strings(matches)
-	if len(matches) == 0 { return "", fmt.Errorf("Fabric API does not currently publish a build for Minecraft %s", version) }
-	return matches[len(matches)-1], nil
+	selected := ""
+	for _, candidate := range metadata.Versions { if strings.HasSuffix(candidate, "+"+version) { selected = candidate } }
+	if selected == "" { return "", fmt.Errorf("Fabric API does not currently publish a build for Minecraft %s", version) }
+	return selected, nil
 }
 
 func bundledBridgePath(manifest Manifest) (string, error) {

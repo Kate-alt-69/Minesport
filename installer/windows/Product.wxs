@@ -24,10 +24,10 @@
     </Condition>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="UserProfileFolder">
-        <Directory Id="KastrickUserFolder" Name="kastrick's_software">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="KastrickProgramFiles" Name="kastrick's_software">
           <Directory Id="INSTALLFOLDER" Name="minesport">
-            <Component Id="MainExecutable" Guid="*">
+            <Component Id="MainExecutable" Guid="A4A7E0C8-2B1E-4D4E-9D1B-44A4B1F6C6A1">
               <File
                   Id="MinesportExe"
                   Source="$(var.SourceDir)\wrapper\dist\minesport.exe"
@@ -37,31 +37,25 @@
                     Directory="ProgramMenuFolder"
                     Name="Minesport"
                     WorkingDirectory="INSTALLFOLDER"
-                    Advertise="no" />
+                    Advertise="yes" />
                 <Shortcut
                     Id="DesktopShortcut"
                     Directory="DesktopFolder"
                     Name="Minesport"
                     WorkingDirectory="INSTALLFOLDER"
-                    Advertise="no" />
+                    Advertise="yes" />
               </File>
             </Component>
 
             <Directory Id="TOOLS" Name="tools">
-              <Component Id="BlenderInstallerHelper" Guid="*">
+              <Component Id="BlenderInstallerHelper" Guid="F4D2A087-3E68-4B31-A7D0-2F60F23D9C6B">
                 <File
                     Id="BlenderInstallScript"
                     Source="$(var.SourceDir)\installer\windows\install-blender.ps1"
                     KeyPath="yes" />
               </Component>
             </Directory>
-          </Directory>
-        </Directory>
-      </Directory>
 
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="KastrickProgramFiles" Name="kastrick's_software">
-          <Directory Id="BridgeSupportRoot" Name="minesport">
             <Directory Id="BridgeDataDir" Name="bridge-data">
               <Component Id="BridgeManifest" Guid="*">
                 <File
@@ -80,7 +74,7 @@
                 </Directory>
               </Directory>
               <Directory Id="CompiledBridgeDir" Name="compiled">
-                <Component Id="CompiledBridgeCache" Guid="*">
+                <Component Id="CompiledBridgeCache" Guid="9C62E3D4-67A3-44C2-B0E5-2D68947E3F15">
                   <CreateFolder>
                     <util:PermissionEx User="Users" GenericAll="yes" />
                   </CreateFolder>

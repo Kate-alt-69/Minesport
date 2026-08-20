@@ -20,6 +20,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.Property;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -43,9 +44,9 @@ public final class BlockGeometryExtractor {
             if (model == null) continue;
 
             var properties = new LinkedHashMap<String, String>();
-            state.getValues().forEach((property, value) ->
-                properties.put(property.getName(), value.toString())
-            );
+            for (var property : state.getProperties()) {
+                properties.put(property.getName(), propertyValue(state, property));
+            }
 
             MutableMesh mesh = Renderer.get().mutableMesh();
             try {
@@ -69,6 +70,10 @@ public final class BlockGeometryExtractor {
             if (!quads.isEmpty()) variants.add(new BlockVariant(properties, quads));
         }
         return variants;
+    }
+
+    private static <T extends Comparable<T>> String propertyValue(BlockState state, Property<T> property) {
+        return String.valueOf(state.getValue(property));
     }
 
     private static SpriteFinder blockSpriteFinder(Minecraft client) {
