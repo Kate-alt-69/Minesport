@@ -105,6 +105,7 @@ Minesport copies the selected world to a temporary working directory before read
 
 ## Requirements
 
+- Windows 10/11 x64, Linux, or macOS
 - Java 22+
 - Go 1.26+
 - A Minecraft installation containing the matching Minecraft client JAR for best vanilla geometry resolution
@@ -125,6 +126,17 @@ PowerShell users can also run the repository build script directly:
 ```powershell
 .\build.ps1
 ```
+
+Windows installer packaging is opt-in. NSIS is the default EXE packager; the MSI can be built alongside it, and Inno Setup remains available explicitly:
+
+```powershell
+.\build.ps1 --build-installer       # NSIS EXE
+.\build.ps1 --build-installer-all   # NSIS EXE + WiX MSI
+.\build.ps1 --build-installer-msi   # WiX MSI only
+.\build.ps1 --build-installer-inno  # optional Inno Setup EXE
+```
+
+The current Windows builds require Windows 10 or 11 x64. Windows 7 is not supported by the Go toolchain used by Minesport.
 
 ### Linux / macOS
 
