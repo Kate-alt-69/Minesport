@@ -11,6 +11,7 @@ import (
     "strconv"
     "strings"
     "sync"
+    "time"
 
     "fyne.io/fyne/v2"
     "fyne.io/fyne/v2/app"
@@ -21,6 +22,7 @@ import (
     "fyne.io/fyne/v2/theme"
     "fyne.io/fyne/v2/widget"
 
+    "github.com/kastrick/minesport/bridgecompat"
     "github.com/kastrick/minesport/ipc"
     "github.com/kastrick/minesport/launcher"
     _ "image/png"
@@ -160,12 +162,13 @@ func(ms *MinesportApp)updateMetaHUD(text string){if ms.metaHUD!=nil{ms.metaHUD.S
 func(ms *MinesportApp)selectionSizeText()string{var w,h,d int;if ms.selectionModeSelect!=nil&&ms.selectionModeSelect.Selected=="Bubble selection"{w=2*ms.radiusX.Int(32)+1;h=2*ms.radiusY.Int(32)+1;d=2*ms.radiusZ.Int(32)+1}else{a,b:=ms.minXRange.Bounds();c,e:=ms.minYRange.Bounds();f,g:=ms.minZRange.Bounds();w=b-a+1;h=e-c+1;d=g-f+1};if w<0{w=-w};if h<0{h=-h};if d<0{d=-d};return fmt.Sprintf("%s blocks  ·  %s × %s × %s",formatCount(w*h*d),formatCount(w),formatCount(h),formatCount(d))}
 func formatCount(n int)string{if n<0{n=0};s:=fmt.Sprintf("%d",n);out:="";for i,c:=range s{if i>0&&(len(s)-i)%3==0{out+=","};out+=string(c)};return out}
 
-func(ms *MinesportApp)onSelectWorld(){ShowWorldPicker(ms.window,func(worldPath,modsPath string){ms.worldPath=worldPath;ms.modsPath=modsPath;ms.worldName=filepath.Base(worldPath);ms.worldNameLabel.SetText(ms.worldName);ms.worldMetaLabel.SetText(ms.detectWorldMeta(worldPath));if strings.TrimSpace(ms.exportNameEntry.Text)==""||ms.exportNameEntry.Text=="Minesport_Export"{ms.exportNameEntry.SetText(sanitizeExportName(ms.worldName)+"_export")};if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)};ms.exportBtn.Enable();ms.autoDetectBtn.Enable();ms.viewToggle3D.Enable();go ms.generateHeightmap(worldPath)})}
+func(ms *MinesportApp)onSelectWorld(){ShowWorldPicker(ms.window,func(worldPath,modsPath string){ms.worldPath=worldPath;ms.modsPath=modsPath;ms.worldName=filepath.Base(worldPath);ms.worldNameLabel.SetText(ms.worldName);ms.worldMetaLabel.SetText(ms.detectWorldMeta(worldPath));ms.appendLog(fmt.Sprintf("Selected world: %s (Minecraft %s, %s)",worldPath,ms.mcVersion,ms.loaderType));if strings.TrimSpace(ms.exportNameEntry.Text)==""||ms.exportNameEntry.Text=="Minesport_Export"{ms.exportNameEntry.SetText(sanitizeExportName(ms.worldName)+"_export")};if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)};ms.exportBtn.Enable();ms.autoDetectBtn.Enable();ms.viewToggle3D.Enable();ms.requireBridgeCompatibility(nil);go ms.generateHeightmap(worldPath)})}
 func(ms *MinesportApp)onSelectOutput(){go func(){f:=nativeOpenFolder("Select Output Folder");if f!=""{ms.outputPath=f;ms.outputLabel.SetText(f)}}()}
 func(ms *MinesportApp)onAutoDetect(){if ms.worldPath==""{return};go func(){r,e:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":ms.worldPath,"scale":1});if e!=nil||r==nil||r.Type!="heightmap"{return};ms.minXRange.Front.SetText(fmt.Sprintf("%d",r.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",r.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",r.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",r.MaxZ))}()}
 
 func(ms *MinesportApp)onExport(){
     if ms.worldPath==""{dialog.ShowError(fmt.Errorf("no world selected"),ms.window);return}
+    if ms.requireBridgeCompatibility(ms.onExport){return}
     name:=sanitizeExportName(ms.exportNameEntry.Text);if name==""{name=sanitizeExportName(ms.worldName);if name==""{name="Minesport_Export"}}
     ext:=".gltf";if strings.Contains(ms.formatSelect.Selected,"OBJ"){ext=".obj"}
     if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)}
@@ -190,9 +193,26 @@ func(ms *MinesportApp)startExport(outputPath string){
     format:="gltf";if strings.HasSuffix(strings.ToLower(outputPath),".obj"){format="obj"};mode:="grouped";switch ms.modeSelect.Selected{case "Individual blocks":mode="individual";case "Merged":mode="merged"}
     p:=ipc.ExportParams{WorldPath:ms.worldPath,OutputPath:outputPath,Format:format,ExportMode:mode}
     if ms.selectionModeSelect.Selected=="Bubble selection"{cx,cy,cz:=ms.centerX.Int(0),ms.centerY.Int(64),ms.centerZ.Int(0);rx,ry,rz:=ms.radiusX.Int(32),ms.radiusY.Int(32),ms.radiusZ.Int(32);p.MinX,p.MaxX=cx-rx,cx+rx;p.MinY,p.MaxY=cy-ry,cy+ry;p.MinZ,p.MaxZ=cz-rz,cz+rz;p.CenterX,p.CenterY,p.CenterZ=&cx,&cy,&cz;p.RadiusX,p.RadiusY,p.RadiusZ=&rx,&ry,&rz}else{p.MinX,p.MaxX=ms.minXRange.Bounds();p.MinY,p.MaxY=ms.minYRange.Bounds();p.MinZ,p.MaxZ=ms.minZRange.Bounds()}
-    options:=map[string]string{"faceCulling":strconv.FormatBool(ms.settings.OptimizeOutputEnabled)}
+    options:=map[string]string{"faceCulling":strconv.FormatBool(ms.settings.OptimizeOutputEnabled),"minecraftVersion":bridgecompat.NormalizeVersion(ms.mcVersion)}
     if ms.optimizeCheck.Checked{options["optimize"]="true"};if ms.settings.HiddenBlockCullingEnabled{options["hiddenBlockCulling"]="true"};if ms.customSelectionFile!=""{options["customSelectionFile"]=ms.customSelectionFile};if len(ms.settings.ResourcePackPaths)>0{options["resourcePacks"]=PathListString(ms.settings.ResourcePackPaths)};if len(ms.settings.DataPackPaths)>0{options["dataPacks"]=PathListString(ms.settings.DataPackPaths)};p.Options=options
     if err:=ms.engine.Export(p);err!=nil{ms.finishExport(ipc.Response{},false,err.Error())}
+}
+
+func(ms *MinesportApp)requireBridgeCompatibility(onReady func())bool{
+    version:=bridgecompat.NormalizeVersion(ms.mcVersion)
+    if version==""||!bridgecompat.NeedsPreparation(version){return false}
+    if bridge,ok:=bridgecompat.PreparedBridge(version);ok{ms.appendLog("Compatibility bridge ready: "+bridge);return false}
+    message:=fmt.Sprintf("Minesport compatibility for Minecraft %s is not installed.\n\nInstall it now? This one-time setup downloads the matching Java/Gradle/Fabric dependencies and caches the compiled bridge.",version)
+    dialog.NewConfirm("Install Minecraft compatibility",message,func(install bool){
+        if !install{ms.appendLog("Compatibility installation declined for Minecraft "+version);ms.statusLabel.SetText("Compatibility not installed");return}
+        ms.exportBtn.Disable();ms.statusLabel.SetText("Installing Minecraft "+version+" compatibility…");ms.stateIcon.SetResource(theme.ViewRefreshIcon())
+        go func(){
+            bridge,err:=bridgecompat.Ensure(version,func(update bridgecompat.Progress){ms.progressBar.SetValue(float64(update.Percent)/100);ms.statusLabel.SetText(update.Stage);ms.appendLog(fmt.Sprintf("Compatibility %d%%: %s %s",update.Percent,update.Stage,update.Detail))})
+            if err!=nil{ms.appendLog("Compatibility installation failed: "+err.Error());ms.statusLabel.SetText("Compatibility installation failed");ms.stateIcon.SetResource(theme.ErrorIcon());ms.exportBtn.Enable();dialog.ShowError(fmt.Errorf("Minecraft %s compatibility installation failed: %w",version,err),ms.window);return}
+            ms.appendLog("Compatibility bridge installed: "+bridge);ms.statusLabel.SetText("Compatibility ready");ms.stateIcon.SetResource(theme.ConfirmIcon());ms.exportBtn.Enable();if onReady!=nil{onReady()}
+        }()
+    },ms.window).Show()
+    return true
 }
 
 func exportFilesExist(path string)bool{for _,p:=range relatedExportFiles(path){if _,err:=os.Stat(p);err==nil{return true}};return false}
@@ -206,11 +226,32 @@ func(ms *MinesportApp)showExportProgress(){if ms.exportWindow!=nil{return};w:=ms
 func(ms *MinesportApp)updateExportProgress(pct int,msg string){if ms.exportWindow==nil{return};ms.exportBar.SetValue(float64(pct)/100);ms.exportStage.SetText(msg);blocks:=ms.estimateBlocks();estimatedBlocks:=int(float64(blocks)*float64(pct)/100);verts:=estimatedBlocks*24;data:=estimatedBlocks*80;ms.exportDetail.SetText(fmt.Sprintf("Blocks %s / ~%s",formatCount(estimatedBlocks),formatCount(blocks)));ms.exportStats.SetText(fmt.Sprintf("Estimated vertices  ~%s\nEstimated geometry data  ~%s KB",formatCount(verts),formatCount(data/1024)))}
 func(ms *MinesportApp)estimateBlocks()int{var w,h,d int;if ms.selectionModeSelect.Selected=="Bubble selection"{w=2*ms.radiusX.Int(32)+1;h=2*ms.radiusY.Int(32)+1;d=2*ms.radiusZ.Int(32)+1}else{a,b:=ms.minXRange.Bounds();c,e:=ms.minYRange.Bounds();f,g:=ms.minZRange.Bounds();w=b-a+1;h=e-c+1;d=g-f+1};if w<1{w=1};if h<1{h=1};if d<1{d=1};return w*h*d}
 func(ms *MinesportApp)finishExport(resp ipc.Response,ok bool,msg string){if ok{ms.progressBar.SetValue(1);ms.statusLabel.SetText("Done");ms.stateIcon.SetResource(theme.ConfirmIcon());ms.updateExportProgress(100,"Export complete");ms.updateMetaHUD(fmt.Sprintf("%s blocks · %s faces · ≤%s verts",formatCount(resp.BlockCount),formatCount(resp.QuadCount),formatCount(resp.VertexCount)));if ms.exportWindow!=nil{ms.exportWindow.Close();ms.exportWindow=nil};ms.window.Show();ms.exportBtn.Enable()}else{ms.statusLabel.SetText("Failed");ms.stateIcon.SetResource(theme.ErrorIcon());if ms.exportWindow!=nil{ms.exportStage.SetText("Export failed");ms.exportDetail.SetText(msg);ms.exportWindow.Show()}else{ms.window.Show()};ms.exportBtn.Enable()}}
-func(ms *MinesportApp)generateHeightmap(worldFolder string){resp,err:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":worldFolder,"scale":1});if err!=nil||resp==nil||resp.Type!="heightmap"||resp.Image==""{return};b,err:=base64.StdEncoding.DecodeString(resp.Image);if err!=nil{return};img,_,err:=image.Decode(bytes.NewReader(b));if err!=nil{return};rgba:=image.NewRGBA(img.Bounds());for y:=img.Bounds().Min.Y;y<img.Bounds().Max.Y;y++{for x:=img.Bounds().Min.X;x<img.Bounds().Max.X;x++{rgba.Set(x,y,img.At(x,y))}};ms.worldMap.LoadHeightmap(rgba,resp.MinX,resp.MinZ,resp.MaxX,resp.MaxZ);ms.worldMap.FitToWindow();ms.minXRange.Front.SetText(fmt.Sprintf("%d",resp.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",resp.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",resp.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",resp.MaxZ))}
-func(ms *MinesportApp)appendLog(msg string){ms.mu.Lock();defer ms.mu.Unlock();if ms.logContent==nil{return};lines:=strings.Split(ms.logContent.Text,"\n");if len(lines)>200{lines=lines[len(lines)-200:]};lines=append(lines,msg);ms.logContent.SetText(strings.Join(lines,"\n"));if ms.logScroll!=nil{ms.logScroll.ScrollToBottom()}}
+func(ms *MinesportApp)generateHeightmap(worldFolder string){
+    ms.appendLog("Heightmap request: "+worldFolder)
+    resp,err:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":worldFolder,"scale":1})
+    if err!=nil{ms.appendLog("Heightmap IPC failed: "+err.Error());ms.statusLabel.SetText("Heightmap failed — see Debug Console");ms.stateIcon.SetResource(theme.ErrorIcon());return}
+    if resp==nil{ms.appendLog("Heightmap failed: engine returned no response");return}
+    if resp.Type=="error"{ms.appendLog("Heightmap engine error: "+resp.Message);ms.statusLabel.SetText("Heightmap failed — see Debug Console");ms.stateIcon.SetResource(theme.ErrorIcon());return}
+    if resp.Type!="heightmap"{ms.appendLog("Heightmap failed: unexpected response type "+resp.Type);return}
+    if resp.Image==""{ms.appendLog("Heightmap failed: response contained no image");return}
+    ms.appendLog(fmt.Sprintf("Heightmap response: %d base64 bytes, bounds X %d..%d Z %d..%d, scale %d",len(resp.Image),resp.MinX,resp.MaxX,resp.MinZ,resp.MaxZ,resp.Scale))
+    b,err:=base64.StdEncoding.DecodeString(resp.Image);if err!=nil{ms.appendLog("Heightmap base64 decode failed: "+err.Error());return}
+    img,_,err:=image.Decode(bytes.NewReader(b));if err!=nil{ms.appendLog("Heightmap PNG decode failed: "+err.Error());return}
+    rgba:=image.NewRGBA(img.Bounds());for y:=img.Bounds().Min.Y;y<img.Bounds().Max.Y;y++{for x:=img.Bounds().Min.X;x<img.Bounds().Max.X;x++{rgba.Set(x,y,img.At(x,y))}}
+    ms.worldMap.LoadHeightmap(rgba,resp.MinX,resp.MinZ,resp.MaxX,resp.MaxZ);ms.worldMap.FitToWindow();ms.minXRange.Front.SetText(fmt.Sprintf("%d",resp.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",resp.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",resp.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",resp.MaxZ));ms.statusLabel.SetText("Heightmap ready");ms.stateIcon.SetResource(theme.ConfirmIcon())
+}
+func(ms *MinesportApp)appendLog(msg string){ms.mu.Lock();defer ms.mu.Unlock();if ms.logContent==nil{return};lines:=strings.Split(ms.logContent.Text,"\n");if len(lines)>2000{lines=lines[len(lines)-2000:]};for _,line:=range strings.Split(msg,"\n"){lines=append(lines,time.Now().Format("15:04:05.000")+"  "+line)};ms.logContent.SetText(strings.Join(lines,"\n"));if ms.logScroll!=nil{ms.logScroll.ScrollToBottom()}}
 func(ms *MinesportApp)onOpenSettings(){ShowSettingsDialog(ms.window,ms.settings,ms.applySettings)}
 func(ms *MinesportApp)applySettings(s Settings){was:=ms.settings.DebugMode;ms.settings=s;if err:=s.Save();err!=nil{ms.appendLog(err.Error())};if s.DebugMode&&!was{ms.openDebugConsole()}else if !s.DebugMode&&was{ms.closeDebugConsole()};ms.applyOptimizeGate()}
-func(ms *MinesportApp)openDebugConsole(){if ms.debugWindow!=nil{return};w:=ms.fyneApp.NewWindow("Minesport — Debug Console");w.SetContent(container.NewPadded(ms.logScroll));w.Resize(fyne.NewSize(640,360));ms.debugWindow=w;w.Show()}
+func(ms *MinesportApp)openDebugConsole(){
+    if ms.debugWindow!=nil{return}
+    w:=ms.fyneApp.NewWindow("Minesport — Debug Console")
+    copyBtn:=widget.NewButtonWithIcon("Copy all",theme.ContentCopyIcon(),func(){w.Clipboard().SetContent(ms.logContent.Text);ms.statusLabel.SetText("Debug log copied")})
+    clearBtn:=widget.NewButtonWithIcon("Clear",theme.DeleteIcon(),func(){ms.mu.Lock();ms.logContent.SetText("");ms.mu.Unlock()})
+    toolbar:=container.NewHBox(copyBtn,clearBtn)
+    w.SetContent(container.NewBorder(container.NewPadded(toolbar),nil,nil,nil,container.NewPadded(ms.logScroll)))
+    w.Resize(fyne.NewSize(760,440));ms.debugWindow=w;w.Show()
+}
 func(ms *MinesportApp)closeDebugConsole(){if ms.debugWindow!=nil{ms.debugWindow.Close();ms.debugWindow=nil}}
 func(ms *MinesportApp)syncBubblePreview(){if ms.worldMap==nil{return};ms.worldMap.SetBubbleCenter(ms.centerX.Int(0),ms.centerZ.Int(0));ms.worldMap.SetBubbleRadius(ms.radiusX.Int(32),ms.radiusZ.Int(32))}
 func(ms *MinesportApp)detectWorldMeta(path string)string{for _,l:=range launcher.DiscoverAll(){for _,i:=range launcher.DiscoverInstances(l){if strings.HasPrefix(path,i.MinecraftDir){ms.mcVersion=i.Version;ms.loaderType=string(i.Loader);poly:="";if i.HasPolymer(){poly=" · Polymer"};return fmt.Sprintf("MC %s · %s%s",i.Version,i.Loader,poly)}}};return "Minecraft world"}

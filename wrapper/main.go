@@ -16,6 +16,7 @@ import (
 	"github.com/kastrick/minesport/blendertranslator"
 	"github.com/kastrick/minesport/bridgecompat"
 	"github.com/kastrick/minesport/launcher"
+	"github.com/kastrick/minesport/processutil"
 	"github.com/kastrick/minesport/ui"
 	"github.com/kastrick/minesport/viewer"
 )
@@ -358,6 +359,7 @@ func runJava(jarPath string) error {
 	}
 
 	cmd := exec.Command(javaExe, "-jar", jarPath)
+	processutil.HideWindow(cmd)
 	cmd.Stdout = log.Writer()
 	cmd.Stderr = log.Writer()
 	if err := cmd.Run(); err != nil {

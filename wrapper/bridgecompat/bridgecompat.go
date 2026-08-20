@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kastrick/minesport/processutil"
 )
 
 const (
@@ -159,6 +161,19 @@ func NeedsPreparation(version string) bool {
 		return version != BundledVersion
 	}
 	return !IsBundledCompatible(version, manifest)
+}
+
+func PreparedBridge(version string) (string, bool) {
+	version = NormalizeVersion(version)
+	if version == "" {
+		return "", false
+	}
+	if !NeedsPreparation(version) {
+		bridge, err := BundledBridge()
+		return bridge, err == nil
+	}
+	bridge := cachedBridgePath(version)
+	return bridge, bridge != ""
 }
 
 func ProfileForVersion(version string, manifest Manifest) (*Profile, error) {
@@ -587,6 +602,7 @@ func runGradleBuild(workspace, javaHome string) (string, error) {
 	if runtime.GOOS == "windows" { wrapper = filepath.Join(workspace, "gradlew.bat") }
 	if runtime.GOOS != "windows" { _ = os.Chmod(wrapper, 0o755) }
 	cmd := exec.Command(wrapper, "--no-daemon", "--stacktrace", "clean", "build")
+	processutil.HideWindow(cmd)
 	cmd.Dir = workspace
 	cmd.Env = append(os.Environ(), "JAVA_HOME="+javaHome)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr

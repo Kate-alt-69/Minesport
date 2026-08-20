@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"github.com/kastrick/minesport/ipc"
+	"github.com/kastrick/minesport/processutil"
 )
 
 type ViewerEvent struct {
@@ -44,6 +45,7 @@ type ViewerSession struct {
 
 func LaunchViewer(exePath, blocksPath string) (*ViewerSession, error) {
 	cmd := exec.Command(exePath, "--viewer", blocksPath)
+	processutil.HideWindow(cmd)
 	in, err := cmd.StdinPipe()
 	if err != nil { return nil, err }
 	out, err := cmd.StdoutPipe()
@@ -109,6 +111,7 @@ func (ms *MinesportApp) onExplore3D() {
 	if ms.worldPath == "" { dialog.ShowError(fmt.Errorf("select a world first"), ms.window); return }
 	if ms.viewerSession != nil { return }
 	ms.statusLabel.SetText("Loading 3D preview…")
+	ms.appendLog("3D preview: requesting blocks from engine")
 	ms.stateIcon.SetResource(theme.ViewRefreshIcon())
 	go func() {
 		p := ipc.ListBlocksParams{WorldPath: ms.worldPath}
@@ -120,7 +123,8 @@ func (ms *MinesportApp) onExplore3D() {
 			p.MinX,p.MaxX=ms.minXRange.Bounds(); p.MinY,p.MaxY=ms.minYRange.Bounds(); p.MinZ,p.MaxZ=ms.minZRange.Bounds()
 		}
 		path,count,err:=ms.engine.ListBlocks(p)
-		if err!=nil { ms.explore3DFailed(err.Error()); return }
+		if err!=nil { ms.appendLog("3D block request failed: "+err.Error()); ms.explore3DFailed(err.Error()); return }
+		ms.appendLog(fmt.Sprintf("3D block response: %d blocks in %s",count,path))
 		if count==0 { ms.explore3DFailed("No solid blocks were found in the current selection."); return }
 		exe,err:=os.Executable(); if err!=nil { ms.explore3DFailed(err.Error()); return }
 		s,err:=LaunchViewer(exe,path); if err!=nil { ms.explore3DFailed(err.Error()); return }

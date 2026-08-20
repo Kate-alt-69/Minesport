@@ -356,6 +356,36 @@ jobs:
           if (-not (Test-Path $msi)) { throw "Missing MSI: $msi" }
           if (-not (Test-Path $exe)) { throw "Missing setup EXE: $exe" }
           if ((Get-Item $msi).Length -le 0 -or (Get-Item $exe).Length -le 0) { throw 'An installer output is empty.' }
+      - name: Install and uninstall MSI smoke test
+        shell: pwsh
+        run: |
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.0-x64.msi'
+          $installLog = Join-Path $env:RUNNER_TEMP 'minesport-msi-install.log'
+          $installArgs = @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$installLog`"")
+          $installProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $installArgs -Wait -PassThru
+          $installCode = $installProcess.ExitCode
+          if ($installCode -notin @(0, 3010)) {
+            if (Test-Path $installLog) { Get-Content $installLog -Tail 200 }
+            throw "MSI installation failed with exit code $installCode."
+          }
+
+          $installedExe = Join-Path $env:ProgramFiles "kastrick's_software\minesport\minesport.exe"
+          if (-not (Test-Path $installedExe)) {
+            throw "MSI completed but the installed executable is missing: $installedExe"
+          }
+          $process = Start-Process -FilePath $installedExe -ArgumentList '--help' -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Installed Minesport CLI smoke test failed with exit code $($process.ExitCode)."
+          }
+
+          $uninstallLog = Join-Path $env:RUNNER_TEMP 'minesport-msi-uninstall.log'
+          $uninstallArgs = @('/x', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$uninstallLog`"")
+          $uninstallProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $uninstallArgs -Wait -PassThru
+          $uninstallCode = $uninstallProcess.ExitCode
+          if ($uninstallCode -notin @(0, 3010)) {
+            if (Test-Path $uninstallLog) { Get-Content $uninstallLog -Tail 200 }
+            throw "MSI uninstall failed with exit code $uninstallCode."
+          }
       - uses: actions/upload-artifact@v7
         with:
           name: minesport-windows-installers

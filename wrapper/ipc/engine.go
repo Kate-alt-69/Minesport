@@ -13,6 +13,7 @@ import (
 
 	"github.com/kastrick/minesport/bridgecompat"
 	"github.com/kastrick/minesport/launcher"
+	"github.com/kastrick/minesport/processutil"
 )
 
 type Request struct {
@@ -55,11 +56,14 @@ type Response struct {
 	VertexCount int    `json:"vertexCount,omitempty"`
 }
 
+const maxIPCMessageBytes = 128 << 20
+
 type Engine struct {
 	cmd          *exec.Cmd
 	stdin        io.WriteCloser
 	mu           sync.Mutex
 	ready        bool
+	stopping     bool
 	msgCh        chan Response
 	pendingMu    sync.Mutex
 	pendingReply chan Response
@@ -83,6 +87,8 @@ func (e *Engine) Start(jarPath string) error {
 		javaExe = javaHome + "/bin/java"
 	}
 	e.cmd = exec.Command(javaExe, "-jar", jarPath, "--ipc")
+	e.stopping = false
+	processutil.HideWindow(e.cmd)
 	var err error
 	e.stdin, err = e.cmd.StdinPipe()
 	if err != nil {
@@ -92,14 +98,28 @@ func (e *Engine) Start(jarPath string) error {
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
-	e.cmd.Stderr = os.Stderr
+	stderr, err := e.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
 	if err := e.cmd.Start(); err != nil {
 		return fmt.Errorf("start java: %w", err)
 	}
-	go e.readLoop(bufio.NewScanner(stdout))
+	if e.OnLog != nil {
+		e.OnLog(fmt.Sprintf("Started Java engine (PID %d) with %s", e.cmd.Process.Pid, javaExe))
+	}
+	go e.readLoop(newIPCScanner(stdout))
+	go e.readStderrLoop(newIPCScanner(stderr))
 	go e.dispatch()
+	go e.waitForExit(e.cmd)
 	e.ready = true
 	return nil
+}
+
+func newIPCScanner(reader io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), maxIPCMessageBytes)
+	return scanner
 }
 
 func (e *Engine) readLoop(scanner *bufio.Scanner) {
@@ -114,7 +134,34 @@ func (e *Engine) readLoop(scanner *bufio.Scanner) {
 		}
 		e.msgCh <- resp
 	}
+	if err := scanner.Err(); err != nil {
+		e.msgCh <- Response{Type: "error", Message: "Engine IPC read failed: " + err.Error()}
+	}
 	close(e.msgCh)
+}
+
+func (e *Engine) readStderrLoop(scanner *bufio.Scanner) {
+	for scanner.Scan() {
+		if e.OnLog != nil {
+			e.OnLog("[java] " + scanner.Text())
+		}
+	}
+	if err := scanner.Err(); err != nil && e.OnLog != nil {
+		e.OnLog("[java stderr] " + err.Error())
+	}
+}
+
+func (e *Engine) waitForExit(cmd *exec.Cmd) {
+	err := cmd.Wait()
+	e.mu.Lock()
+	stopping := e.stopping
+	if e.cmd == cmd {
+		e.ready = false
+	}
+	e.mu.Unlock()
+	if err != nil && !stopping && e.OnError != nil {
+		e.OnError("Java engine exited unexpectedly: " + err.Error())
+	}
 }
 
 func (e *Engine) dispatch() {
@@ -194,7 +241,10 @@ func (e *Engine) SendCommand(payload map[string]interface{}) (*Response, error) 
 	e.mu.Unlock()
 
 	command, _ := payload["command"].(string)
-	expected := command
+	expected := expectedResponseType(command)
+	if e.OnLog != nil {
+		e.OnLog("IPC -> " + command)
+	}
 	reply := make(chan Response, 1)
 	e.pendingMu.Lock()
 	e.pendingReply = reply
@@ -222,9 +272,27 @@ func (e *Engine) SendCommand(payload map[string]interface{}) (*Response, error) 
 	}
 	resp, ok := <-reply
 	if !ok {
-		return nil, fmt.Errorf("engine closed before response")
+		return nil, fmt.Errorf("engine closed before response to %s", command)
+	}
+	if e.OnLog != nil {
+		detail := ""
+		if resp.Image != "" {
+			detail = fmt.Sprintf(" (%d image bytes)", len(resp.Image))
+		}
+		e.OnLog("IPC <- " + resp.Type + detail)
 	}
 	return &resp, nil
+}
+
+func expectedResponseType(command string) string {
+	switch command {
+	case "ping":
+		return "pong"
+	case "listBlocks":
+		return "blocksReady"
+	default:
+		return command
+	}
 }
 
 type ExportParams struct {
@@ -334,6 +402,7 @@ func (e *Engine) Ping() error { return e.Send(Request{Command: "ping"}) }
 func (e *Engine) Stop() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.stopping = true
 	if e.stdin != nil {
 		_ = json.NewEncoder(e.stdin).Encode(Request{Command: "quit"})
 		_ = e.stdin.Close()
