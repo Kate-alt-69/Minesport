@@ -13,7 +13,6 @@ import (
 const (
 	gwlStyle       = ^uintptr(15) // -16
 	wsChild        = uintptr(0x40000000)
-	wsVisible      = uintptr(0x10000000)
 	wsPopup        = uintptr(0x80000000)
 	wsCaption      = uintptr(0x00C00000)
 	wsThickFrame   = uintptr(0x00040000)
@@ -25,7 +24,6 @@ const (
 
 	swpNoActivate = uintptr(0x0010)
 	swpNoZOrder   = uintptr(0x0004)
-	swpShowWindow = uintptr(0x0040)
 	swHide        = uintptr(0)
 	swShow        = uintptr(5)
 )
@@ -61,7 +59,9 @@ func (e *nativeEmbed) Attach(parent uintptr) error {
 	}
 	style, _, _ := procGetWindowLong.Call(e.child, gwlStyle)
 	style &^= wsPopup | wsCaption | wsThickFrame | wsMinimizeBox | wsMaximizeBox | wsSysMenu
-	style |= wsChild | wsVisible | wsClipChildren | wsClipSiblings
+	// Keep the child hidden while it is reparented and positioned. Visibility
+	// is applied explicitly by Show after the final host rectangle is known.
+	style |= wsChild | wsClipChildren | wsClipSiblings
 	procSetWindowLong.Call(e.child, gwlStyle, style)
 	e.parent = parent
 	return nil
@@ -71,7 +71,10 @@ func (e *nativeEmbed) SetRect(x, y, width, height int) {
 	if e.child == 0 || width < 1 || height < 1 {
 		return
 	}
-	procSetWindowPos.Call(e.child, 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height), swpNoActivate|swpNoZOrder|swpShowWindow)
+	// Moving/resizing must not implicitly reveal the renderer. A delayed Fyne
+	// layout pass can arrive after the user switches back to 2D; SWP_SHOWWINDOW
+	// here used to resurrect the child HWND over the UI.
+	procSetWindowPos.Call(e.child, 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height), swpNoActivate|swpNoZOrder)
 }
 
 func (e *nativeEmbed) Show(show bool) {

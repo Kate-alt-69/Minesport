@@ -19,14 +19,19 @@ type EmbeddedViewer struct {
 
 	session      *ViewerSession
 	parentHandle uintptr
+	// anchor is the stable Fyne container whose bounds define the native
+	// viewport. The custom widget is inserted dynamically, and asking Fyne for
+	// its absolute position during the first layout can briefly return (0, 0),
+	// which used to place the native renderer over the inspector.
+	anchor       fyne.CanvasObject
 	mu           sync.Mutex
 	timer        *time.Timer
 	visible      bool
 	attached     bool
 }
 
-func NewEmbeddedViewer(session *ViewerSession, parentHandle uintptr) *EmbeddedViewer {
-	v := &EmbeddedViewer{session: session, parentHandle: parentHandle, visible: true}
+func NewEmbeddedViewer(session *ViewerSession, parentHandle uintptr, anchor fyne.CanvasObject) *EmbeddedViewer {
+	v := &EmbeddedViewer{session: session, parentHandle: parentHandle, anchor: anchor, visible: true}
 	v.ExtendBaseWidget(v)
 	return v
 }
@@ -52,15 +57,18 @@ func (v *EmbeddedViewer) Show() {
 	v.mu.Lock()
 	v.visible = true
 	v.mu.Unlock()
-	if v.session != nil {
-		v.session.SetVisible(true)
-	}
+	// Position first, then reveal the HWND. Showing it at its previous/default
+	// rectangle creates a flash over the inspector and can steal the 2D button.
 	v.scheduleSync()
 }
 
 func (v *EmbeddedViewer) Hide() {
 	v.mu.Lock()
 	v.visible = false
+	if v.timer != nil {
+		v.timer.Stop()
+		v.timer = nil
+	}
 	v.mu.Unlock()
 	if v.session != nil {
 		v.session.SetVisible(false)
@@ -97,16 +105,26 @@ func (v *EmbeddedViewer) syncRect() {
 	if v.session == nil || v.parentHandle == 0 {
 		return
 	}
+	v.mu.Lock()
+	if !v.visible {
+		v.mu.Unlock()
+		return
+	}
+	v.mu.Unlock()
+	target := v.anchor
+	if target == nil {
+		target = v
+	}
 	driver := fyne.CurrentApp().Driver()
-	canvasForHost := driver.CanvasForObject(v)
+	canvasForHost := driver.CanvasForObject(target)
 	if canvasForHost == nil {
 		return
 	}
-	abs := driver.AbsolutePositionForObject(v)
+	abs := driver.AbsolutePositionForObject(target)
 	x, y := canvasForHost.PixelCoordinateForPosition(abs)
 	scale := canvasForHost.Scale()
-	width := int(v.Size().Width * scale)
-	height := int(v.Size().Height * scale)
+	width := int(target.Size().Width * scale)
+	height := int(target.Size().Height * scale)
 	// Keep the Fyne viewport controls clickable above the native child window.
 	controlInset := int(48 * scale)
 	y += controlInset
@@ -115,16 +133,24 @@ func (v *EmbeddedViewer) syncRect() {
 		return
 	}
 	v.mu.Lock()
-	attached := v.attached
-	if !attached {
-		v.attached = true
+	if !v.visible {
+		v.mu.Unlock()
+		return
 	}
-	v.mu.Unlock()
+	attached := v.attached
+	v.attached = true
 	if attached {
 		v.session.SetRect(x, y, width, height)
 	} else {
 		v.session.Embed(v.parentHandle, x, y, width, height)
 	}
+	v.session.SetVisible(true)
+	if !attached {
+		// GLFW/Windows can issue one final size event while the hidden top-level
+		// window becomes a child. Re-assert the host rectangle after that event.
+		v.timer = time.AfterFunc(150*time.Millisecond, v.syncRect)
+	}
+	v.mu.Unlock()
 }
 
 type nativeViewerHostRenderer struct {

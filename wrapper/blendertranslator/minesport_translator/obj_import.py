@@ -33,7 +33,7 @@ class MINESPORT_OT_import_obj(bpy.types.Operator, ImportHelper):
         imported = [obj for obj in bpy.data.objects if obj.as_pointer() not in before]
         _prepare_blender_scene(imported)
         metadata = load_sidecar(path)
-        translate_scene(metadata, imported)
+        translate_scene(metadata, imported, asset_path=path)
         return {"FINISHED"}
 
 

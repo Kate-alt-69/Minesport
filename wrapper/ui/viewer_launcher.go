@@ -299,7 +299,7 @@ func (ms *MinesportApp) onExplore3D() {
 			ms.explore3DFailed("Could not start the original 3D renderer: " + err.Error())
 			return
 		}
-		preview := NewEmbeddedViewer(session, parentHandle)
+		preview := NewEmbeddedViewer(session, parentHandle, ms.previewHost)
 		session.OnReady = func(readyCount int) {
 			ms.viewerSession = session
 			ms.embeddedViewer = preview

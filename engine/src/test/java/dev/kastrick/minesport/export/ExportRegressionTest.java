@@ -149,6 +149,95 @@ final class ExportRegressionTest {
         assertEquals(1.0, sidecar.get("metresPerBlock").getAsDouble(), 1e-9);
     }
 
+    @Test
+    void optimizedObjActuallyWeldsPositionRecords() throws Exception {
+        ResolverChain chain = new ResolverChain();
+        List<BlockData> blocks = List.of(
+            new BlockData(0, 0, 0, "test:missing", Map.of()),
+            new BlockData(1, 0, 0, "test:missing", Map.of())
+        );
+        File obj = temp.resolve("welded.obj").toFile();
+
+        ObjExporter.ExportStats stats = ObjExporter.exportWithGeometry(
+            blocks,
+            new GeometryBuilder(chain),
+            obj,
+            ObjExporter.ExportMode.ALL_MERGED,
+            true,
+            null
+        );
+
+        long writtenVertices;
+        try (var lines = Files.lines(obj.toPath())) {
+            writtenVertices = lines.filter(line -> line.startsWith("v ")).count();
+        }
+        assertEquals(12, stats.quadCount());
+        assertEquals(12, writtenVertices);
+        assertEquals(writtenVertices, stats.vertexCount());
+        assertTrue(stats.vertexCount() < stats.quadCount() * 4);
+    }
+
+    @Test
+    void faceCullingRemovesTheCoveredFacesBetweenAdjacentBlocks() throws Exception {
+        ResolverChain chain = new ResolverChain();
+        chain.addResolver(new FixtureResolver(true));
+        List<BlockData> blocks = List.of(
+            new BlockData(0, 0, 0, "test:full_cube", Map.of()),
+            new BlockData(1, 0, 0, "test:full_cube", Map.of())
+        );
+        GeometryBuilder builder = new GeometryBuilder(chain);
+        builder.enableFaceCulling(blocks);
+
+        ObjExporter.ExportStats stats = ObjExporter.exportWithGeometry(
+            blocks,
+            builder,
+            temp.resolve("culled.obj").toFile(),
+            ObjExporter.ExportMode.ALL_MERGED,
+            true,
+            null
+        );
+
+        assertEquals(10, stats.quadCount());
+    }
+
+    @Test
+    void airBlocksNeverBecomeFallbackGeometry() throws Exception {
+        ObjExporter.ExportStats stats = ObjExporter.exportWithGeometry(
+            List.of(
+                new BlockData(0, 0, 0, "minecraft:air", Map.of()),
+                new BlockData(1, 0, 0, "minecraft:cave_air", Map.of()),
+                new BlockData(2, 0, 0, "minecraft:void_air", Map.of())
+            ),
+            new GeometryBuilder(new ResolverChain()),
+            temp.resolve("air.obj").toFile(),
+            ObjExporter.ExportMode.ALL_MERGED,
+            true,
+            null
+        );
+
+        assertEquals(0, stats.blockCount());
+        assertEquals(0, stats.quadCount());
+        assertEquals(0, stats.vertexCount());
+    }
+
+    @Test
+    void objWritesARealFallbackPngWhenTextureResolutionFails() throws Exception {
+        File mtl = temp.resolve("missing.mtl").toFile();
+        MtlExporter.export(
+            java.util.Set.of(new MaterialKey("test:block/not_found", -1)),
+            mtl,
+            new ResolverChain()
+        );
+
+        Path png = temp.resolve("textures/test_block_not_found.png");
+        assertTrue(Files.isRegularFile(png));
+        BufferedImage image = javax.imageio.ImageIO.read(png.toFile());
+        assertNotNull(image);
+        assertEquals(16, image.getWidth());
+        assertEquals(16, image.getHeight());
+        assertTrue(Files.readString(mtl.toPath()).contains("map_Kd textures/test_block_not_found.png"));
+    }
+
     private static float[] bounds(List<Quad> quads) {
         float[] result = {
             Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY,
@@ -177,20 +266,33 @@ final class ExportRegressionTest {
         @Override public boolean canResolve(String blockId) { return true; }
 
         @Override public BlockState resolveBlockState(String blockId) {
-            if (!model || !blockId.equals("test:fixture")) return null;
+            if (!model || (!blockId.equals("test:fixture") && !blockId.equals("test:full_cube"))) return null;
             BlockState state = new BlockState();
             state.format = BlockState.Format.VARIANTS;
             BlockState.ModelApplication application = new BlockState.ModelApplication();
-            application.modelPath = "test:block/fixture";
+            application.modelPath = blockId.equals("test:full_cube")
+                ? "test:block/full_cube"
+                : "test:block/fixture";
             state.variants.put("", List.of(application));
             return state;
         }
 
         @Override public BlockModel resolveModel(String modelPath) {
-            if (!model || !modelPath.equals("test:block/fixture")) return null;
+            if (!model) return null;
             BlockModel result = new BlockModel();
             result.textures.put("all", "test:block/fixture");
             BlockModel.Element element = new BlockModel.Element();
+            if (modelPath.equals("test:block/full_cube")) {
+                for (String direction : List.of("north", "south", "east", "west", "up", "down")) {
+                    BlockModel.Face face = new BlockModel.Face();
+                    face.texture = "#all";
+                    face.cullface = direction;
+                    element.faces.put(direction, face);
+                }
+                result.elements.add(element);
+                return result;
+            }
+            if (!modelPath.equals("test:block/fixture")) return null;
             BlockModel.Face face = new BlockModel.Face();
             face.texture = "#all";
             face.uv = new float[]{0, 0, 16, 8};

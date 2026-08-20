@@ -54,9 +54,8 @@ public class MtlExporter {
                 // Always refresh generated assets. Re-exporting into the same
                 // folder must not silently retain an older pack/tint texture.
                 BufferedImage img = material.apply(resolvers.resolveTexture(texPath));
-                if (img != null) {
-                    ImageIO.write(img, "PNG", pngFile);
-                }
+                if (img == null) img = missingTexture();
+                ImageIO.write(img, "PNG", pngFile);
 
                 w.println("newmtl " + matName);
                 if (pngFile.exists()) {
@@ -97,5 +96,16 @@ public class MtlExporter {
             }
         }
         ImageIO.write(alpha, "PNG", output);
+    }
+
+    private static BufferedImage missingTexture() {
+        BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 16; y++) {
+            for (int x = 0; x < 16; x++) {
+                boolean alternate = ((x / 4) + (y / 4)) % 2 == 0;
+                image.setRGB(x, y, alternate ? 0xffff00ff : 0xff2a002a);
+            }
+        }
+        return image;
     }
 }

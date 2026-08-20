@@ -235,6 +235,10 @@ func (ms *MinesportApp) startModernExport(outputPath string) {
 	}
 	if ms.optimizeCheck.Checked {
 		options["optimize"] = "true"
+		// The main optimization switch must produce a visibly smaller mesh, not
+		// merely request vertex reuse. Safe covered-face removal is part of that
+		// promise; the Basic setting can still enable it independently.
+		options["faceCulling"] = "true"
 	}
 	if ms.settings.OptimizeOutputEnabled {
 		options["faceCulling"] = "true"
@@ -337,7 +341,7 @@ func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg strin
 	ms.statusLabel.SetText("Done")
 	ms.stateIcon.SetResource(theme.ConfirmIcon())
 	ms.updateMetaHUD(fmt.Sprintf(
-		"%s blocks · %s faces · ≤%s verts",
+		"%s blocks · %s faces · %s verts",
 		formatCount(resp.BlockCount),
 		formatCount(resp.QuadCount),
 		formatCount(resp.VertexCount),
@@ -373,7 +377,7 @@ func (ms *MinesportApp) showModernExportComplete(exportedPath string, resp ipc.R
 	pathLabel.Truncation = fyne.TextTruncateEllipsis
 
 	summary := widget.NewLabel(fmt.Sprintf(
-		"%s blocks · %s faces · ≤%s vertices",
+		"%s blocks · %s faces · %s vertices",
 		formatCount(resp.BlockCount),
 		formatCount(resp.QuadCount),
 		formatCount(resp.VertexCount),
@@ -391,7 +395,11 @@ func (ms *MinesportApp) showModernExportComplete(exportedPath string, resp ipc.R
 		items := make([]*fyne.MenuItem, 0, 3)
 		for _, appName := range []string{"Blender", "Blockbench", "MeshLab"} {
 			name := appName
-			item := fyne.NewMenuItem(name, func() {
+			label := name
+			if name == "Blender" {
+				label = "Blender (Minesport importer)"
+			}
+			item := fyne.NewMenuItem(label, func() {
 				if err := openWithApp(name, exportedPath); err != nil {
 					dialog.ShowError(err, ms.window)
 				}

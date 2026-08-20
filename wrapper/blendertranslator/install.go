@@ -1,6 +1,7 @@
 package blendertranslator
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 )
+
+const Version = "0.1.3"
 
 // The translator is bundled into Minesport so release builds do not depend on
 // loose Python files beside minesport.exe.
@@ -26,18 +29,23 @@ type Target struct {
 type InstallationStatus struct {
 	Detected  int
 	Installed int
+	UpToDate  int
 }
 
 func (status InstallationStatus) Complete() bool {
-	return status.Detected > 0 && status.Installed == status.Detected
+	return status.Detected > 0 && status.UpToDate == status.Detected
 }
 
 func CurrentStatus() InstallationStatus {
 	targets := DiscoverTargets()
 	status := InstallationStatus{Detected: len(targets)}
 	for _, target := range targets {
-		if _, err := os.Stat(filepath.Join(target.AddonsDir, "minesport_translator", "__init__.py")); err == nil {
+		destination := filepath.Join(target.AddonsDir, "minesport_translator")
+		if _, err := os.Stat(filepath.Join(destination, "__init__.py")); err == nil {
 			status.Installed++
+			if translatorFilesCurrent(destination) {
+				status.UpToDate++
+			}
 		}
 	}
 	return status
@@ -133,12 +141,37 @@ func Install() ([]string, error) {
 func StatusText() string {
 	status := CurrentStatus()
 	if status.Detected == 0 {
-		return "Blender translator: ✕ no Blender 4.3+ profile detected"
+		return fmt.Sprintf("Blender translator %s: ✕ no Blender 4.3+ profile detected", Version)
 	}
 	if status.Complete() {
-		return fmt.Sprintf("Blender translator: ✓ installed for %d profile(s)", status.Installed)
+		return fmt.Sprintf("Blender translator %s: ✓ current for %d profile(s)", Version, status.UpToDate)
 	}
-	return fmt.Sprintf("Blender translator: ✕ installed for %d / %d detected profile(s)", status.Installed, status.Detected)
+	if status.Installed == status.Detected {
+		return fmt.Sprintf("Blender translator %s: ✕ update required for %d profile(s)", Version, status.Detected-status.UpToDate)
+	}
+	return fmt.Sprintf("Blender translator %s: ✕ current for %d / %d detected profile(s)", Version, status.UpToDate, status.Detected)
+}
+
+func translatorFilesCurrent(destination string) bool {
+	current := true
+	err := fs.WalkDir(translatorFiles, "minesport_translator", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		expected, err := translatorFiles.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		actual, err := os.ReadFile(filepath.Join(destination, filepath.Base(path)))
+		if err != nil || !bytes.Equal(actual, expected) {
+			current = false
+		}
+		return nil
+	})
+	return err == nil && current
 }
 
 func blenderProfileRoots() []string {

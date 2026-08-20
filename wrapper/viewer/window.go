@@ -383,7 +383,6 @@ func Run(blocksPath string, embedded ...bool) error {
 						window.Show()
 					} else {
 						embed.SetRect(cmd.X, cmd.Y, cmd.Width, cmd.Height)
-						embed.Show(true)
 					}
 				case "embedRect":
 					embed.SetRect(cmd.X, cmd.Y, cmd.Width, cmd.Height)

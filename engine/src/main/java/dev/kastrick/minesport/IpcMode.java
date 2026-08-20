@@ -265,6 +265,9 @@ public class IpcMode {
             );
 
             var geometryBuilder = new GeometryBuilder(chain);
+            if (optimize) {
+                log("Vertex welding enabled");
+            }
             if (faceCulling) {
                 log("Face culling enabled");
                 geometryBuilder.enableFaceCulling(allBlocks);
@@ -324,7 +327,7 @@ public class IpcMode {
             progress(100, "Done");
             log(
                 "Export stats: " + stats.blockCount() + " blocks, "
-                + stats.quadCount() + " faces, ≤" + stats.vertexCount() + " vertices"
+                + stats.quadCount() + " faces, " + stats.vertexCount() + " vertices"
             );
             done(outFile.getAbsolutePath(), stats);
         } catch (Exception exception) {

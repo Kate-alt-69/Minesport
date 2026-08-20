@@ -26,6 +26,23 @@ public class ObjExporter {
         INDIVIDUAL
     }
 
+    private record Vec2Key(int x, int y) {
+        static Vec2Key of(float[] value) {
+            return new Vec2Key(bits(value[0]), bits(value[1]));
+        }
+    }
+
+    private record Vec3Key(int x, int y, int z) {
+        static Vec3Key of(float x, float y, float z) {
+            return new Vec3Key(bits(x), bits(y), bits(z));
+        }
+    }
+
+    private static int bits(float value) {
+        // Treat -0 and +0 as the same coordinate during welding.
+        return Float.floatToIntBits(value == 0f ? 0f : value);
+    }
+
     @FunctionalInterface
     public interface ProgressCallback {
         void onProgress(int done, int total);
@@ -100,6 +117,7 @@ public class ObjExporter {
             outputFile.getName().replaceFirst("(?i)\\.obj$", ".mtl")
         );
 
+        int emittedVertices;
         try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(outputFile)))) {
             writer.println("# Minesport OBJ Export");
             writer.println("# Units: metres (1 Minecraft block grid cell = 1 metre)");
@@ -117,6 +135,9 @@ public class ObjExporter {
             int vertexOffset = 1;
             int texcoordOffset = 1;
             int normalOffset = 1;
+            Map<Vec3Key,Integer> weldedVertices = optimize ? new HashMap<>() : null;
+            Map<Vec2Key,Integer> weldedTexcoords = optimize ? new HashMap<>() : null;
+            Map<Vec3Key,Integer> weldedNormals = optimize ? new HashMap<>() : null;
             Set<String> usedObjectNames = new HashSet<>();
 
             for (var entry : objects.entrySet()) {
@@ -142,51 +163,63 @@ public class ObjExporter {
                         float[][] vertices = quad.verts();
                         float[][] uvs = quad.vertexUVs();
                         float[] normal = quad.normal();
+                        int[] vertexIndices = new int[4];
+                        int[] texcoordIndices = new int[4];
 
-                        for (float[] vertex : vertices) {
-                            writer.printf(
-                                Locale.ROOT,
-                                "v %.6f %.6f %.6f%n",
-                                vertex[0] - center[0],
-                                vertex[1] - center[1],
-                                vertex[2] - center[2]
-                            );
+                        for (int i = 0; i < vertices.length; i++) {
+                            float x = vertices[i][0] - center[0];
+                            float y = vertices[i][1] - center[1];
+                            float z = vertices[i][2] - center[2];
+                            Vec3Key key = Vec3Key.of(x, y, z);
+                            Integer index = optimize ? weldedVertices.get(key) : null;
+                            if (index == null) {
+                                index = vertexOffset++;
+                                writer.printf(Locale.ROOT, "v %.6f %.6f %.6f%n", x, y, z);
+                                if (optimize) weldedVertices.put(key, index);
+                            }
+                            vertexIndices[i] = index;
                         }
 
-                        for (float[] uv : uvs) {
-                            writer.printf(
-                                Locale.ROOT,
-                                "vt %.6f %.6f%n",
-                                uv[0],
-                                1f - uv[1]
-                            );
+                        for (int i = 0; i < uvs.length; i++) {
+                            float[] flipped = new float[]{uvs[i][0], 1f - uvs[i][1]};
+                            Vec2Key key = Vec2Key.of(flipped);
+                            Integer index = optimize ? weldedTexcoords.get(key) : null;
+                            if (index == null) {
+                                index = texcoordOffset++;
+                                writer.printf(Locale.ROOT, "vt %.6f %.6f%n", flipped[0], flipped[1]);
+                                if (optimize) weldedTexcoords.put(key, index);
+                            }
+                            texcoordIndices[i] = index;
                         }
 
-                        writer.printf(
-                            Locale.ROOT,
-                            "vn %.6f %.6f %.6f%n",
-                            normal[0], normal[1], normal[2]
-                        );
+                        Vec3Key normalKey = Vec3Key.of(normal[0], normal[1], normal[2]);
+                        Integer normalIndex = optimize ? weldedNormals.get(normalKey) : null;
+                        if (normalIndex == null) {
+                            normalIndex = normalOffset++;
+                            writer.printf(
+                                Locale.ROOT,
+                                "vn %.6f %.6f %.6f%n",
+                                normal[0], normal[1], normal[2]
+                            );
+                            if (optimize) weldedNormals.put(normalKey, normalIndex);
+                        }
 
                         writer.printf(
                             Locale.ROOT,
                             "f %d/%d/%d %d/%d/%d %d/%d/%d %d/%d/%d%n",
-                            vertexOffset,     texcoordOffset,     normalOffset,
-                            vertexOffset + 1, texcoordOffset + 1, normalOffset,
-                            vertexOffset + 2, texcoordOffset + 2, normalOffset,
-                            vertexOffset + 3, texcoordOffset + 3, normalOffset
+                            vertexIndices[0], texcoordIndices[0], normalIndex,
+                            vertexIndices[1], texcoordIndices[1], normalIndex,
+                            vertexIndices[2], texcoordIndices[2], normalIndex,
+                            vertexIndices[3], texcoordIndices[3], normalIndex
                         );
-
-                        vertexOffset += 4;
-                        texcoordOffset += 4;
-                        normalOffset++;
                     }
                 }
             }
+            emittedVertices = vertexOffset - 1;
         }
 
         MtlExporter.export(textures, mtl, builder.getResolvers());
-        return ExportStats.of(solid, quadCount);
+        return new ExportStats(solid, quadCount, emittedVertices);
     }
 
     private static String materialName(MaterialKey value) {

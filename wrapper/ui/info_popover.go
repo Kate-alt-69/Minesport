@@ -2,12 +2,21 @@ package ui
 
 import (
 	"image/color"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+)
+
+const (
+	infoPopoverPreferredWidth float32 = 356
+	infoPopoverMinWidth       float32 = 220
+	infoPopoverMinHeight      float32 = 128
+	infoPopoverMaxHeight      float32 = 360
+	infoPopoverMargin         float32 = 8
 )
 
 type infoPopoverButton struct {
@@ -32,28 +41,77 @@ func (b *infoPopoverButton) Tapped(*fyne.PointEvent) {
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	body := widget.NewLabel(b.body)
 	body.Wrapping = fyne.TextWrapWord
-	content := container.NewVBox(title, widget.NewSeparator(), body)
-	content.Resize(fyne.NewSize(340, 150))
-	popup := widget.NewPopUp(container.NewGridWrap(fyne.NewSize(340, 150), container.NewPadded(content)), parentCanvas)
-	popup.Resize(fyne.NewSize(356, 166))
+
+	// Labels do not clip their painted text to a fixed GridWrap cell. The old
+	// 150px body therefore escaped the popup for longer help text. A scroll
+	// viewport provides real clipping while retaining a compact popup for short
+	// explanations.
+	canvasSize := parentCanvas.Size()
+	popupWidth := infoPopoverWidth(canvasSize.Width)
+	popupHeight := infoPopoverHeight(b.body, canvasSize.Height)
+	bodyHeight := popupHeight - 68
+	bodyScroll := container.NewVScroll(body)
+	bodyScroll.SetMinSize(fyne.NewSize(popupWidth-32, bodyHeight))
+	content := container.NewBorder(container.NewVBox(title, widget.NewSeparator()), nil, nil, nil, bodyScroll)
+	popup := widget.NewPopUp(container.NewPadded(content), parentCanvas)
+	popup.Resize(fyne.NewSize(popupWidth, popupHeight))
 
 	buttonPos := driver.AbsolutePositionForObject(b)
-	canvasSize := parentCanvas.Size()
-	x := buttonPos.X + b.Size().Width - 356
-	if x < 8 {
-		x = 8
+	x := buttonPos.X + b.Size().Width - popupWidth
+	if x < infoPopoverMargin {
+		x = infoPopoverMargin
 	}
-	if x+356 > canvasSize.Width-8 {
-		x = canvasSize.Width - 364
+	if x+popupWidth > canvasSize.Width-infoPopoverMargin {
+		x = canvasSize.Width - popupWidth - infoPopoverMargin
+	}
+	if x < infoPopoverMargin {
+		x = infoPopoverMargin
 	}
 	y := buttonPos.Y + b.Size().Height + 6
-	if y+166 > canvasSize.Height-8 {
-		y = buttonPos.Y - 172
+	if y+popupHeight > canvasSize.Height-infoPopoverMargin {
+		y = buttonPos.Y - popupHeight - 6
 	}
-	if y < 8 {
-		y = 8
+	if y < infoPopoverMargin {
+		y = infoPopoverMargin
 	}
 	popup.ShowAtPosition(fyne.NewPos(x, y))
+}
+
+func infoPopoverWidth(canvasWidth float32) float32 {
+	available := canvasWidth - 2*infoPopoverMargin
+	if available >= infoPopoverPreferredWidth {
+		return infoPopoverPreferredWidth
+	}
+	if available >= infoPopoverMinWidth {
+		return available
+	}
+	return infoPopoverMinWidth
+}
+
+func infoPopoverHeight(body string, canvasHeight float32) float32 {
+	// At the current theme's normal text size, the usable width fits roughly
+	// 43 characters per line. Count explicit paragraphs as well so the popup is
+	// tall enough before the first frame is painted.
+	lines := 0
+	for _, paragraph := range strings.Split(body, "\n") {
+		if paragraph == "" {
+			lines++
+			continue
+		}
+		lines += (len([]rune(paragraph)) + 42) / 43
+	}
+	height := float32(lines*20 + 68)
+	if height < infoPopoverMinHeight {
+		height = infoPopoverMinHeight
+	}
+	if height > infoPopoverMaxHeight {
+		height = infoPopoverMaxHeight
+	}
+	available := canvasHeight - 2*infoPopoverMargin
+	if available > 0 && height > available {
+		height = available
+	}
+	return height
 }
 
 func (b *infoPopoverButton) CreateRenderer() fyne.WidgetRenderer {

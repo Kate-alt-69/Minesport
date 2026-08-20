@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Minesport Dynamic Translator",
     "author": "Kastrick / Minesport",
-    "version": (0, 1, 2),
+    "version": (0, 1, 3),
     "blender": (4, 3, 0),
     "location": "Object Properties > Minesport",
     "description": "One-shot translator for Minesport metadata. Creates Blender-native collections, bones, actions and animated material nodes.",

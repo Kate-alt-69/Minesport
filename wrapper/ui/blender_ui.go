@@ -15,8 +15,10 @@ import (
 )
 
 type blenderInspectorState struct {
-	card *widget.Card
-	mode *widget.Select
+	card       *widget.Card
+	mode       *widget.Select
+	status     *widget.Label
+	statusIcon *widget.Icon
 }
 
 var blenderInspectorStates = struct {
@@ -30,7 +32,7 @@ func buildBlenderInspectorCard(parent fyne.Window, settings Settings) fyne.Canva
 
 	info := newInfoPopoverButton(
 		"Blender animation export",
-		"Animate export prepares every dynamic animation/state descriptor available from Minesport metadata (for example movable parts plus animated textures).\n\nAnimate static keeps interactable state changes at the exported world state and prepares only continuously animated/static-world visuals such as animated textures.\n\nThe final Continuous Animation toggle is created inside Blender's Properties panel, not in Minesport.",
+		"Animate export prepares every dynamic animation/state descriptor available from Minesport metadata (for example movable parts plus animated textures).\n\nAnimate static keeps interactable state changes at the exported world state and prepares only continuously animated/static-world visuals such as animated textures.\n\nFor OBJ, use Minesport's Open with → Blender action or Blender's File → Import → Minesport OBJ. Blender's standard Wavefront OBJ importer bypasses the translator.\n\nThe final Continuous Animation toggle is created inside Blender's Properties panel, not in Minesport.",
 	)
 
 	status := widget.NewLabel(blendertranslator.StatusText())
@@ -50,7 +52,9 @@ func buildBlenderInspectorCard(parent fyne.Window, settings Settings) fyne.Canva
 	}
 
 	blenderInspectorStates.Lock()
-	blenderInspectorStates.values[parent] = &blenderInspectorState{card: card, mode: mode}
+	blenderInspectorStates.values[parent] = &blenderInspectorState{
+		card: card, mode: mode, status: status, statusIcon: statusIcon,
+	}
 	blenderInspectorStates.Unlock()
 
 	return card
@@ -77,9 +81,25 @@ func refreshBlenderInspectorVisibility(parent fyne.Window, enabled bool) {
 		return
 	}
 	if enabled {
+		refreshBlenderInspectorStatus(parent)
 		state.card.Show()
 	} else {
 		state.card.Hide()
+	}
+}
+
+func refreshBlenderInspectorStatus(parent fyne.Window) {
+	blenderInspectorStates.Lock()
+	state := blenderInspectorStates.values[parent]
+	blenderInspectorStates.Unlock()
+	if state == nil || state.status == nil || state.statusIcon == nil {
+		return
+	}
+	state.status.SetText(blendertranslator.StatusText())
+	if blendertranslator.CurrentStatus().Complete() {
+		state.statusIcon.SetResource(theme.ConfirmIcon())
+	} else {
+		state.statusIcon.SetResource(theme.ErrorIcon())
 	}
 }
 

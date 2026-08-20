@@ -813,7 +813,7 @@ public class GeometryBuilder {
                 uv,
                 texture,
                 new float[3],
-                null,
+                faceDef.dir(),
                 -1
             ));
         }

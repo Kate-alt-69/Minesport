@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 
 import bpy
 from mathutils import Vector
@@ -9,10 +10,10 @@ from .metadata import gltf_asset_path, load_sidecar
 def translate_gltf_import(gltf):
     path = gltf_asset_path(gltf)
     metadata = load_sidecar(path) if path else None
-    translate_scene(metadata)
+    translate_scene(metadata, asset_path=path)
 
 
-def translate_scene(metadata=None, objects=None):
+def translate_scene(metadata=None, objects=None, asset_path=None):
     units = bpy.context.scene.unit_settings
     units.system = "METRIC"
     units.length_unit = "METERS"
@@ -29,7 +30,7 @@ def translate_scene(metadata=None, objects=None):
     export_name = _metadata_export_name(metadata) or _detect_export_name(objects)
     collection = _ensure_collection(export_name)
     _move_into_collection(objects, collection)
-    _configure_minecraft_materials(objects)
+    _configure_minecraft_materials(objects, asset_path)
 
     block_records = {}
     if isinstance(metadata, dict):
@@ -68,8 +69,8 @@ def translate_scene(metadata=None, objects=None):
         collection["minesport_animation_mode"] = str(metadata.get("animationMode", "none"))
 
 
-def _configure_minecraft_materials(objects):
-    """Keep Minecraft's pixel art crisp after either glTF or OBJ import."""
+def _configure_minecraft_materials(objects, asset_path=None):
+    """Repair image links, alpha cutouts and pixel filtering after import."""
     seen = set()
     for obj in objects:
         data = getattr(obj, "data", None)
@@ -80,11 +81,61 @@ def _configure_minecraft_materials(objects):
             material.use_nodes = True
             if material.node_tree is None:
                 continue
-            for node in material.node_tree.nodes:
-                if node.bl_idname != "ShaderNodeTexImage":
-                    continue
+            nodes = material.node_tree.nodes
+            links = material.node_tree.links
+            image_nodes = [node for node in nodes if node.bl_idname == "ShaderNodeTexImage"]
+            color_node = _base_color_image_node(material)
+            if color_node is None:
+                color_node = image_nodes[0] if image_nodes else nodes.new("ShaderNodeTexImage")
+            _repair_material_image(material, color_node, asset_path)
+            for node in image_nodes + ([color_node] if color_node not in image_nodes else []):
                 node.interpolation = "Closest"
                 node.extension = "REPEAT"
+
+            bsdf = next((node for node in nodes if node.bl_idname == "ShaderNodeBsdfPrincipled"), None)
+            if bsdf is not None and color_node.image is not None:
+                if not bsdf.inputs["Base Color"].is_linked:
+                    links.new(color_node.outputs["Color"], bsdf.inputs["Base Color"])
+                alpha_input = bsdf.inputs.get("Alpha")
+                if alpha_input is not None:
+                    for link in list(alpha_input.links):
+                        links.remove(link)
+                    links.new(color_node.outputs["Alpha"], alpha_input)
+
+            material.alpha_threshold = 0.5
+            if hasattr(material, "surface_render_method"):
+                material.surface_render_method = "DITHERED"
+            elif hasattr(material, "blend_method"):
+                material.blend_method = "CLIP"
+
+
+def _base_color_image_node(material):
+    for node in material.node_tree.nodes:
+        if node.bl_idname != "ShaderNodeBsdfPrincipled":
+            continue
+        base = node.inputs.get("Base Color")
+        if base and base.is_linked:
+            source = base.links[0].from_node
+            if source.bl_idname == "ShaderNodeTexImage":
+                return source
+    return None
+
+
+def _repair_material_image(material, node, asset_path):
+    if node.image is not None:
+        try:
+            if Path(bpy.path.abspath(node.image.filepath)).is_file():
+                return
+        except Exception:
+            pass
+    if not asset_path or material.name.startswith("MISSING_"):
+        return
+    base_name = material.name
+    if len(base_name) > 4 and base_name[-4] == "." and base_name[-3:].isdigit():
+        base_name = base_name[:-4]
+    candidate = Path(asset_path).resolve().parent / "textures" / f"{base_name}.png"
+    if candidate.is_file():
+        node.image = bpy.data.images.load(str(candidate), check_existing=True)
 
 
 def _find_minesport_objects():

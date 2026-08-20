@@ -199,7 +199,7 @@ func (ms *MinesportApp) buildInspector() fyne.CanvasObject {
 	ms.modeSelect = widget.NewSelect([]string{"Grouped", "Individual blocks", "Merged"}, nil)
 	ms.modeSelect.SetSelected("Grouped")
 	ms.optimizeCheck = widget.NewCheck("Optimize mesh output", nil)
-	ms.optimizeHint = widget.NewLabel("Vertex welding / atlas optimization. Face culling is controlled separately in Basic Settings.")
+	ms.optimizeHint = widget.NewLabel("Vertex welding + safe covered-face removal. Individual blocks remain separate and can be heavy.")
 	ms.optimizeHint.TextStyle = fyne.TextStyle{Italic: true}
 	ms.applyOptimizeGate()
 	exportCard := widget.NewCard("EXPORT", "", container.NewVBox(compactSelectRow("Format", ms.formatSelect), compactSelectRow("Objects", ms.modeSelect), ms.optimizeCheck, ms.optimizeHint))
@@ -504,6 +504,7 @@ func (ms *MinesportApp) startExport(outputPath string) {
 	options := map[string]string{"faceCulling": strconv.FormatBool(ms.settings.OptimizeOutputEnabled), "minecraftVersion": bridgecompat.NormalizeVersion(ms.mcVersion)}
 	if ms.optimizeCheck.Checked {
 		options["optimize"] = "true"
+		options["faceCulling"] = "true"
 	}
 	if ms.settings.HiddenBlockCullingEnabled {
 		options["hiddenBlockCulling"] = "true"
@@ -709,7 +710,7 @@ func (ms *MinesportApp) finishExport(resp ipc.Response, ok bool, msg string) {
 		ms.statusLabel.SetText("Done")
 		ms.stateIcon.SetResource(theme.ConfirmIcon())
 		ms.updateExportProgress(100, "Export complete")
-		ms.updateMetaHUD(fmt.Sprintf("%s blocks · %s faces · ≤%s verts", formatCount(resp.BlockCount), formatCount(resp.QuadCount), formatCount(resp.VertexCount)))
+		ms.updateMetaHUD(fmt.Sprintf("%s blocks · %s faces · %s verts", formatCount(resp.BlockCount), formatCount(resp.QuadCount), formatCount(resp.VertexCount)))
 		if ms.exportWindow != nil {
 			ms.exportWindow.Close()
 			ms.exportWindow = nil
