@@ -191,8 +191,21 @@ public class IpcMode {
                 log("[WARN] minecraft.jar not found — vanilla blocks use fallback geometry");
             }
 
-            ModsLocator.LocatedMods located = ModsLocator.locate(worldFolder);
-            File modsFolder = located != null ? located.modsFolder() : null;
+            String requestedModsPath = getString(request, "modsPath", "").trim();
+            String requestedLoader = getString(request, "modLoader", "").trim();
+            if (!requestedLoader.isEmpty()) {
+                log("Requested mod loader: " + requestedLoader);
+            }
+            File modsFolder = requestedModsPath.isEmpty() ? null : new File(requestedModsPath);
+            if (modsFolder != null && modsFolder.isDirectory()) {
+                log("Using selected instance mods folder: " + modsFolder.getAbsolutePath());
+            } else {
+                if (modsFolder != null) {
+                    log("[WARN] Selected instance mods folder not found: " + modsFolder.getAbsolutePath());
+                }
+                ModsLocator.LocatedMods located = ModsLocator.locate(worldFolder);
+                modsFolder = located != null ? located.modsFolder() : null;
+            }
             if (modsFolder == null) {
                 for (File candidate : ModsLocator.candidatePaths(mcVersion)) {
                     if (candidate.exists()) {

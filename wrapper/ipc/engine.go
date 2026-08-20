@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kastrick/minesport/bridgecompat"
 	"github.com/kastrick/minesport/launcher"
@@ -19,6 +20,8 @@ import (
 type Request struct {
 	Command    string            `json:"command,omitempty"`
 	WorldPath  string            `json:"worldPath,omitempty"`
+	ModsPath   string            `json:"modsPath,omitempty"`
+	ModLoader  string            `json:"modLoader,omitempty"`
 	OutputPath string            `json:"outputPath,omitempty"`
 	Format     string            `json:"format,omitempty"`
 	MinX       int               `json:"minX,omitempty"`
@@ -73,10 +76,11 @@ type Engine struct {
 	OnProgress   func(int, string)
 	OnDone       func(Response)
 	OnError      func(string)
+	OnExit       func(string)
 }
 
 func NewEngine(jarPath string) *Engine {
-	return &Engine{msgCh: make(chan Response, 64), OnLog: func(s string) { fmt.Println("[engine]", s) }, OnProgress: func(int, string) {}, OnDone: func(Response) {}, OnError: func(s string) { fmt.Println("[engine ERROR]", s) }}
+	return &Engine{msgCh: make(chan Response, 64), OnLog: func(s string) { fmt.Println("[engine]", s) }, OnProgress: func(int, string) {}, OnDone: func(Response) {}, OnError: func(s string) { fmt.Println("[engine ERROR]", s) }, OnExit: func(s string) { fmt.Println("[engine EXIT]", s) }}
 }
 
 func (e *Engine) Start(jarPath string) error {
@@ -159,8 +163,12 @@ func (e *Engine) waitForExit(cmd *exec.Cmd) {
 		e.ready = false
 	}
 	e.mu.Unlock()
-	if err != nil && !stopping && e.OnError != nil {
-		e.OnError("Java engine exited unexpectedly: " + err.Error())
+	if !stopping && e.OnExit != nil {
+		message := "Java engine stopped unexpectedly"
+		if err != nil {
+			message += ": " + err.Error()
+		}
+		e.OnExit(message)
 	}
 }
 
@@ -231,6 +239,10 @@ func (e *Engine) Send(req Request) error {
 }
 
 func (e *Engine) SendCommand(payload map[string]interface{}) (*Response, error) {
+	return e.sendCommand(payload, 0)
+}
+
+func (e *Engine) sendCommand(payload map[string]interface{}, timeout time.Duration) (*Response, error) {
 	e.commandMu.Lock()
 	defer e.commandMu.Unlock()
 	e.mu.Lock()
@@ -270,9 +282,23 @@ func (e *Engine) SendCommand(payload map[string]interface{}) (*Response, error) 
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := <-reply
-	if !ok {
-		return nil, fmt.Errorf("engine closed before response to %s", command)
+	var resp Response
+	if timeout > 0 {
+		select {
+		case received, ok := <-reply:
+			if !ok {
+				return nil, fmt.Errorf("engine closed before response to %s", command)
+			}
+			resp = received
+		case <-time.After(timeout):
+			return nil, fmt.Errorf("engine did not respond to %s within %s", command, timeout)
+		}
+	} else {
+		received, ok := <-reply
+		if !ok {
+			return nil, fmt.Errorf("engine closed before response to %s", command)
+		}
+		resp = received
 	}
 	if e.OnLog != nil {
 		detail := ""
@@ -297,6 +323,8 @@ func expectedResponseType(command string) string {
 
 type ExportParams struct {
 	WorldPath                 string
+	ModsPath                  string
+	ModLoader                 string
 	OutputPath                string
 	Format                    string
 	ExportMode                string
@@ -328,9 +356,13 @@ func (e *Engine) exportPrepared(p ExportParams) {
 	if version == "" {
 		version = detectWorldMinecraftVersion(p.WorldPath)
 	}
+	loader := strings.ToLower(strings.TrimSpace(p.ModLoader))
+	if loader == "" {
+		loader = strings.ToLower(strings.TrimSpace(p.Options["modLoader"]))
+	}
 	if version != "" {
 		p.Options["minecraftVersion"] = version
-		if bridgecompat.NeedsPreparation(version) {
+		if loader == "fabric" && bridgecompat.NeedsPreparation(version) {
 			bridge, err := bridgecompat.Ensure(version, func(update bridgecompat.Progress) {
 				if e.OnProgress != nil {
 					e.OnProgress(update.Percent, progressMessage(update))
@@ -343,14 +375,18 @@ func (e *Engine) exportPrepared(p ExportParams) {
 				return
 			}
 			p.Options["bridgeJar"] = bridge
-		} else if bridge, err := bridgecompat.BundledBridge(); err == nil {
-			p.Options["bridgeJar"] = bridge
+		} else if loader == "fabric" || loader == "" {
+			if bridge, err := bridgecompat.BundledBridge(); err == nil {
+				p.Options["bridgeJar"] = bridge
+			} else if e.OnLog != nil {
+				e.OnLog("Bundled bridge not available in this development/portable build: " + err.Error())
+			}
 		} else if e.OnLog != nil {
-			e.OnLog("Bundled bridge not available in this development/portable build: " + err.Error())
+			e.OnLog("Skipping Fabric compatibility bridge for " + loader + " world")
 		}
 	}
 
-	req := Request{Command: "export", WorldPath: p.WorldPath, OutputPath: p.OutputPath, Format: p.Format, MinX: p.MinX, MinY: p.MinY, MinZ: p.MinZ, MaxX: p.MaxX, MaxY: p.MaxY, MaxZ: p.MaxZ, ExportMode: p.ExportMode, Options: p.Options, CenterX: p.CenterX, CenterY: p.CenterY, CenterZ: p.CenterZ, RadiusX: p.RadiusX, RadiusY: p.RadiusY, RadiusZ: p.RadiusZ}
+	req := Request{Command: "export", WorldPath: p.WorldPath, ModsPath: p.ModsPath, ModLoader: p.ModLoader, OutputPath: p.OutputPath, Format: p.Format, MinX: p.MinX, MinY: p.MinY, MinZ: p.MinZ, MaxX: p.MaxX, MaxY: p.MaxY, MaxZ: p.MaxZ, ExportMode: p.ExportMode, Options: p.Options, CenterX: p.CenterX, CenterY: p.CenterY, CenterZ: p.CenterZ, RadiusX: p.RadiusX, RadiusY: p.RadiusY, RadiusZ: p.RadiusZ}
 	if err := e.Send(req); err != nil && e.OnError != nil {
 		e.OnError(err.Error())
 	}
@@ -398,7 +434,16 @@ func (e *Engine) ListBlocks(p ListBlocksParams) (string, int, error) {
 	}
 	return resp.File, resp.Count, nil
 }
-func (e *Engine) Ping() error { return e.Send(Request{Command: "ping"}) }
+func (e *Engine) Ping(timeout time.Duration) error {
+	resp, err := e.sendCommand(map[string]interface{}{"command": "ping"}, timeout)
+	if err != nil {
+		return err
+	}
+	if resp.Type != "pong" {
+		return fmt.Errorf("engine returned %q instead of pong", resp.Type)
+	}
+	return nil
+}
 func (e *Engine) Stop() {
 	e.mu.Lock()
 	defer e.mu.Unlock()

@@ -22,6 +22,7 @@ import (
 )
 
 var diagnosticsDir string
+var diagnosticsLogPath string
 
 func main() {
 	setupDiagnostics()
@@ -72,7 +73,7 @@ func main() {
 		}
 	}
 
-	ui.RunModern(jarPath)
+	ui.RunModern(jarPath, diagnosticsLogPath)
 }
 
 func handleUtilityCommand(args []string) (bool, int) {
@@ -208,8 +209,8 @@ func setupDiagnostics() {
 		diagnosticsDir = os.TempDir()
 	}
 
-	logPath := filepath.Join(diagnosticsDir, "minesport.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	diagnosticsLogPath = filepath.Join(diagnosticsDir, "minesport.log")
+	f, err := os.OpenFile(diagnosticsLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return
 	}
