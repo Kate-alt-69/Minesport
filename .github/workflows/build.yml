@@ -2,7 +2,7 @@ name: Minesport Compile Check
 
 on:
   push:
-    branches: [main, feat/nsis-default-installer]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
