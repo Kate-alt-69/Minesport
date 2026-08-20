@@ -10,8 +10,9 @@ import java.util.*;
  * Reads each .mca file, finds the highest non-air block per column,
  * and maps it to a color for display.
  *
- * Runs fast by reading only the chunk palette + heightmap data,
- * not full block geometry.
+ * Chunk storage is decoded by ChunkBlockDecoder, so the same heightmap path
+ * works for modern palettes, 1.13-1.17 flattened palettes, and legacy numeric
+ * Anvil sections such as Minecraft 1.5.
  */
 public class HeightmapGenerator {
 
@@ -272,69 +273,31 @@ public class HeightmapGenerator {
 
     /**
      * Parse NBT chunk data and return the top-surface block color per column.
-     * Returns int[256][3] (16x16 columns, each with RGB), or null on failure.
+     * The version-aware block decoder is the single source of truth for chunk
+     * layouts, so 2D preview follows the same compatibility rules as export/3D.
      */
     private static int[][] extractSurfaceColors(byte[] nbtBytes) throws IOException {
         var nbt = dev.kastrick.minesport.nbt.NbtReader.readBytes(nbtBytes);
-        if (!nbt.has("sections")) return null;
+        List<BlockData> blocks = ChunkBlockDecoder.decode(
+            nbt,
+            0, 0,
+            0, -2048, 0,
+            15, 2048, 15
+        );
 
-        // Build a column-major map of highest non-air block
-        int[] topY   = new int[256];
+        int[] topY = new int[256];
         int[][] topColor = new int[256][];
         Arrays.fill(topY, Integer.MIN_VALUE);
 
-        for (Object secObj : nbt.getList("sections")) {
-            if (!(secObj instanceof dev.kastrick.minesport.nbt.NbtCompound sec)) continue;
-            if (!sec.has("block_states")) continue;
-
-            int sectionY = sec.getInt("Y", 0);
-            int baseY    = sectionY * 16;
-
-            var bs = sec.getCompound("block_states");
-            if (!bs.has("palette")) continue;
-
-            var palette = bs.getList("palette");
-            long[] data = bs.has("data") ? bs.getLongArray("data") : new long[0];
-
-            // Build palette colors
-            String[] ids    = new String[palette.size()];
-            int[][]  colors = new int[palette.size()][];
-            for (int pi = 0; pi < palette.size(); pi++) {
-                if (!(palette.get(pi) instanceof dev.kastrick.minesport.nbt.NbtCompound e)) continue;
-                ids[pi] = e.getString("Name", "minecraft:air");
-                colors[pi] = colorForBlock(ids[pi]);
-            }
-
-            int bpe = Math.max(4, (int) Math.ceil(Math.log(Math.max(palette.size(), 2)) / Math.log(2)));
-            long mask = (1L << bpe) - 1;
-            int bpl  = 64 / bpe;
-
-            for (int idx = 0; idx < 4096; idx++) {
-                int pi;
-                if (data.length == 0) {
-                    pi = 0;
-                } else {
-                    int li = idx / bpl;
-                    int bi = (idx % bpl) * bpe;
-                    pi = (int) ((data[li] >> bi) & mask);
-                }
-                if (pi >= ids.length) continue;
-                if (ids[pi] == null || isAir(ids[pi])) continue;
-
-                int lx = idx & 0xF;
-                int ly = (idx >> 8) & 0xF;
-                int lz = (idx >> 4) & 0xF;
-                int wy = baseY + ly;
-                int col = lz * 16 + lx;
-
-                if (wy > topY[col]) {
-                    topY[col] = wy;
-                    topColor[col] = colors[pi];
-                }
+        for (BlockData block : blocks) {
+            if (block.x < 0 || block.x > 15 || block.z < 0 || block.z > 15) continue;
+            int col = block.z * 16 + block.x;
+            if (block.y > topY[col]) {
+                topY[col] = block.y;
+                topColor[col] = colorForBlock(block.blockId);
             }
         }
 
-        // Apply simple height shading
         for (int col = 0; col < 256; col++) {
             if (topColor[col] == null) continue;
             float shade = Math.min(1.0f, Math.max(0.4f, (topY[col] + 64) / 200.0f));

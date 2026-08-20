@@ -373,12 +373,16 @@ func (e *Engine) exportPrepared(p ExportParams) {
 				}
 			})
 			if err != nil {
-				if e.OnError != nil {
-					e.OnError("Minecraft " + version + " compatibility preparation failed: " + err.Error())
+				p.Options["bridgeStatus"] = "native-fallback"
+				p.Options["bridgeError"] = err.Error()
+				if e.OnLog != nil {
+					e.OnLog("[WARN] Minecraft " + version + " compatibility bridge could not be prepared: " + err.Error())
+					e.OnLog("Continuing with the native Minesport engine for world decoding and asset fallback")
 				}
-				return
+			} else if strings.TrimSpace(bridge) != "" {
+				p.Options["bridgeJar"] = bridge
+				p.Options["bridgeStatus"] = "ready"
 			}
-			p.Options["bridgeJar"] = bridge
 		} else if loader == "fabric" || loader == "" {
 			if bridge, err := bridgecompat.BundledBridge(); err == nil {
 				p.Options["bridgeJar"] = bridge

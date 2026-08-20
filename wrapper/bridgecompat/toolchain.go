@@ -195,7 +195,37 @@ func javacName() string {
 }
 
 func downloadFile(endpoint, destination string) error {
-	client := &http.Client{Timeout: 30 * time.Minute}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+
+	// The shared retry transport handles connection/TLS/status failures for
+	// normal requests. Large archive downloads also need to retry if the body is
+	// interrupted halfway through, so perform three complete attempts here and
+	// remove partial files between attempts.
+	transport := http.DefaultTransport
+	if retrying, ok := transport.(*retryTransport); ok && retrying.base != nil {
+		transport = retrying.base
+	}
+	client := &http.Client{Timeout: 30 * time.Minute, Transport: transport}
+
+	var lastErr error
+	for attempt := 1; attempt <= downloadAttemptCount; attempt++ {
+		if attempt > 1 {
+			time.Sleep(time.Duration(attempt-1) * 400 * time.Millisecond)
+		}
+		_ = os.Remove(destination)
+		if err := downloadFileAttempt(client, endpoint, destination); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	_ = os.Remove(destination)
+	return fmt.Errorf("download %s failed after %d attempts: %w", endpoint, downloadAttemptCount, lastErr)
+}
+
+func downloadFileAttempt(client *http.Client, endpoint, destination string) error {
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
@@ -209,9 +239,7 @@ func downloadFile(endpoint, destination string) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("HTTP %d downloading %s", resp.StatusCode, endpoint)
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return err
-	}
+
 	file, err := os.Create(destination)
 	if err != nil {
 		return err

@@ -526,67 +526,18 @@ func (ms *MinesportApp) startExport(outputPath string) {
 
 func (ms *MinesportApp) requireBridgeCompatibility(onReady func()) bool {
 	version := bridgecompat.NormalizeVersion(ms.mcVersion)
-	if normalizedLoader(ms.loaderType) != "fabric" {
-		return false
-	}
-	ms.engineStateMu.Lock()
-	installing := ms.compatibilityInstalling
-	ms.engineStateMu.Unlock()
-	if installing {
-		ms.statusLabel.SetText("Compatibility installation already running…")
-		ms.appendLog("Ignored duplicate compatibility request for Minecraft " + version)
-		return true
-	}
-	if version == "" || !bridgecompat.NeedsPreparation(version) {
+	if normalizedLoader(ms.loaderType) != "fabric" || version == "" || !bridgecompat.NeedsPreparation(version) {
 		return false
 	}
 	if bridge, ok := bridgecompat.PreparedBridge(version); ok {
 		ms.appendLog("Compatibility bridge ready: " + bridge)
 		return false
 	}
-	message := fmt.Sprintf("Minesport compatibility for Minecraft %s is not installed.\n\nInstall it now? This one-time setup downloads the matching Java/Gradle/Fabric dependencies and caches the compiled bridge.", version)
-	dialog.NewConfirm("Install Minecraft compatibility", message, func(install bool) {
-		if !install {
-			ms.appendLog("Compatibility installation declined for Minecraft " + version)
-			ms.statusLabel.SetText("Compatibility not installed")
-			return
-		}
-		ms.engineStateMu.Lock()
-		ms.compatibilityInstalling = true
-		ms.engineStateMu.Unlock()
-		ms.exportBtn.Disable()
-		ms.statusLabel.SetText("Installing Minecraft " + version + " compatibility…")
-		ms.stateIcon.SetResource(theme.ViewRefreshIcon())
-		go func() {
-			bridge, err := bridgecompat.Ensure(version, func(update bridgecompat.Progress) {
-				ms.progressBar.SetValue(float64(update.Percent) / 100)
-				ms.statusLabel.SetText(update.Stage)
-				ms.appendLog(fmt.Sprintf("Compatibility %d%%: %s %s", update.Percent, update.Stage, update.Detail))
-			})
-			if err != nil {
-				ms.engineStateMu.Lock()
-				ms.compatibilityInstalling = false
-				ms.engineStateMu.Unlock()
-				ms.appendLog("Compatibility installation failed: " + err.Error())
-				ms.statusLabel.SetText("Compatibility installation failed")
-				ms.stateIcon.SetResource(theme.ErrorIcon())
-				ms.exportBtn.Enable()
-				ms.showOperationFailure("Minecraft compatibility installation failed", fmt.Sprintf("Minecraft %s: %v", version, err))
-				return
-			}
-			ms.engineStateMu.Lock()
-			ms.compatibilityInstalling = false
-			ms.engineStateMu.Unlock()
-			ms.appendLog("Compatibility bridge installed: " + bridge)
-			ms.statusLabel.SetText("Compatibility ready")
-			ms.stateIcon.SetResource(theme.ConfirmIcon())
-			ms.exportBtn.Enable()
-			if onReady != nil {
-				onReady()
-			}
-		}()
-	}, ms.window).Show()
-	return true
+	ms.appendLog("Compatibility bridge for Minecraft " + version + " is not cached; export will try to build it and fall back to the native engine if that fails")
+	if onReady == nil {
+		ms.statusLabel.SetText("Ready · bridge will be attempted on export")
+	}
+	return false
 }
 
 func exportFilesExist(path string) bool {

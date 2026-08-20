@@ -91,9 +91,12 @@ public class ResolverChain {
             if (img != null) return img;
         }
         if (missingTextures.add(texturePath)) {
-            System.err.println("[ResolverChain] No texture found for: " + texturePath);
+            System.err.println(
+                "[ResolverChain] No texture found for: " + texturePath
+                + " — using classic missing texture"
+            );
         }
-        return null;
+        return MissingTexture.image();
     }
 
     private static String normalizeModelPath(String path) {
