@@ -11,6 +11,7 @@ import (
     "strconv"
     "strings"
     "sync"
+    "time"
 
     "fyne.io/fyne/v2"
     "fyne.io/fyne/v2/app"
@@ -206,11 +207,32 @@ func(ms *MinesportApp)showExportProgress(){if ms.exportWindow!=nil{return};w:=ms
 func(ms *MinesportApp)updateExportProgress(pct int,msg string){if ms.exportWindow==nil{return};ms.exportBar.SetValue(float64(pct)/100);ms.exportStage.SetText(msg);blocks:=ms.estimateBlocks();estimatedBlocks:=int(float64(blocks)*float64(pct)/100);verts:=estimatedBlocks*24;data:=estimatedBlocks*80;ms.exportDetail.SetText(fmt.Sprintf("Blocks %s / ~%s",formatCount(estimatedBlocks),formatCount(blocks)));ms.exportStats.SetText(fmt.Sprintf("Estimated vertices  ~%s\nEstimated geometry data  ~%s KB",formatCount(verts),formatCount(data/1024)))}
 func(ms *MinesportApp)estimateBlocks()int{var w,h,d int;if ms.selectionModeSelect.Selected=="Bubble selection"{w=2*ms.radiusX.Int(32)+1;h=2*ms.radiusY.Int(32)+1;d=2*ms.radiusZ.Int(32)+1}else{a,b:=ms.minXRange.Bounds();c,e:=ms.minYRange.Bounds();f,g:=ms.minZRange.Bounds();w=b-a+1;h=e-c+1;d=g-f+1};if w<1{w=1};if h<1{h=1};if d<1{d=1};return w*h*d}
 func(ms *MinesportApp)finishExport(resp ipc.Response,ok bool,msg string){if ok{ms.progressBar.SetValue(1);ms.statusLabel.SetText("Done");ms.stateIcon.SetResource(theme.ConfirmIcon());ms.updateExportProgress(100,"Export complete");ms.updateMetaHUD(fmt.Sprintf("%s blocks · %s faces · ≤%s verts",formatCount(resp.BlockCount),formatCount(resp.QuadCount),formatCount(resp.VertexCount)));if ms.exportWindow!=nil{ms.exportWindow.Close();ms.exportWindow=nil};ms.window.Show();ms.exportBtn.Enable()}else{ms.statusLabel.SetText("Failed");ms.stateIcon.SetResource(theme.ErrorIcon());if ms.exportWindow!=nil{ms.exportStage.SetText("Export failed");ms.exportDetail.SetText(msg);ms.exportWindow.Show()}else{ms.window.Show()};ms.exportBtn.Enable()}}
-func(ms *MinesportApp)generateHeightmap(worldFolder string){resp,err:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":worldFolder,"scale":1});if err!=nil||resp==nil||resp.Type!="heightmap"||resp.Image==""{return};b,err:=base64.StdEncoding.DecodeString(resp.Image);if err!=nil{return};img,_,err:=image.Decode(bytes.NewReader(b));if err!=nil{return};rgba:=image.NewRGBA(img.Bounds());for y:=img.Bounds().Min.Y;y<img.Bounds().Max.Y;y++{for x:=img.Bounds().Min.X;x<img.Bounds().Max.X;x++{rgba.Set(x,y,img.At(x,y))}};ms.worldMap.LoadHeightmap(rgba,resp.MinX,resp.MinZ,resp.MaxX,resp.MaxZ);ms.worldMap.FitToWindow();ms.minXRange.Front.SetText(fmt.Sprintf("%d",resp.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",resp.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",resp.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",resp.MaxZ))}
-func(ms *MinesportApp)appendLog(msg string){ms.mu.Lock();defer ms.mu.Unlock();if ms.logContent==nil{return};lines:=strings.Split(ms.logContent.Text,"\n");if len(lines)>200{lines=lines[len(lines)-200:]};lines=append(lines,msg);ms.logContent.SetText(strings.Join(lines,"\n"));if ms.logScroll!=nil{ms.logScroll.ScrollToBottom()}}
+func(ms *MinesportApp)generateHeightmap(worldFolder string){
+    ms.appendLog("Heightmap request: "+worldFolder)
+    resp,err:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":worldFolder,"scale":1})
+    if err!=nil{ms.appendLog("Heightmap IPC failed: "+err.Error());ms.statusLabel.SetText("Heightmap failed — see Debug Console");ms.stateIcon.SetResource(theme.ErrorIcon());return}
+    if resp==nil{ms.appendLog("Heightmap failed: engine returned no response");return}
+    if resp.Type=="error"{ms.appendLog("Heightmap engine error: "+resp.Message);ms.statusLabel.SetText("Heightmap failed — see Debug Console");ms.stateIcon.SetResource(theme.ErrorIcon());return}
+    if resp.Type!="heightmap"{ms.appendLog("Heightmap failed: unexpected response type "+resp.Type);return}
+    if resp.Image==""{ms.appendLog("Heightmap failed: response contained no image");return}
+    ms.appendLog(fmt.Sprintf("Heightmap response: %d base64 bytes, bounds X %d..%d Z %d..%d, scale %d",len(resp.Image),resp.MinX,resp.MaxX,resp.MinZ,resp.MaxZ,resp.Scale))
+    b,err:=base64.StdEncoding.DecodeString(resp.Image);if err!=nil{ms.appendLog("Heightmap base64 decode failed: "+err.Error());return}
+    img,_,err:=image.Decode(bytes.NewReader(b));if err!=nil{ms.appendLog("Heightmap PNG decode failed: "+err.Error());return}
+    rgba:=image.NewRGBA(img.Bounds());for y:=img.Bounds().Min.Y;y<img.Bounds().Max.Y;y++{for x:=img.Bounds().Min.X;x<img.Bounds().Max.X;x++{rgba.Set(x,y,img.At(x,y))}}
+    ms.worldMap.LoadHeightmap(rgba,resp.MinX,resp.MinZ,resp.MaxX,resp.MaxZ);ms.worldMap.FitToWindow();ms.minXRange.Front.SetText(fmt.Sprintf("%d",resp.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",resp.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",resp.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",resp.MaxZ));ms.statusLabel.SetText("Heightmap ready");ms.stateIcon.SetResource(theme.ConfirmIcon())
+}
+func(ms *MinesportApp)appendLog(msg string){ms.mu.Lock();defer ms.mu.Unlock();if ms.logContent==nil{return};lines:=strings.Split(ms.logContent.Text,"\n");if len(lines)>2000{lines=lines[len(lines)-2000:]};for _,line:=range strings.Split(msg,"\n"){lines=append(lines,time.Now().Format("15:04:05.000")+"  "+line)};ms.logContent.SetText(strings.Join(lines,"\n"));if ms.logScroll!=nil{ms.logScroll.ScrollToBottom()}}
 func(ms *MinesportApp)onOpenSettings(){ShowSettingsDialog(ms.window,ms.settings,ms.applySettings)}
 func(ms *MinesportApp)applySettings(s Settings){was:=ms.settings.DebugMode;ms.settings=s;if err:=s.Save();err!=nil{ms.appendLog(err.Error())};if s.DebugMode&&!was{ms.openDebugConsole()}else if !s.DebugMode&&was{ms.closeDebugConsole()};ms.applyOptimizeGate()}
-func(ms *MinesportApp)openDebugConsole(){if ms.debugWindow!=nil{return};w:=ms.fyneApp.NewWindow("Minesport — Debug Console");w.SetContent(container.NewPadded(ms.logScroll));w.Resize(fyne.NewSize(640,360));ms.debugWindow=w;w.Show()}
+func(ms *MinesportApp)openDebugConsole(){
+    if ms.debugWindow!=nil{return}
+    w:=ms.fyneApp.NewWindow("Minesport — Debug Console")
+    copyBtn:=widget.NewButtonWithIcon("Copy all",theme.ContentCopyIcon(),func(){w.Clipboard().SetContent(ms.logContent.Text);ms.statusLabel.SetText("Debug log copied")})
+    clearBtn:=widget.NewButtonWithIcon("Clear",theme.DeleteIcon(),func(){ms.mu.Lock();ms.logContent.SetText("");ms.mu.Unlock()})
+    toolbar:=container.NewHBox(copyBtn,clearBtn)
+    w.SetContent(container.NewBorder(container.NewPadded(toolbar),nil,nil,nil,container.NewPadded(ms.logScroll)))
+    w.Resize(fyne.NewSize(760,440));ms.debugWindow=w;w.Show()
+}
 func(ms *MinesportApp)closeDebugConsole(){if ms.debugWindow!=nil{ms.debugWindow.Close();ms.debugWindow=nil}}
 func(ms *MinesportApp)syncBubblePreview(){if ms.worldMap==nil{return};ms.worldMap.SetBubbleCenter(ms.centerX.Int(0),ms.centerZ.Int(0));ms.worldMap.SetBubbleRadius(ms.radiusX.Int(32),ms.radiusZ.Int(32))}
 func(ms *MinesportApp)detectWorldMeta(path string)string{for _,l:=range launcher.DiscoverAll(){for _,i:=range launcher.DiscoverInstances(l){if strings.HasPrefix(path,i.MinecraftDir){ms.mcVersion=i.Version;ms.loaderType=string(i.Loader);poly:="";if i.HasPolymer(){poly=" · Polymer"};return fmt.Sprintf("MC %s · %s%s",i.Version,i.Loader,poly)}}};return "Minecraft world"}
