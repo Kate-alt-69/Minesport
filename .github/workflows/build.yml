@@ -361,10 +361,11 @@ jobs:
         run: |
           $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.0-x64.msi'
           $installLog = Join-Path $env:RUNNER_TEMP 'minesport-msi-install.log'
-          & msiexec.exe /i $msi /qn /norestart /l*v $installLog
-          $installCode = $LASTEXITCODE
+          $installArgs = @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$installLog`"")
+          $installProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $installArgs -Wait -PassThru
+          $installCode = $installProcess.ExitCode
           if ($installCode -notin @(0, 3010)) {
-            Get-Content $installLog -Tail 200
+            if (Test-Path $installLog) { Get-Content $installLog -Tail 200 }
             throw "MSI installation failed with exit code $installCode."
           }
 
@@ -378,10 +379,11 @@ jobs:
           }
 
           $uninstallLog = Join-Path $env:RUNNER_TEMP 'minesport-msi-uninstall.log'
-          & msiexec.exe /x $msi /qn /norestart /l*v $uninstallLog
-          $uninstallCode = $LASTEXITCODE
+          $uninstallArgs = @('/x', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$uninstallLog`"")
+          $uninstallProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $uninstallArgs -Wait -PassThru
+          $uninstallCode = $uninstallProcess.ExitCode
           if ($uninstallCode -notin @(0, 3010)) {
-            Get-Content $uninstallLog -Tail 200
+            if (Test-Path $uninstallLog) { Get-Content $uninstallLog -Tail 200 }
             throw "MSI uninstall failed with exit code $uninstallCode."
           }
       - uses: actions/upload-artifact@v7
