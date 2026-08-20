@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fabric-bridge-legacy:
-    name: Fabric bridge · 1.21.10 · Java 21
+  fabric-bridge-bundled:
+    name: Bundled bridge · 1.21.9–1.21.10 · Java 21
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -34,66 +34,88 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Compile and test legacy bridge
+      - name: Prove 1.21.9 compatibility from the shared source
         working-directory: bridge
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace clean build
+          ./gradlew --no-daemon --stacktrace clean build \
+            -Pminecraft_version=1.21.9 \
+            -Ploader_version=0.18.5 \
+            '-Pfabric_version=0.134.1+1.21.9'
 
-      - name: Upload legacy bridge JAR
+      - name: Build the bundled 1.21.10 bridge
+        working-directory: bridge
+        run: ./gradlew --no-daemon --stacktrace clean build
+
+      - name: Stage bundled bridge
+        shell: bash
+        run: |
+          mkdir -p dist/bundled-bridge
+          jar="$(find bridge/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' | head -n 1)"
+          if [ -z "$jar" ]; then
+            echo 'ERROR: remapped 1.21.10 bridge JAR was not produced' >&2
+            exit 1
+          fi
+          cp "$jar" dist/bundled-bridge/minesport-bridge-0.1.0.jar
+
+      - name: Upload bundled bridge
         uses: actions/upload-artifact@v7
         with:
           name: fabric-bridge-1.21.10
-          path: bridge/build/libs/*.jar
+          path: dist/bundled-bridge/minesport-bridge-0.1.0.jar
           if-no-files-found: error
           retention-days: 7
 
-  fabric-bridge-26:
-    name: Fabric bridge · ${{ matrix.minecraft }} · Java 25
+  fabric-bridge-recipes:
+    name: Dynamic recipe · ${{ matrix.minecraft }} · Java ${{ matrix.java }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         include:
+          - minecraft: '1.21.11'
+            java: '21'
           - minecraft: '26.2'
-            fabric_api: '0.157.0+26.2'
+            java: '25'
           - minecraft: '26.3-snapshot-7'
-            fabric_api: '0.157.0+26.3'
+            java: '25'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Set up Java 25
+      - name: Set up Java ${{ matrix.java }}
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: ${{ matrix.java }}
 
-      - name: Set up Gradle 9.5.1
-        uses: gradle/actions/setup-gradle@v6
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@v7
         with:
-          gradle-version: '9.5.1'
+          go-version-file: wrapper/go.mod
+          cache-dependency-path: wrapper/go.sum
 
-      - name: Compile modern bridge
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Prepare and compile from 1.21.10 source + JSON recipe
+        working-directory: wrapper
+        env:
+          MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
+          MINESPORT_BRIDGE_DATA: ${{ runner.temp }}/minesport-bridge-data
         run: |
-          gradle -p bridge26 clean build \
-            "-Pminecraft_version=${{ matrix.minecraft }}" \
-            "-Ploader_version=0.19.3" \
-            "-Pfabric_api_version=${{ matrix.fabric_api }}" \
-            "-Ploom_version=1.17.18" \
-            --no-daemon \
-            --stacktrace
+          go run ./cmd/bridge-prepare \
+            -version '${{ matrix.minecraft }}' \
+            -output ../dist/recipe-bridges
 
-      - name: Upload modern bridge JAR
+      - name: Upload recipe-built bridge
         uses: actions/upload-artifact@v7
         with:
-          name: fabric-bridge-${{ matrix.minecraft }}
-          path: |
-            bridge26/build/libs/*.jar
-            !bridge26/build/libs/*-sources.jar
+          name: fabric-bridge-recipe-${{ matrix.minecraft }}
+          path: dist/recipe-bridges/*.jar
           if-no-files-found: error
           retention-days: 7
 
@@ -257,9 +279,7 @@ jobs:
       - name: Validate build script syntax
         if: runner.os == 'Linux'
         shell: bash
-        run: |
-          bash -n build.sh
-          bash -n bridge26/tools/build-target.sh
+        run: bash -n build.sh
 
       - name: Validate PowerShell scripts
         if: runner.os == 'Windows'
@@ -267,7 +287,6 @@ jobs:
         run: |
           $files = @(
             (Join-Path $env:GITHUB_WORKSPACE 'build.ps1'),
-            (Join-Path $env:GITHUB_WORKSPACE 'bridge26\tools\build-target.ps1'),
             (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\install-blender.ps1')
           )
           foreach ($file in $files) {
@@ -295,7 +314,9 @@ jobs:
 
   windows-installer:
     name: Windows installers · MSI + EXE
-    needs: wrapper
+    needs:
+      - wrapper
+      - fabric-bridge-bundled
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -310,6 +331,12 @@ jobs:
           name: minesport-Windows-X64
           path: wrapper/dist
 
+      - name: Download bundled 1.21.10 bridge
+        uses: actions/download-artifact@v7
+        with:
+          name: fabric-bridge-1.21.10
+          path: dist/bundled-bridge
+
       - name: Locate WiX and Inno Setup
         shell: pwsh
         run: |
@@ -319,8 +346,7 @@ jobs:
           )
           $wix = $wixCandidates | Where-Object {
             (Test-Path (Join-Path $_ 'candle.exe')) -and
-            (Test-Path (Join-Path $_ 'light.exe')) -and
-            (Test-Path (Join-Path $_ 'heat.exe'))
+            (Test-Path (Join-Path $_ 'light.exe'))
           } | Select-Object -First 1
           if (-not $wix) { throw 'WiX 3.x was not found on the Windows runner.' }
 
@@ -335,19 +361,6 @@ jobs:
           "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path (Join-Path $env:GITHUB_WORKSPACE 'dist\installer') | Out-Null
 
-      - name: Harvest Fabric 26.x bridge sources for MSI
-        shell: pwsh
-        run: |
-          & (Join-Path $env:WIX_BIN 'heat.exe') dir (Join-Path $env:GITHUB_WORKSPACE 'bridge26') `
-            -cg Bridge26Files `
-            -dr BRIDGE26DIR `
-            -gg `
-            -sfrag `
-            -srd `
-            -var var.BridgeSource `
-            -out (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\Bridge26Files.wxs')
-          if ($LASTEXITCODE -ne 0) { throw 'WiX heat failed.' }
-
       - name: Build MSI
         shell: pwsh
         run: |
@@ -355,17 +368,16 @@ jobs:
           try {
             & (Join-Path $env:WIX_BIN 'candle.exe') `
               -arch x64 `
+              -ext WixUtilExtension `
               "-dSourceDir=$env:GITHUB_WORKSPACE" `
-              "-dBridgeSource=$env:GITHUB_WORKSPACE\bridge26" `
-              Product.wxs `
-              Bridge26Files.wxs
+              Product.wxs
             if ($LASTEXITCODE -ne 0) { throw 'WiX candle failed.' }
 
             & (Join-Path $env:WIX_BIN 'light.exe') `
               -ext WixUIExtension `
+              -ext WixUtilExtension `
               -out (Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.0-x64.msi') `
-              Product.wixobj `
-              Bridge26Files.wixobj
+              Product.wixobj
             if ($LASTEXITCODE -ne 0) { throw 'WiX light failed.' }
           } finally {
             Pop-Location
@@ -400,8 +412,8 @@ jobs:
     name: Compile cleanly
     if: always()
     needs:
-      - fabric-bridge-legacy
-      - fabric-bridge-26
+      - fabric-bridge-bundled
+      - fabric-bridge-recipes
       - java-engine
       - blender-translator
       - wrapper
@@ -409,8 +421,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      LEGACY_BRIDGE_RESULT: ${{ needs.fabric-bridge-legacy.result }}
-      MODERN_BRIDGE_RESULT: ${{ needs.fabric-bridge-26.result }}
+      BUNDLED_BRIDGE_RESULT: ${{ needs.fabric-bridge-bundled.result }}
+      RECIPE_BRIDGE_RESULT: ${{ needs.fabric-bridge-recipes.result }}
       ENGINE_RESULT: ${{ needs.java-engine.result }}
       TRANSLATOR_RESULT: ${{ needs.blender-translator.result }}
       WRAPPER_RESULT: ${{ needs.wrapper.result }}
@@ -418,28 +430,28 @@ jobs:
     steps:
       - name: Report compile status
         run: |
-          echo "Legacy Fabric bridge: $LEGACY_BRIDGE_RESULT"
-          echo "26.x Fabric bridge:   $MODERN_BRIDGE_RESULT"
-          echo "Java engine:          $ENGINE_RESULT"
-          echo "Blender translator:   $TRANSLATOR_RESULT"
-          echo "Wrapper matrix:       $WRAPPER_RESULT"
-          echo "Windows installers:   $INSTALLER_RESULT"
+          echo "Bundled bridge:      $BUNDLED_BRIDGE_RESULT"
+          echo "Dynamic recipes:     $RECIPE_BRIDGE_RESULT"
+          echo "Java engine:         $ENGINE_RESULT"
+          echo "Blender translator:  $TRANSLATOR_RESULT"
+          echo "Wrapper matrix:      $WRAPPER_RESULT"
+          echo "Windows installers:  $INSTALLER_RESULT"
 
           {
             echo "## Minesport compile report"
             echo
             echo "| Component | Result |"
             echo "|---|---|"
-            echo "| Fabric bridge · 1.21.10 | $LEGACY_BRIDGE_RESULT |"
-            echo "| Fabric bridge · 26.2 + 26.3 snapshot | $MODERN_BRIDGE_RESULT |"
+            echo "| Bundled bridge · 1.21.9–1.21.10 | $BUNDLED_BRIDGE_RESULT |"
+            echo "| JSON recipes · 1.21.11 + 26.2 + 26.3 snapshot | $RECIPE_BRIDGE_RESULT |"
             echo "| Java engine | $ENGINE_RESULT |"
             echo "| Blender translator | $TRANSLATOR_RESULT |"
             echo "| Wrapper: Linux + Windows + macOS | $WRAPPER_RESULT |"
             echo "| Windows MSI + setup EXE | $INSTALLER_RESULT |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$LEGACY_BRIDGE_RESULT" = "success" ] && \
-             [ "$MODERN_BRIDGE_RESULT" = "success" ] && \
+          if [ "$BUNDLED_BRIDGE_RESULT" = "success" ] && \
+             [ "$RECIPE_BRIDGE_RESULT" = "success" ] && \
              [ "$ENGINE_RESULT" = "success" ] && \
              [ "$TRANSLATOR_RESULT" = "success" ] && \
              [ "$WRAPPER_RESULT" = "success" ] && \

@@ -1,11 +1,11 @@
 plugins {
-    id 'fabric-loom' version '1.11.7'
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
     id 'java'
 }
 
 group = project.maven_group
 version = project.mod_version
-base.archivesName = project.archives_base_name
+base.archivesName = project.archives_base_name + '-' + project.minecraft_version
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21
@@ -15,7 +15,6 @@ java {
 
 loom {
     splitEnvironmentSourceSets()
-
     mods {
         "minesport_bridge" {
             sourceSet sourceSets.main
@@ -25,7 +24,7 @@ loom {
 }
 
 repositories {
-    maven { url 'https://maven.fabricmc.net/' }
+    maven { url = 'https://maven.fabricmc.net/' }
     mavenCentral()
 }
 
@@ -38,9 +37,10 @@ dependencies {
 
 processResources {
     inputs.property 'version', project.version
+    inputs.property 'minecraft_version', project.minecraft_version
     filteringCharset 'UTF-8'
     filesMatching('fabric.mod.json') {
-        expand 'version': project.version
+        expand(version: project.version, minecraft_version: project.minecraft_version)
     }
 }
 

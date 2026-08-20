@@ -3,16 +3,16 @@
   "id": "minesport_bridge",
   "version": "${version}",
   "name": "Minesport Bridge",
-  "description": "Headless bridge mod — dumps block geometry and textures to Minesport engine via local socket. Auto-exits after dump. Not intended for normal gameplay.",
+  "description": "Dynamically prepared Minesport bridge for Minecraft ${minecraft_version}.",
   "authors": ["Kastrick"],
   "environment": "client",
   "entrypoints": {
     "client": ["dev.kastrick.minesport.bridge.MinesportBridge"]
   },
   "depends": {
-    "fabricloader": ">=0.18.5",
+    "fabricloader": ">=0.19.0",
     "fabric-api": "*",
-    "minecraft": ">=1.21.9 <=1.21.10",
+    "minecraft": "${minecraft_version}",
     "java": ">=21"
   },
   "suggests": {

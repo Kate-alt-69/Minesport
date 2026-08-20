@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Product
       Id="*"
       Name="Minesport"
@@ -23,48 +24,82 @@
     </Condition>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="Minesport">
-          <Component Id="MainExecutable" Guid="*">
-            <File
-                Id="MinesportExe"
-                Source="$(var.SourceDir)\wrapper\dist\minesport.exe"
-                KeyPath="yes">
-              <Shortcut
-                  Id="StartMenuShortcut"
-                  Directory="CommonProgramsFolder"
-                  Name="Minesport"
-                  WorkingDirectory="INSTALLFOLDER"
-                  Advertise="no" />
-              <Shortcut
-                  Id="DesktopShortcut"
-                  Directory="CommonDesktopFolder"
-                  Name="Minesport"
-                  WorkingDirectory="INSTALLFOLDER"
-                  Advertise="no" />
-            </File>
-          </Component>
-
-          <Directory Id="TOOLS" Name="tools">
-            <Component Id="BlenderInstallerHelper" Guid="*">
+      <Directory Id="UserProfileFolder">
+        <Directory Id="KastrickUserFolder" Name="kastrick's_software">
+          <Directory Id="INSTALLFOLDER" Name="minesport">
+            <Component Id="MainExecutable" Guid="*">
               <File
-                  Id="BlenderInstallScript"
-                  Source="$(var.SourceDir)\installer\windows\install-blender.ps1"
-                  KeyPath="yes" />
+                  Id="MinesportExe"
+                  Source="$(var.SourceDir)\wrapper\dist\minesport.exe"
+                  KeyPath="yes">
+                <Shortcut
+                    Id="StartMenuShortcut"
+                    Directory="ProgramMenuFolder"
+                    Name="Minesport"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Advertise="no" />
+                <Shortcut
+                    Id="DesktopShortcut"
+                    Directory="DesktopFolder"
+                    Name="Minesport"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Advertise="no" />
+              </File>
             </Component>
-          </Directory>
 
-          <Directory Id="BRIDGE26DIR" Name="bridge26" />
+            <Directory Id="TOOLS" Name="tools">
+              <Component Id="BlenderInstallerHelper" Guid="*">
+                <File
+                    Id="BlenderInstallScript"
+                    Source="$(var.SourceDir)\installer\windows\install-blender.ps1"
+                    KeyPath="yes" />
+              </Component>
+            </Directory>
+          </Directory>
         </Directory>
       </Directory>
 
-      <Directory Id="CommonProgramsFolder" />
-      <Directory Id="CommonDesktopFolder" />
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="KastrickProgramFiles" Name="kastrick's_software">
+          <Directory Id="BridgeSupportRoot" Name="minesport">
+            <Directory Id="BridgeDataDir" Name="bridge-data">
+              <Component Id="BridgeManifest" Guid="*">
+                <File
+                    Id="BridgeManifestFile"
+                    Source="$(var.SourceDir)\bridge-versions\manifest.json"
+                    KeyPath="yes" />
+              </Component>
+              <Directory Id="BundledBridgeRoot" Name="bundled">
+                <Directory Id="BundledBridge12110" Name="1.21.10">
+                  <Component Id="BundledBridge" Guid="*">
+                    <File
+                        Id="BundledBridgeJar"
+                        Source="$(var.SourceDir)\dist\bundled-bridge\minesport-bridge-0.1.0.jar"
+                        KeyPath="yes" />
+                  </Component>
+                </Directory>
+              </Directory>
+              <Directory Id="CompiledBridgeDir" Name="compiled">
+                <Component Id="CompiledBridgeCache" Guid="*">
+                  <CreateFolder>
+                    <util:PermissionEx User="Users" GenericAll="yes" />
+                  </CreateFolder>
+                </Component>
+              </Directory>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
     </Directory>
 
     <Feature Id="CoreFeature" Title="Minesport" Level="1" Absent="disallow">
       <ComponentRef Id="MainExecutable" />
-      <ComponentGroupRef Id="Bridge26Files" />
+      <ComponentRef Id="BridgeManifest" />
+      <ComponentRef Id="BundledBridge" />
+      <ComponentRef Id="CompiledBridgeCache" />
     </Feature>
 
     <Feature
@@ -79,14 +114,6 @@
         Id="TranslatorFeature"
         Title="Minesport Blender translator"
         Description="Installs the one-shot Minesport translator into detected Blender 4.3+ profiles."
-        Level="2">
-      <ComponentRef Id="MainExecutable" />
-    </Feature>
-
-    <Feature
-        Id="BridgeBuildFeature"
-        Title="Compile Fabric 26.x bridge(s)"
-        Description="Compiles Minesport bridges for detected Minecraft 26.x Fabric installations on this computer."
         Level="2">
       <ComponentRef Id="MainExecutable" />
     </Feature>
@@ -112,23 +139,12 @@
         Impersonate="yes"
         Return="ignore" />
 
-    <CustomAction
-        Id="BuildDetectedBridges"
-        Directory="INSTALLFOLDER"
-        ExeCommand='&quot;[INSTALLFOLDER]minesport.exe&quot; --build-bridges-detected'
-        Execute="deferred"
-        Impersonate="yes"
-        Return="ignore" />
-
     <InstallExecuteSequence>
       <Custom Action="InstallBlender" After="InstallFiles">
         NOT Installed AND (&amp;BlenderFeature=3)
       </Custom>
       <Custom Action="InstallTranslator" After="InstallBlender">
         NOT Installed AND (&amp;TranslatorFeature=3)
-      </Custom>
-      <Custom Action="BuildDetectedBridges" After="InstallTranslator">
-        NOT Installed AND (&amp;BridgeBuildFeature=3)
       </Custom>
     </InstallExecuteSequence>
   </Product>

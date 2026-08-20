@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "repository": "Kate-alt-69/Minesport",
+  "ref": "main",
+  "base": {
+    "version": "1.21.10",
+    "compatible": ["1.21.9", "1.21.10"],
+    "source_root": "bridge",
+    "bundled_jar": "minesport-bridge-0.1.0.jar",
+    "java": 21,
+    "files": [
+      "build.gradle",
+      "settings.gradle",
+      "gradle.properties",
+      "gradlew",
+      "gradlew.bat",
+      "gradle/wrapper/gradle-wrapper.jar",
+      "gradle/wrapper/gradle-wrapper.properties",
+      "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java",
+      "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java",
+      "src/client/java/dev/kastrick/minesport/bridge/registry/TextureExtractor.java",
+      "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java",
+      "src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java",
+      "src/main/resources/fabric.mod.json"
+    ]
+  },
+  "profiles": [
+    {
+      "id": "1.21.11",
+      "match": "^1\\.21\\.11$",
+      "patch": "bridge-versions/1.21.11/patch.json",
+      "java": 21,
+      "gradle": "9.5.1",
+      "loom": "1.17.18",
+      "loader": "dynamic",
+      "fabric_api": "dynamic"
+    },
+    {
+      "id": "26.x",
+      "match": "^26\\.",
+      "patch": "bridge-versions/26.x/patch.json",
+      "java": 25,
+      "gradle": "9.5.1",
+      "loom": "1.17.18",
+      "loader": "dynamic",
+      "fabric_api": "dynamic"
+    }
+  ]
+}

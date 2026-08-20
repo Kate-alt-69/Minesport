@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "description": "Adapt the 1.21.10 bridge base to Minecraft 1.21.11 without duplicating Java source.",
+  "operations": [
+    {"op": "set_property", "file": "gradle.properties", "key": "minecraft_version", "value": "${minecraft_version}"},
+    {"op": "set_property", "file": "gradle.properties", "key": "loader_version", "value": "${loader_version}"},
+    {"op": "set_property", "file": "gradle.properties", "key": "fabric_version", "value": "${fabric_api_version}"},
+    {"op": "set_property", "file": "gradle.properties", "key": "loom_version", "value": "${loom_version}"},
+    {"op": "replace", "file": "gradle/wrapper/gradle-wrapper.properties", "from": "gradle-8.14-bin.zip", "to": "gradle-${gradle_version}-bin.zip"},
+    {"op": "overlay", "source": "bridge-versions/1.21.11/overlays/build.gradle", "target": "build.gradle"},
+    {"op": "overlay", "source": "bridge-versions/1.21.11/overlays/fabric.mod.json", "target": "src/main/resources/fabric.mod.json"}
+  ]
+}
