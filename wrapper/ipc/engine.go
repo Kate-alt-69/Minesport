@@ -105,6 +105,9 @@ func (e *Engine) Start(jarPath string) error {
 	if err := e.cmd.Start(); err != nil {
 		return fmt.Errorf("start java: %w", err)
 	}
+	if e.OnLog != nil {
+		e.OnLog(fmt.Sprintf("Started Java engine (PID %d) with %s", e.cmd.Process.Pid, javaExe))
+	}
 	go e.readLoop(newIPCScanner(stdout))
 	go e.readStderrLoop(newIPCScanner(stderr))
 	go e.dispatch()
@@ -239,6 +242,9 @@ func (e *Engine) SendCommand(payload map[string]interface{}) (*Response, error) 
 
 	command, _ := payload["command"].(string)
 	expected := expectedResponseType(command)
+	if e.OnLog != nil {
+		e.OnLog("IPC -> " + command)
+	}
 	reply := make(chan Response, 1)
 	e.pendingMu.Lock()
 	e.pendingReply = reply
@@ -266,7 +272,14 @@ func (e *Engine) SendCommand(payload map[string]interface{}) (*Response, error) 
 	}
 	resp, ok := <-reply
 	if !ok {
-		return nil, fmt.Errorf("engine closed before response")
+		return nil, fmt.Errorf("engine closed before response to %s", command)
+	}
+	if e.OnLog != nil {
+		detail := ""
+		if resp.Image != "" {
+			detail = fmt.Sprintf(" (%d image bytes)", len(resp.Image))
+		}
+		e.OnLog("IPC <- " + resp.Type + detail)
 	}
 	return &resp, nil
 }
