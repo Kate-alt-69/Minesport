@@ -68,6 +68,12 @@ public class NbtCompound {
         throw new NbtException("Expected byte at key: " + key);
     }
 
+    public byte[] getByteArray(String key) {
+        Object v = tags.get(key);
+        if (v instanceof byte[] ba) return ba;
+        throw new NbtException("Expected byte array at key: " + key);
+    }
+
     public long[] getLongArray(String key) {
         Object v = tags.get(key);
         if (v instanceof long[] la) return la;
