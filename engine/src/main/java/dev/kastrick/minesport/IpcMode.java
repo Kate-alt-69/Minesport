@@ -539,8 +539,16 @@ public class IpcMode {
                 json.addProperty("scale", scale);
             });
         } catch (Exception exception) {
-            error("Heightmap failed: " + exception.getMessage());
+            error(failureDetails("Heightmap failed", exception));
         }
+    }
+
+    private static String failureDetails(String context, Throwable failure) {
+        StringWriter stack = new StringWriter();
+        failure.printStackTrace(new PrintWriter(stack));
+        String message = failure.getMessage();
+        if (message == null || message.isBlank()) message = failure.getClass().getName();
+        return context + ": " + message + "\n" + stack;
     }
 
     private static void handleListBlocks(JsonObject request) {
@@ -640,7 +648,7 @@ public class IpcMode {
                 json.addProperty("count", count);
             });
         } catch (Exception exception) {
-            error("List blocks failed: " + exception.getMessage());
+            error(failureDetails("List blocks failed", exception));
         } finally {
             if (tempWorldCopy != null) WorldCopier.cleanupTemp(tempWorldCopy);
         }
