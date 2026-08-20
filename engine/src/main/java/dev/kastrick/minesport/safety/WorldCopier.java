@@ -3,6 +3,7 @@ package dev.kastrick.minesport.safety;
 import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.*;
 import java.util.function.Consumer;
 
 /**
@@ -10,6 +11,10 @@ import java.util.function.Consumer;
  * This ensures we NEVER touch the original world files.
  */
 public class WorldCopier {
+    private static final List<String> OVERWORLD_REGION_PATHS = List.of(
+        "dimensions" + File.separator + "minecraft" + File.separator + "overworld" + File.separator + "region",
+        "region"
+    );
 
     /**
      * Copy a world folder into the system temp directory.
@@ -29,14 +34,80 @@ public class WorldCopier {
             statusCallback.accept("Creating temp copy at: " + tempDir.getAbsolutePath());
         }
 
-        // We only need region files + level.dat — skip logs, crash reports etc
+        // We only need region files + level.dat — skip logs, crash reports etc.
         copySelective(worldFolder.toPath(), tempDir.toPath(), statusCallback);
+
+        // Existing engine readers expect the Overworld at temp/region. Keep the
+        // copied source layout intact, then mirror the preferred Overworld there.
+        // Minecraft 26.1+ uses dimensions/minecraft/overworld/region; modern
+        // storage wins if a stale legacy world/region directory also exists.
+        mirrorPreferredOverworldRegion(worldFolder, tempDir, statusCallback);
 
         if (statusCallback != null) {
             statusCallback.accept("World copy complete.");
         }
 
         return tempDir;
+    }
+
+    /**
+     * Locate the active Overworld region directory. Modern 26.1+ storage is
+     * checked first, then the legacy world/region layout.
+     */
+    public static File findOverworldRegionDir(File worldFolder) throws IOException {
+        List<String> checked = new ArrayList<>();
+        for (String relativePath : OVERWORLD_REGION_PATHS) {
+            File candidate = new File(worldFolder, relativePath);
+            checked.add(candidate.getAbsolutePath());
+            if (hasRegionFiles(candidate)) {
+                return candidate;
+            }
+        }
+        throw new IOException(
+            "No Overworld region files found; checked: " + String.join(", ", checked)
+        );
+    }
+
+    private static boolean hasRegionFiles(File directory) {
+        if (!directory.isDirectory()) return false;
+        File[] files = directory.listFiles(file ->
+            file.isFile() && (file.getName().endsWith(".mca") || file.getName().endsWith(".mcr"))
+        );
+        return files != null && files.length > 0;
+    }
+
+    private static void mirrorPreferredOverworldRegion(
+        File worldFolder,
+        File tempDir,
+        Consumer<String> log
+    ) throws IOException {
+        File sourceRegion = findOverworldRegionDir(worldFolder);
+        Path destination = tempDir.toPath().resolve("region");
+
+        if (Files.exists(destination)) {
+            deleteTree(destination);
+        }
+        Files.createDirectories(destination);
+
+        File[] files = sourceRegion.listFiles(file ->
+            file.isFile() && (file.getName().endsWith(".mca") || file.getName().endsWith(".mcr"))
+        );
+        if (files == null || files.length == 0) {
+            throw new IOException("Selected Overworld region directory became empty: " + sourceRegion);
+        }
+        Arrays.sort(files, Comparator.comparing(File::getName));
+        for (File file : files) {
+            Files.copy(
+                file.toPath(),
+                destination.resolve(file.getName()),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.COPY_ATTRIBUTES
+            );
+        }
+
+        if (log != null) {
+            log.accept("Using Overworld region folder: " + sourceRegion.getAbsolutePath());
+        }
     }
 
     /** Selectively copy only what Minesport needs. */
@@ -75,6 +146,24 @@ public class WorldCopier {
                     if (log != null) log.accept("Copied: " + name);
                 }
 
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    private static void deleteTree(Path root) throws IOException {
+        if (!Files.exists(root)) return;
+        Files.walkFileTree(root, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                Files.delete(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                if (exc != null) throw exc;
+                Files.delete(dir);
                 return FileVisitResult.CONTINUE;
             }
         });

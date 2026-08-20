@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kastrick/minesport/ipc"
 )
 
 type cachedHeightmap struct {
@@ -27,14 +29,24 @@ func heightmapFingerprint(worldPath string) (string, error) {
 		return "", err
 	}
 	fmt.Fprintln(hash, filepath.Clean(absolute))
+
+	_, regionDir, err := ipc.ResolveOverworldRegion(worldPath)
+	if err != nil {
+		return "", err
+	}
+
 	paths := []string{filepath.Join(worldPath, "level.dat")}
-	entries, err := os.ReadDir(filepath.Join(worldPath, "region"))
+	entries, err := os.ReadDir(regionDir)
 	if err != nil {
 		return "", err
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".mca") {
-			paths = append(paths, filepath.Join(worldPath, "region", entry.Name()))
+		if entry.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if ext == ".mca" || ext == ".mcr" {
+			paths = append(paths, filepath.Join(regionDir, entry.Name()))
 		}
 	}
 	for _, path := range paths {
@@ -42,7 +54,11 @@ func heightmapFingerprint(worldPath string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(hash, "%s|%d|%d\n", filepath.Base(path), info.Size(), info.ModTime().UnixNano())
+		relative, relErr := filepath.Rel(worldPath, path)
+		if relErr != nil {
+			relative = path
+		}
+		fmt.Fprintf(hash, "%s|%d|%d\n", filepath.Clean(relative), info.Size(), info.ModTime().UnixNano())
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }

@@ -239,7 +239,11 @@ func (e *Engine) Send(req Request) error {
 }
 
 func (e *Engine) SendCommand(payload map[string]interface{}) (*Response, error) {
-	return e.sendCommand(payload, 0)
+	prepared, err := prepareWorldStoragePayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	return e.sendCommand(prepared, 0)
 }
 
 func (e *Engine) sendCommand(payload map[string]interface{}, timeout time.Duration) (*Response, error) {
