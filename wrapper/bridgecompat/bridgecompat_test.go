@@ -13,6 +13,7 @@ func TestNormalizeVersion(t *testing.T) {
 		"fabric-loader-0.19.3-26.1.2":  "26.1.2",
 		"26.3-snapshot-7":              "26.3-snapshot-7",
 		"1.21.10":                      "1.21.10",
+		"1.20.6":                       "1.20.6",
 	}
 	for input, want := range cases {
 		if got := NormalizeVersion(input); got != want {
@@ -121,6 +122,13 @@ func TestManifestCoversRequestedCompatibilityFamilies(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]string{
+		"1.20":            "1.20.0-1.20.1",
+		"1.20.1":          "1.20.0-1.20.1",
+		"1.20.2":          "1.20.2",
+		"1.20.3":          "1.20.3-1.20.4",
+		"1.20.4":          "1.20.3-1.20.4",
+		"1.20.5":          "1.20.5-1.20.6",
+		"1.20.6":          "1.20.5-1.20.6",
 		"1.21":            "1.21.0-1.21.1",
 		"1.21.1":          "1.21.0-1.21.1",
 		"1.21.2":          "1.21.2-1.21.4",
@@ -147,6 +155,32 @@ func TestManifestCoversRequestedCompatibilityFamilies(t *testing.T) {
 	}
 	if !IsBundledCompatible("1.21.9", manifest) || !IsBundledCompatible("1.21.10", manifest) {
 		t.Fatal("1.21.9/1.21.10 must remain bundled-compatible")
+	}
+}
+
+func TestManifestRequestsCorrectJavaFor120(t *testing.T) {
+	t.Setenv("MINESPORT_BRIDGE_REPO_ROOT", filepath.Clean(filepath.Join("..", "..")))
+	manifest, err := LoadManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]int{
+		"1.20": 17,
+		"1.20.1": 17,
+		"1.20.2": 17,
+		"1.20.3": 17,
+		"1.20.4": 17,
+		"1.20.5": 21,
+		"1.20.6": 21,
+	}
+	for version, wantJava := range cases {
+		profile, err := ProfileForVersion(version, manifest)
+		if err != nil {
+			t.Fatalf("%s: %v", version, err)
+		}
+		if profile.Java != wantJava {
+			t.Fatalf("%s requests Java %d, want %d", version, profile.Java, wantJava)
+		}
 	}
 }
 
