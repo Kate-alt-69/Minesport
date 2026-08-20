@@ -1,20 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
-     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
-  <Product
-      Id="*"
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package
       Name="Minesport"
       Language="1033"
       Version="0.1.0"
       Manufacturer="Kastrick"
-      UpgradeCode="28E176EA-1E29-4EA0-B22A-BB77A9865AA8">
-
-    <Package
-        InstallerVersion="500"
-        Compressed="yes"
-        InstallScope="perMachine"
-        Platform="x64"
-        Description="Minesport Minecraft world exporter" />
+      UpgradeCode="28E176EA-1E29-4EA0-B22A-BB77A9865AA8"
+      InstallerVersion="500"
+      Compressed="yes"
+      Scope="perMachine">
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Minesport is already installed." />
     <MediaTemplate EmbedCab="yes" />
@@ -28,79 +24,77 @@
           Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
           Name="CurrentBuildNumber"
           Type="raw"
-          Win64="yes" />
+          Bitness="always64" />
     </Property>
-    <Condition Message="Minesport requires 64-bit Windows 10 or Windows 11.">
-      Installed OR (VersionNT64 AND WINDOWSBUILDNUMBER &gt;= 10240)
-    </Condition>
+    <Launch
+        Condition="Installed OR (VersionNT64 AND WINDOWSBUILDNUMBER &gt;= 10240)"
+        Message="Minesport requires 64-bit Windows 10 or Windows 11." />
 
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="KastrickProgramFiles" Name="kastrick's_software">
-          <Directory Id="INSTALLFOLDER" Name="minesport">
-            <Component Id="MainExecutable" Guid="A4A7E0C8-2B1E-4D4E-9D1B-44A4B1F6C6A1">
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="KastrickProgramFiles" Name="kastrick's_software">
+        <Directory Id="INSTALLFOLDER" Name="minesport">
+          <Component Id="MainExecutable" Guid="A4A7E0C8-2B1E-4D4E-9D1B-44A4B1F6C6A1">
+            <File
+                Id="MinesportExe"
+                Source="$(var.SourceDir)\wrapper\dist\minesport.exe"
+                KeyPath="yes">
+              <Shortcut
+                  Id="StartMenuShortcut"
+                  Directory="ProgramMenuFolder"
+                  Name="Minesport"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Advertise="yes" />
+              <Shortcut
+                  Id="DesktopShortcut"
+                  Directory="DesktopFolder"
+                  Name="Minesport"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Advertise="yes" />
+            </File>
+          </Component>
+
+          <Directory Id="TOOLS" Name="tools">
+            <Component Id="BlenderInstallerHelper" Guid="F4D2A087-3E68-4B31-A7D0-2F60F23D9C6B">
               <File
-                  Id="MinesportExe"
-                  Source="$(var.SourceDir)\wrapper\dist\minesport.exe"
-                  KeyPath="yes">
-                <Shortcut
-                    Id="StartMenuShortcut"
-                    Directory="ProgramMenuFolder"
-                    Name="Minesport"
-                    WorkingDirectory="INSTALLFOLDER"
-                    Advertise="yes" />
-                <Shortcut
-                    Id="DesktopShortcut"
-                    Directory="DesktopFolder"
-                    Name="Minesport"
-                    WorkingDirectory="INSTALLFOLDER"
-                    Advertise="yes" />
-              </File>
+                  Id="BlenderInstallScript"
+                  Source="$(var.SourceDir)\installer\windows\install-blender.ps1"
+                  KeyPath="yes" />
             </Component>
+          </Directory>
 
-            <Directory Id="TOOLS" Name="tools">
-              <Component Id="BlenderInstallerHelper" Guid="F4D2A087-3E68-4B31-A7D0-2F60F23D9C6B">
-                <File
-                    Id="BlenderInstallScript"
-                    Source="$(var.SourceDir)\installer\windows\install-blender.ps1"
-                    KeyPath="yes" />
-              </Component>
-            </Directory>
-
-            <Directory Id="BridgeDataDir" Name="bridge-data">
-              <Component Id="BridgeManifest" Guid="*">
-                <File
-                    Id="BridgeManifestFile"
-                    Source="$(var.SourceDir)\bridge-versions\manifest.json"
-                    KeyPath="yes" />
-              </Component>
-              <Directory Id="BundledBridgeRoot" Name="bundled">
-                <Directory Id="BundledBridge12110" Name="1.21.10">
-                  <Component Id="BundledBridge" Guid="*">
-                    <File
-                        Id="BundledBridgeJar"
-                        Source="$(var.SourceDir)\dist\bundled-bridge\minesport-bridge-0.1.0.jar"
-                        KeyPath="yes" />
-                  </Component>
-                </Directory>
-              </Directory>
-              <Directory Id="CompiledBridgeDir" Name="compiled">
-                <Component Id="CompiledBridgeCache" Guid="9C62E3D4-67A3-44C2-B0E5-2D68947E3F15">
-                  <CreateFolder>
-                    <util:PermissionEx User="Users" GenericAll="yes" />
-                  </CreateFolder>
+          <Directory Id="BridgeDataDir" Name="bridge-data">
+            <Component Id="BridgeManifest" Guid="*">
+              <File
+                  Id="BridgeManifestFile"
+                  Source="$(var.SourceDir)\bridge-versions\manifest.json"
+                  KeyPath="yes" />
+            </Component>
+            <Directory Id="BundledBridgeRoot" Name="bundled">
+              <Directory Id="BundledBridge12110" Name="1.21.10">
+                <Component Id="BundledBridge" Guid="*">
+                  <File
+                      Id="BundledBridgeJar"
+                      Source="$(var.SourceDir)\dist\bundled-bridge\minesport-bridge-0.1.0.jar"
+                      KeyPath="yes" />
                 </Component>
               </Directory>
+            </Directory>
+            <Directory Id="CompiledBridgeDir" Name="compiled">
+              <Component Id="CompiledBridgeCache" Guid="9C62E3D4-67A3-44C2-B0E5-2D68947E3F15">
+                <CreateFolder>
+                  <util:PermissionEx User="Users" GenericAll="yes" />
+                </CreateFolder>
+              </Component>
             </Directory>
           </Directory>
         </Directory>
       </Directory>
+    </StandardDirectory>
 
-      <Directory Id="ProgramMenuFolder" />
-      <Directory Id="DesktopFolder" />
-    </Directory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
 
-    <Feature Id="CoreFeature" Title="Minesport" Level="1" Absent="disallow">
+    <Feature Id="CoreFeature" Title="Minesport" Level="1" AllowAbsent="no">
       <ComponentRef Id="MainExecutable" />
       <ComponentRef Id="BridgeManifest" />
       <ComponentRef Id="BundledBridge" />
@@ -124,8 +118,7 @@
     </Feature>
 
     <Property Id="INSTALLLEVEL" Value="1" />
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
-    <UIRef Id="WixUI_FeatureTree" />
+    <ui:WixUI Id="WixUI_FeatureTree" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\installer\windows\license.rtf" />
 
     <CustomAction
@@ -145,12 +138,14 @@
         Return="ignore" />
 
     <InstallExecuteSequence>
-      <Custom Action="InstallBlender" After="InstallFiles">
-        NOT Installed AND (&amp;BlenderFeature=3)
-      </Custom>
-      <Custom Action="InstallTranslator" After="InstallBlender">
-        NOT Installed AND (&amp;TranslatorFeature=3)
-      </Custom>
+      <Custom
+          Action="InstallBlender"
+          After="InstallFiles"
+          Condition="NOT Installed AND (&amp;BlenderFeature=3)" />
+      <Custom
+          Action="InstallTranslator"
+          After="InstallBlender"
+          Condition="NOT Installed AND (&amp;TranslatorFeature=3)" />
     </InstallExecuteSequence>
-  </Product>
+  </Package>
 </Wix>

@@ -136,6 +136,8 @@ Windows installer packaging is opt-in. NSIS is the default EXE packager; the MSI
 .\build.ps1 --build-installer-inno  # optional Inno Setup EXE
 ```
 
+The MSI project is pinned to WiX Toolset 7.0.0 and explicitly accepts the WiX 7 EULA. Building it requires the .NET SDK 6 or newer; the SDK and WiX extensions restore automatically through `dotnet build`. Review the [WiX Open Source Maintenance Fee terms](https://docs.firegiant.com/wix/osmf/) before building the MSI for a revenue-generating organization.
+
 The current Windows builds require Windows 10 or 11 x64. Windows 7 is not supported by the Go toolchain used by Minesport.
 
 ### Linux / macOS
