@@ -1,5 +1,7 @@
 package dev.kastrick.minesport.export;
 
+import dev.kastrick.minesport.resolver.MissingTexture;
+
 import java.awt.image.BufferedImage;
 import java.util.Locale;
 
@@ -17,7 +19,10 @@ public record MaterialKey(String texturePath, int tintRgb) {
     }
 
     public BufferedImage apply(BufferedImage source) {
-        if (source == null || tintRgb < 0) return source;
+        // Never tint the diagnostic missing texture. If this gets recolored by
+        // grass/water tinting it becomes much harder to recognize that the real
+        // asset could not be resolved.
+        if (source == null || tintRgb < 0 || MissingTexture.is(source)) return source;
         int tr = (tintRgb >>> 16) & 0xff;
         int tg = (tintRgb >>> 8) & 0xff;
         int tb = tintRgb & 0xff;
