@@ -17,6 +17,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/kastrick/minesport/processutil"
 )
 
 func ensureJDK(required int, progress ProgressFunc) (string, error) {
@@ -70,6 +72,7 @@ func findInstalledJDK(required int) string {
 
 func javacMajor(javac string) int {
 	cmd := exec.Command(javac, "-version")
+	processutil.HideWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0

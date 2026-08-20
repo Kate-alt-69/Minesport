@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+
+	"github.com/kastrick/minesport/processutil"
 )
 
 // Bridge manages a running Java engine process and its IPC channels.
@@ -52,6 +54,7 @@ func (b *Bridge) Start(jarPath string) error {
 	}
 
 	b.cmd = exec.Command(javaExe, "-jar", absJar, "--ipc")
+	processutil.HideWindow(b.cmd)
 	b.cmd.Stderr = os.Stderr // engine logs go to our stderr
 
 	stdinPipe, err := b.cmd.StdinPipe()

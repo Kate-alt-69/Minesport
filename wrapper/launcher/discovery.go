@@ -16,10 +16,10 @@ import (
 type LauncherType string
 
 const (
-	LauncherOfficial  LauncherType = "Official"
-	LauncherFreeSM    LauncherType = "FreesmLauncher"
-	LauncherPrism     LauncherType = "PrismLauncher"
-	LauncherMultiMC   LauncherType = "MultiMC"
+	LauncherOfficial   LauncherType = "Official"
+	LauncherFreeSM     LauncherType = "FreesmLauncher"
+	LauncherPrism      LauncherType = "PrismLauncher"
+	LauncherMultiMC    LauncherType = "MultiMC"
 	LauncherATLauncher LauncherType = "ATLauncher"
 	LauncherCurseForge LauncherType = "CurseForge"
 )
@@ -27,11 +27,11 @@ const (
 type ModLoader string
 
 const (
-	LoaderVanilla ModLoader = "Vanilla"
-	LoaderFabric  ModLoader = "Fabric"
-	LoaderForge   ModLoader = "Forge"
+	LoaderVanilla  ModLoader = "Vanilla"
+	LoaderFabric   ModLoader = "Fabric"
+	LoaderForge    ModLoader = "Forge"
 	LoaderNeoForge ModLoader = "NeoForge"
-	LoaderQuilt   ModLoader = "Quilt"
+	LoaderQuilt    ModLoader = "Quilt"
 )
 
 // Launcher represents a found MC launcher installation.
@@ -43,22 +43,22 @@ type Launcher struct {
 
 // Instance represents a single MC game instance.
 type Instance struct {
-	Launcher    LauncherType
-	Name        string        // display name e.g. "1.21.10"
-	Version     string        // MC version e.g. "1.21.10"
-	Loader      ModLoader
-	ModsPath    string        // absolute path to mods/ folder (empty if vanilla)
-	MinecraftDir string       // absolute path to the .minecraft-equivalent folder
-	Worlds      []World
+	Launcher     LauncherType
+	Name         string // display name e.g. "1.21.10"
+	Version      string // MC version e.g. "1.21.10"
+	Loader       ModLoader
+	ModsPath     string // absolute path to mods/ folder (empty if vanilla)
+	MinecraftDir string // absolute path to the .minecraft-equivalent folder
+	Worlds       []World
 }
 
 // World represents a save folder.
 type World struct {
-	Name        string
-	Path        string
-	LevelName   string // from level.dat if readable
-	Version     string // MC version from level.dat
-	HasPolymer  bool   // detected from mods list
+	Name       string
+	Path       string
+	LevelName  string // from level.dat if readable
+	Version    string // MC version from level.dat
+	HasPolymer bool   // detected from mods list
 	// LastPlayed is level.dat's file modification time, used as a proxy
 	// for "last played" — level.dat gets rewritten on every save, so this
 	// tracks it closely without needing an NBT parser on the Go side (only
@@ -76,9 +76,9 @@ func DiscoverAll() []Launcher {
 	home, _ := os.UserHomeDir()
 
 	candidates := []struct {
-		ltype    LauncherType
-		name     string
-		paths    []string
+		ltype LauncherType
+		name  string
+		paths []string
 	}{
 		{
 			LauncherOfficial,
@@ -235,7 +235,7 @@ func discoverMultiInstances(launcher Launcher) []Instance {
 			Name:         entry.Name(),
 			MinecraftDir: mcDir,
 			ModsPath:     filepath.Join(mcDir, "mods"),
-			Loader:       detectLoader(mcDir),
+			Loader:       readMultiMCLoader(instanceDir, mcDir),
 		}
 
 		// Read version from instance.cfg or mmc-pack.json
@@ -251,6 +251,33 @@ func discoverMultiInstances(launcher Launcher) []Instance {
 	})
 
 	return instances
+}
+
+func readMultiMCLoader(instanceDir, mcDir string) ModLoader {
+	data, err := os.ReadFile(filepath.Join(instanceDir, "mmc-pack.json"))
+	if err == nil {
+		var pack struct {
+			Components []struct {
+				UID string `json:"uid"`
+			} `json:"components"`
+		}
+		if json.Unmarshal(data, &pack) == nil {
+			for _, component := range pack.Components {
+				uid := strings.ToLower(component.UID)
+				switch {
+				case strings.Contains(uid, "neoforge"):
+					return LoaderNeoForge
+				case strings.Contains(uid, "forge"):
+					return LoaderForge
+				case strings.Contains(uid, "fabric-loader") || strings.Contains(uid, "fabricloader"):
+					return LoaderFabric
+				case strings.Contains(uid, "quilt-loader") || strings.Contains(uid, "quiltloader"):
+					return LoaderQuilt
+				}
+			}
+		}
+	}
+	return detectLoader(mcDir)
 }
 
 func readMultiMCVersion(instanceDir string) string {
@@ -417,6 +444,12 @@ func detectLoader(mcDir string) ModLoader {
 		return LoaderVanilla
 	}
 
+	// Loader-created directories are stronger evidence than arbitrary mod names
+	// such as forgeconfigapiport, which is itself commonly used on Fabric.
+	if dirExists(filepath.Join(mcDir, ".fabric")) {
+		return LoaderFabric
+	}
+
 	for _, e := range entries {
 		name := strings.ToLower(e.Name())
 		switch {
@@ -429,11 +462,6 @@ func detectLoader(mcDir string) ModLoader {
 		case strings.Contains(name, "quilt"):
 			return LoaderQuilt
 		}
-	}
-
-	// Check .fabric marker
-	if dirExists(filepath.Join(mcDir, ".fabric")) {
-		return LoaderFabric
 	}
 
 	// If mods folder exists with content, assume Fabric (most common)
