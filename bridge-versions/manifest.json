@@ -27,13 +27,23 @@
   "profiles": [
     {
       "id": "1.20.0-1.20.1",
-      "match": "^1\\.20(?:\\.[01])?$",
+      "match": "^1\\.20(?:\\.0)?$",
       "patch": "bridge-versions/1.20.0-1.20.1/patch.json",
       "java": 17,
       "gradle": "8.1.1",
       "loom": "1.2.8",
       "loader": "dynamic",
       "fabric_api": "dynamic"
+    },
+    {
+      "id": "1.20.0-1.20.1",
+      "match": "^1\\.20\\.1$",
+      "patch": "bridge-versions/1.20.0-1.20.1/patch.json",
+      "java": 17,
+      "gradle": "8.1.1",
+      "loom": "1.2.8",
+      "loader": "dynamic",
+      "fabric_api": "0.91.0+1.20.1"
     },
     {
       "id": "1.20.2",
@@ -47,13 +57,23 @@
     },
     {
       "id": "1.20.3-1.20.4",
-      "match": "^1\\.20\\.[3-4]$",
+      "match": "^1\\.20\\.3$",
       "patch": "bridge-versions/1.20.3-1.20.4/patch.json",
       "java": 17,
       "gradle": "8.3",
       "loom": "1.4.6",
       "loader": "dynamic",
       "fabric_api": "dynamic"
+    },
+    {
+      "id": "1.20.3-1.20.4",
+      "match": "^1\\.20\\.4$",
+      "patch": "bridge-versions/1.20.3-1.20.4/patch.json",
+      "java": 17,
+      "gradle": "8.3",
+      "loom": "1.4.6",
+      "loader": "dynamic",
+      "fabric_api": "0.91.3+1.20.4"
     },
     {
       "id": "1.20.5-1.20.6",
