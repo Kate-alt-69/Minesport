@@ -94,7 +94,7 @@
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
 
-    <Feature Id="CoreFeature" Title="Minesport" Level="1" Absent="disallow">
+    <Feature Id="CoreFeature" Title="Minesport" Level="1" AllowAbsent="no">
       <ComponentRef Id="MainExecutable" />
       <ComponentRef Id="BridgeManifest" />
       <ComponentRef Id="BundledBridge" />
