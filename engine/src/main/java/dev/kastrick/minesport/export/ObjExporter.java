@@ -50,7 +50,7 @@ public class ObjExporter {
         );
 
         Map<String,List<Quad>> objects = new LinkedHashMap<>();
-        LinkedHashSet<String> textures = new LinkedHashSet<>();
+        LinkedHashSet<MaterialKey> textures = new LinkedHashSet<>();
 
         int done = 0;
         int total = Math.max(blocks.size(), 1);
@@ -71,12 +71,10 @@ public class ObjExporter {
 
             solid++;
             quadCount += quads.size();
-            for (Quad quad : quads) textures.add(quad.texturePath());
+            for (Quad quad : quads) textures.add(MaterialKey.forQuad(quad));
 
             String shortName = BlockGrouper.shortName(block.blockId);
-            String physicalName = shortName
-                + BlockGrouper.stateSuffix(block.properties)
-                + "_" + block.x + "_" + block.y + "_" + block.z;
+            String physicalName = BlockGrouper.physicalName(block);
 
             String logicalName = switch (mode) {
                 case ALL_MERGED -> exportName;
@@ -84,7 +82,15 @@ public class ObjExporter {
                 case INDIVIDUAL -> compoundIds.getOrDefault(block, physicalName);
             };
 
-            objects.computeIfAbsent(logicalName, ignored -> new ArrayList<>()).addAll(quads);
+            for (Quad quad : quads) {
+                // Movable entity-model parts (currently chest base/lid) remain
+                // separate even in merged/grouped exports. Blender can then
+                // attach the lid object to a bone without guessing vertices.
+                String objectName = quad.partName() == null
+                    ? logicalName
+                    : BlockGrouper.partName(block, quad.partName());
+                objects.computeIfAbsent(objectName, ignored -> new ArrayList<>()).add(quad);
+            }
 
             if (progress != null) progress.onProgress(++done, total);
         }
@@ -96,6 +102,7 @@ public class ObjExporter {
 
         try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(outputFile)))) {
             writer.println("# Minesport OBJ Export");
+            writer.println("# Units: metres (1 Minecraft block grid cell = 1 metre)");
             writer.println("# Export root: " + exportName);
             writer.println("# Object mode: " + mode);
             writer.println("# Optimize requested: " + optimize);
@@ -113,17 +120,17 @@ public class ObjExporter {
             Set<String> usedObjectNames = new HashSet<>();
 
             for (var entry : objects.entrySet()) {
-                String objectName = mode == ExportMode.ALL_MERGED
+                String objectName = mode == ExportMode.ALL_MERGED && entry.getKey().equals(exportName)
                     ? exportName
                     : uniqueName(safeObjectName(entry.getKey()), usedObjectNames);
 
                 writer.println();
                 writer.println("o " + objectName);
 
-                Map<String,List<Quad>> byTexture = new LinkedHashMap<>();
+                Map<MaterialKey,List<Quad>> byTexture = new LinkedHashMap<>();
                 for (Quad quad : entry.getValue()) {
                     byTexture.computeIfAbsent(
-                        quad.texturePath(),
+                        MaterialKey.forQuad(quad),
                         ignored -> new ArrayList<>()
                     ).add(quad);
                 }
@@ -182,9 +189,8 @@ public class ObjExporter {
         return ExportStats.of(solid, quadCount);
     }
 
-    private static String materialName(String value) {
-        if (value == null || value.isBlank()) return "Minesport_Material";
-        return value.replace(':', '_').replace('/', '_').replace('\\', '_');
+    private static String materialName(MaterialKey value) {
+        return value.materialName();
     }
 
     private static String uniqueName(String base, Set<String> used) {

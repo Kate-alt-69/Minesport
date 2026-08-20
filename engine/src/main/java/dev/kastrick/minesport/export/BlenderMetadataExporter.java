@@ -13,9 +13,9 @@ import java.util.List;
  * Writes DCC-neutral Minesport translation metadata next to an export.
  *
  * The sidecar deliberately stores capabilities and animation descriptors, not
- * a duplicate record for every ordinary block in the world. Dynamic bridge
- * providers can append only the objects that actually need translation
- * (animated textures, rigid parts, state transitions, custom render data).
+ * a duplicate record for every ordinary block in the world. Exporters add only
+ * objects that actually need translation (entity-model rigid parts, animated
+ * textures, state transitions and bridge-provided custom render data).
  */
 public final class BlenderMetadataExporter {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -38,6 +38,8 @@ public final class BlenderMetadataExporter {
         root.addProperty("exportName", safeName(baseName));
         root.addProperty("format", format);
         root.addProperty("objectMode", mode.name());
+        root.addProperty("linearUnit", "metre");
+        root.addProperty("metresPerBlock", 1.0);
         root.addProperty("animationMode", animationMode == null ? "animate_export" : animationMode);
 
         int solidBlocks = 0;
@@ -53,10 +55,15 @@ public final class BlenderMetadataExporter {
         capabilities.addProperty("continuousTextureAnimations", true);
         root.add("capabilities", capabilities);
 
-        // DCC translators consume generic descriptors from here. This starts
-        // empty when no runtime/bridge descriptor provider was available; it
-        // never falls back to a hardcoded block-ID animation registry.
-        root.add("animations", new JsonArray());
+        JsonArray animations = new JsonArray();
+        if (!"animate_static".equals(animationMode)) {
+            float[] center = BlockGrouper.boundingBoxCenter(blocks);
+            for (BlockData block : blocks) {
+                if (!isVanillaChest(block)) continue;
+                animations.add(chestLidDescriptor(block, center));
+            }
+        }
+        root.add("animations", animations);
 
         try (Writer writer = new BufferedWriter(new FileWriter(sidecar))) {
             GSON.toJson(root, writer);
@@ -67,5 +74,68 @@ public final class BlenderMetadataExporter {
     private static String safeName(String value) {
         if (value == null || value.isBlank()) return "Minesport_Export";
         return value.replace(':', '_').replace('/', '_').replace('\\', '_').trim();
+    }
+
+    private static boolean isVanillaChest(BlockData block) {
+        return block.blockId.equals("minecraft:chest")
+            || block.blockId.equals("minecraft:trapped_chest");
+    }
+
+    /**
+     * Blender receives both glTF and OBJ in its X/right, Y/forward, Z/up
+     * coordinate system. Minesport exports Minecraft X/east, Y/up, Z/south,
+     * so a point becomes (X, -Z, Y) in the sidecar.
+     */
+    private static JsonObject chestLidDescriptor(BlockData block, float[] center) {
+        String facing = block.prop("facing");
+        float localX = .5f;
+        float localZ = .9375f;
+        String axis = "X";
+        switch (facing) {
+            case "south" -> localZ = .0625f;
+            case "east" -> {
+                localX = .0625f;
+                localZ = .5f;
+                axis = "Y";
+            }
+            case "west" -> {
+                localX = .9375f;
+                localZ = .5f;
+                axis = "Y";
+            }
+            default -> { }
+        }
+
+        float minecraftX = block.x + localX - center[0];
+        float minecraftY = block.y + .625f - center[1];
+        float minecraftZ = block.z + localZ - center[2];
+
+        JsonObject descriptor = new JsonObject();
+        descriptor.addProperty("kind", "rigid_bone");
+        descriptor.addProperty("object", BlockGrouper.partName(block, "lid"));
+        descriptor.addProperty("baseObject", BlockGrouper.partName(block, "base"));
+        descriptor.addProperty("bone", "Chest_Lid");
+        descriptor.addProperty("action", BlockGrouper.physicalName(block) + "_Open");
+        descriptor.addProperty("axis", axis);
+
+        JsonArray pivot = new JsonArray();
+        pivot.add(minecraftX);
+        pivot.add(-minecraftZ);
+        pivot.add(minecraftY);
+        descriptor.add("pivot", pivot);
+
+        JsonArray keyframes = new JsonArray();
+        keyframes.add(keyframe(1, 0));
+        keyframes.add(keyframe(10, -90));
+        keyframes.add(keyframe(20, 0));
+        descriptor.add("keyframes", keyframes);
+        return descriptor;
+    }
+
+    private static JsonObject keyframe(int frame, int degrees) {
+        JsonObject keyframe = new JsonObject();
+        keyframe.addProperty("frame", frame);
+        keyframe.addProperty("degrees", degrees);
+        return keyframe;
     }
 }

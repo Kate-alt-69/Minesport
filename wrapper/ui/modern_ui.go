@@ -29,6 +29,15 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	ms.settings = LoadSettings()
 	ms.engine = ipc.NewEngine(jarPath)
 	w.SetContent(ms.buildModernUI())
+	ms.installViewportShortcuts()
+	w.SetCloseIntercept(func() {
+		if ms.embeddedViewer != nil {
+			ms.embeddedViewer.Close()
+		}
+		ms.engine.Stop()
+		w.SetCloseIntercept(nil)
+		w.Close()
+	})
 
 	ms.exportBtn.OnTapped = ms.onExportModern
 
@@ -370,53 +379,44 @@ func (ms *MinesportApp) showModernExportComplete(exportedPath string, resp ipc.R
 		formatCount(resp.VertexCount),
 	))
 
-	openFolder := widget.NewButton("Open folder ▼", nil)
-	openFolder.Importance = widget.HighImportance
-	openFolder.OnTapped = func() {
-		menu := fyne.NewMenu("",
-			fyne.NewMenuItem("Open exported folder", func() {
-				_ = openPath(filepath.Dir(exportedPath))
-			}),
-			fyne.NewMenuItem("Open exported file", func() {
-				_ = openPath(exportedPath)
-			}),
-		)
-		widget.ShowPopUpMenuAtRelativePosition(
-			menu,
-			ms.window.Canvas(),
-			fyne.NewPos(0, openFolder.Size().Height),
-			openFolder,
-		)
-	}
-
-	buttons := []fyne.CanvasObject{openFolder}
-	addAppButton := func(label, appName string) {
-		button := widget.NewButton(label, func() {
-			if err := openWithApp(appName, exportedPath); err != nil {
-				dialog.ShowError(err, ms.window)
-			}
-		})
-		if !appAvailable(appName) {
-			button.Disable()
+	openFile := widget.NewButtonWithIcon("Open", theme.FolderOpenIcon(), func() {
+		if err := revealPath(exportedPath); err != nil {
+			dialog.ShowError(err, ms.window)
 		}
-		buttons = append(buttons, button)
-	}
+	})
+	openFile.Importance = widget.HighImportance
 
-	addAppButton("Open with Blender", "Blender")
-	addAppButton("Open with Blockbench", "Blockbench")
-	addAppButton("Open with MeshLab", "MeshLab")
+	openWith := widget.NewButton("Open with… ▼", nil)
+	openWith.OnTapped = func() {
+		items := make([]*fyne.MenuItem, 0, 3)
+		for _, appName := range []string{"Blender", "Blockbench", "MeshLab"} {
+			name := appName
+			item := fyne.NewMenuItem(name, func() {
+				if err := openWithApp(name, exportedPath); err != nil {
+					dialog.ShowError(err, ms.window)
+				}
+			})
+			item.Disabled = !appAvailable(name)
+			items = append(items, item)
+		}
+		widget.ShowPopUpMenuAtRelativePosition(
+			fyne.NewMenu("Open with", items...),
+			ms.window.Canvas(),
+			fyne.NewPos(0, openWith.Size().Height),
+			openWith,
+		)
+	}
 
 	content := container.NewVBox(
-		widget.NewLabel("Export complete"),
 		summary,
 		widget.NewSeparator(),
 		widget.NewLabel("Created file"),
-		pathLabel,
+		container.NewBorder(nil, nil, nil, openFile, pathLabel),
 		widget.NewSeparator(),
-		container.NewGridWithColumns(2, buttons...),
+		container.NewHBox(openWith),
 	)
 
 	d := dialog.NewCustom("Export complete", "Done", content, ms.window)
-	d.Resize(fyne.NewSize(540, 300))
+	d.Resize(fyne.NewSize(560, 230))
 	d.Show()
 }

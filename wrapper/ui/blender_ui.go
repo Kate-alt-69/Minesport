@@ -28,13 +28,10 @@ func buildBlenderInspectorCard(parent fyne.Window, settings Settings) fyne.Canva
 	mode := widget.NewSelect([]string{"Animate export", "Animate static"}, nil)
 	mode.SetSelected("Animate export")
 
-	info := widget.NewButton("ⓘ", func() {
-		dialog.ShowInformation(
-			"Blender animation export",
-			"Animate export prepares every dynamic animation/state descriptor available from Minesport metadata (for example movable parts plus animated textures).\n\nAnimate static keeps interactable state changes at the exported world state and prepares only continuously animated/static-world visuals such as animated textures.\n\nThe final Continuous Animation toggle is created inside Blender's Properties panel, not in Minesport.",
-			parent,
-		)
-	})
+	info := newInfoPopoverButton(
+		"Blender animation export",
+		"Animate export prepares every dynamic animation/state descriptor available from Minesport metadata (for example movable parts plus animated textures).\n\nAnimate static keeps interactable state changes at the exported world state and prepares only continuously animated/static-world visuals such as animated textures.\n\nThe final Continuous Animation toggle is created inside Blender's Properties panel, not in Minesport.",
+	)
 
 	status := widget.NewLabel(blendertranslator.StatusText())
 	status.Truncation = fyne.TextTruncateEllipsis

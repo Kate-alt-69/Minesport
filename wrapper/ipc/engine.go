@@ -418,6 +418,8 @@ func detectWorldMinecraftVersion(worldPath string) string {
 
 type ListBlocksParams struct {
 	WorldPath                 string
+	ModsPath                  string
+	ModLoader                 string
 	MinX, MinY, MinZ          int
 	MaxX, MaxY, MaxZ          int
 	CenterX, CenterY, CenterZ *int
@@ -425,7 +427,7 @@ type ListBlocksParams struct {
 }
 
 func (e *Engine) ListBlocks(p ListBlocksParams) (string, int, error) {
-	resp, err := e.SendCommand(map[string]interface{}{"command": "listBlocks", "worldPath": p.WorldPath, "minX": p.MinX, "minY": p.MinY, "minZ": p.MinZ, "maxX": p.MaxX, "maxY": p.MaxY, "maxZ": p.MaxZ, "centerX": p.CenterX, "centerY": p.CenterY, "centerZ": p.CenterZ, "radiusX": p.RadiusX, "radiusY": p.RadiusY, "radiusZ": p.RadiusZ})
+	resp, err := e.SendCommand(map[string]interface{}{"command": "listBlocks", "worldPath": p.WorldPath, "modsPath": p.ModsPath, "modLoader": p.ModLoader, "minX": p.MinX, "minY": p.MinY, "minZ": p.MinZ, "maxX": p.MaxX, "maxY": p.MaxY, "maxZ": p.MaxZ, "centerX": p.CenterX, "centerY": p.CenterY, "centerZ": p.CenterZ, "radiusX": p.RadiusX, "radiusY": p.RadiusY, "radiusZ": p.RadiusZ})
 	if err != nil {
 		return "", 0, err
 	}

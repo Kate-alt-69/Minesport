@@ -624,7 +624,8 @@ public class GeometryBuilder {
             0f, 19f,
             14f, 10f, 14f,
             64f, 64f,
-            facingRotation
+            facingRotation,
+            "base"
         );
 
         // Lid: UV origin (0,0), 14x5x14.
@@ -636,7 +637,8 @@ public class GeometryBuilder {
             0f, 0f,
             14f, 5f, 14f,
             64f, 64f,
-            facingRotation
+            facingRotation,
+            "lid"
         );
 
         // Single-chest latch: the small UV area at the top-left of the entity
@@ -650,7 +652,8 @@ public class GeometryBuilder {
                 0f, 0f,
                 2f, 4f, 1f,
                 64f, 64f,
-                facingRotation
+                facingRotation,
+                "lid"
             );
         }
 
@@ -674,7 +677,8 @@ public class GeometryBuilder {
         float pixelZ,
         float textureWidth,
         float textureHeight,
-        int yRotation
+        int yRotation,
+        String partName
     ) {
         float a = textureU;
         float b = a + pixelZ;
@@ -725,7 +729,8 @@ public class GeometryBuilder {
                 texture,
                 new float[3],
                 null,
-                -1
+                -1,
+                partName
             ));
         }
     }

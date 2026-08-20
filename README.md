@@ -17,6 +17,7 @@ Minesport is primarily an **asset-aware block/world exporter**. It does not need
 - Model rotations and weighted variants
 - Multipart blockstates and connection logic
 - PNG textures referenced by models
+- Minecraft render-time grass/foliage/water tinting (neutral plains tint when biome color data is unavailable)
 - Resource-pack overrides
 - Mod namespaces found inside mod JARs
 - Polymer-style model-only blocks where the required model can be inferred
@@ -58,7 +59,7 @@ Minesport does **not** execute a mod's gameplay code just to obtain a mesh.
 
 The following areas are not currently equivalent to rendering the world inside Minecraft:
 
-- Block entities such as chests, signs and banners may use fallback geometry.
+- Vanilla chests use their entity atlas, separate base/lid geometry and Blender lid-rig metadata. Other block entities such as signs and banners may still use fallback geometry.
 - Fluids are not exported as full Minecraft fluid rendering.
 - Biome-dependent tinting is not fully reproduced.
 - Custom/dynamic renderers can fall back when no static model is available.
@@ -71,6 +72,7 @@ The following areas are not currently equivalent to rendering the world inside M
 ### glTF 2.0 — recommended
 
 - Embedded textures
+- Native top-left Minecraft UVs, nearest filtering and alpha-tested cutouts for multipart models
 - Suitable for Blender and modern 3D pipelines
 - Post-processing normalizes glTF texture samplers
 
@@ -78,6 +80,7 @@ The following areas are not currently equivalent to rendering the world inside M
 
 - Traditional OBJ geometry
 - Companion MTL material file
+- Chest base/lid parts remain separate so Blender can rig the lid
 - Useful for simple interchange workflows
 
 Export object modes:
@@ -95,9 +98,29 @@ The native UI supports:
 - Manual coordinate entry
 - Automatic world-bound detection from region files
 - 2D world-map navigation
+- Cached 2D heightmaps that invalidate when the save's region files change
 - Middle-mouse panning
 - Scroll-wheel zoom
-- Optional 3D preview for exported/loaded block geometry
+- Live OpenGL 3D preview hosted inside the Fyne window on Windows
+- View controls overlaid at the top-right of either viewport
+
+3D controls:
+
+- `W` / `A` / `S` / `D` — fly
+- `Space` / `Shift` — fly up/down
+- `Ctrl` — sprint
+- Middle-mouse drag — look/orbit; `Shift` + middle-mouse pans
+- Scroll — move forward/back; while holding `W`, `A`, `S`, or `D`, changes flight speed by 10% per step
+- Hold `E` while scrolling to resize a selection
+- Left click — set point A / confirm; right click — set point B
+- `C` — clear the selection; `F` — fit/reset the camera
+- `F6` — fit the 2D map or center the 3D camera, whichever view is active
+- `F8` — save the current 3D view to `Pictures/Minesport`
+- `Esc` — open the Minecraft-style controls menu
+
+The status bar shows **Preparing 2D map…** while a first map is generated. Later openings use the cache until `level.dat` or a region file changes.
+
+Minesport exports one block unit as one metre. Non-full Minecraft models retain their real game dimensions—for example, a dirt path is intentionally 15/16 m high. The Blender translator sets metric units and uses Closest filtering so Minecraft textures remain crisp; using **Open with… → Blender** enables the translator before import automatically.
 
 ## Safety
 
@@ -135,6 +158,8 @@ Windows installer packaging is opt-in. NSIS is the default EXE packager; the MSI
 .\build.ps1 --build-installer-msi   # WiX MSI only
 .\build.ps1 --build-installer-inno  # optional Inno Setup EXE
 ```
+
+Every Windows build also stages the standalone application at `dist\source\Minesport.exe`. The installer projects consume this same file, so the loose executable, NSIS package, Inno package, and MSI cannot accidentally package different wrapper builds.
 
 The MSI project is pinned to WiX Toolset 7.0.0 and explicitly accepts the WiX 7 EULA. Building it requires the .NET SDK 6 or newer; the SDK and WiX extensions restore automatically through `dotnet build`. Review the [WiX Open Source Maintenance Fee terms](https://docs.firegiant.com/wix/osmf/) before building the MSI for a revenue-generating organization.
 

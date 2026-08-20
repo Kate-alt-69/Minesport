@@ -46,6 +46,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 2 && os.Args[1] == "--viewer-embed" {
+		if err := viewer.Run(os.Args[2], true); err != nil {
+			log.Printf("embedded viewer failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if len(os.Args) > 1 && os.Args[1] == "--java-e" {
 		if err := launchEmbeddedJava(); err != nil {

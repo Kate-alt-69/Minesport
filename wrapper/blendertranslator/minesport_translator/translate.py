@@ -13,6 +13,11 @@ def translate_gltf_import(gltf):
 
 
 def translate_scene(metadata=None, objects=None):
+    units = bpy.context.scene.unit_settings
+    units.system = "METRIC"
+    units.length_unit = "METERS"
+    units.scale_length = 1.0
+
     if objects is None:
         objects = _find_minesport_objects()
     else:
@@ -24,6 +29,7 @@ def translate_scene(metadata=None, objects=None):
     export_name = _metadata_export_name(metadata) or _detect_export_name(objects)
     collection = _ensure_collection(export_name)
     _move_into_collection(objects, collection)
+    _configure_minecraft_materials(objects)
 
     block_records = {}
     if isinstance(metadata, dict):
@@ -36,6 +42,7 @@ def translate_scene(metadata=None, objects=None):
 
     for obj in objects:
         obj.minesport.translated = True
+        obj["minesport_metres_per_block"] = 1.0
         record = block_records.get(obj.name)
         if record:
             obj.minesport.source_block = str(record.get("id", ""))
@@ -59,6 +66,25 @@ def translate_scene(metadata=None, objects=None):
     collection["minesport_schema"] = 1
     if isinstance(metadata, dict):
         collection["minesport_animation_mode"] = str(metadata.get("animationMode", "none"))
+
+
+def _configure_minecraft_materials(objects):
+    """Keep Minecraft's pixel art crisp after either glTF or OBJ import."""
+    seen = set()
+    for obj in objects:
+        data = getattr(obj, "data", None)
+        for material in getattr(data, "materials", ()) if data is not None else ():
+            if material is None or material.as_pointer() in seen:
+                continue
+            seen.add(material.as_pointer())
+            material.use_nodes = True
+            if material.node_tree is None:
+                continue
+            for node in material.node_tree.nodes:
+                if node.bl_idname != "ShaderNodeTexImage":
+                    continue
+                node.interpolation = "Closest"
+                node.extension = "REPEAT"
 
 
 def _find_minesport_objects():

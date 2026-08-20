@@ -33,8 +33,8 @@ public class GltfExporter {
     private final List<JsonObject> meshes = new ArrayList<>();
     private final List<JsonObject> nodes = new ArrayList<>();
 
-    private final Map<String,Integer> textureMap = new LinkedHashMap<>();
-    private final Map<String,Integer> materialMap = new LinkedHashMap<>();
+    private final Map<MaterialKey,Integer> textureMap = new LinkedHashMap<>();
+    private final Map<MaterialKey,Integer> materialMap = new LinkedHashMap<>();
 
     public GltfExporter(ResolverChain resolvers) {
         this.resolvers = resolvers;
@@ -57,7 +57,7 @@ public class GltfExporter {
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
         Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
         Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
-        Map<String,List<BlockData>> groups = new LinkedHashMap<>();
+        Map<String,List<Quad>> groups = new LinkedHashMap<>();
 
         int done = 0;
         int total = Math.max(blocks.size(), 1);
@@ -70,9 +70,7 @@ public class GltfExporter {
             }
 
             String shortName = BlockGrouper.shortName(block.blockId);
-            String physicalName = shortName
-                + BlockGrouper.stateSuffix(block.properties)
-                + "_" + block.x + "_" + block.y + "_" + block.z;
+            String physicalName = BlockGrouper.physicalName(block);
 
             String key = switch (mode) {
                 case ALL_MERGED -> "__merged__";
@@ -80,7 +78,13 @@ public class GltfExporter {
                 case INDIVIDUAL -> compoundIds.getOrDefault(block, physicalName);
             };
 
-            groups.computeIfAbsent(key, ignored -> new ArrayList<>()).add(block);
+            List<Quad> blockQuads = builder.buildBlock(block);
+            for (Quad quad : blockQuads) {
+                String meshKey = quad.partName() == null
+                    ? key
+                    : BlockGrouper.partName(block, quad.partName());
+                groups.computeIfAbsent(meshKey, ignored -> new ArrayList<>()).add(quad);
+            }
             solid++;
             if (progress != null) progress.onProgress(++done, total);
         }
@@ -95,48 +99,50 @@ public class GltfExporter {
         nodes.add(rootNode);
         int rootNodeIndex = 0;
 
-        if (mode == ObjExporter.ExportMode.ALL_MERGED) {
-            MeshResult result = buildMesh(groups.values(), builder, center, optimize, objectName);
+        List<Quad> mergedQuads = groups.remove("__merged__");
+        if (mode == ObjExporter.ExportMode.ALL_MERGED && mergedQuads != null) {
+            MeshResult result = buildMesh(mergedQuads, center, optimize, objectName);
             if (result != null) {
                 meshes.add(result.mesh());
                 rootNode.addProperty("mesh", meshes.size() - 1);
                 quadCount += result.quadCount();
                 vertexCount += result.vertexCount();
             }
-        } else {
-            JsonArray children = new JsonArray();
-            Set<String> usedNames = new HashSet<>();
-
-            for (var entry : groups.entrySet()) {
-                String childName = uniqueName(safeObjectName(entry.getKey()), usedNames);
-                MeshResult result = buildMesh(List.of(entry.getValue()), builder, center, optimize, childName);
-                if (result == null) continue;
-
-                meshes.add(result.mesh());
-                JsonObject child = new JsonObject();
-                child.addProperty("name", childName);
-                child.addProperty("mesh", meshes.size() - 1);
-
-                JsonObject extras = new JsonObject();
-                extras.addProperty("minesportGroup", entry.getKey());
-                extras.addProperty("minesportObjectMode", mode.name());
-                child.add("extras", extras);
-
-                nodes.add(child);
-                children.add(nodes.size() - 1);
-
-                quadCount += result.quadCount();
-                vertexCount += result.vertexCount();
-            }
-
-            if (children.size() > 0) rootNode.add("children", children);
         }
+
+        JsonArray children = new JsonArray();
+        Set<String> usedNames = new HashSet<>();
+
+        for (var entry : groups.entrySet()) {
+            String childName = uniqueName(safeObjectName(entry.getKey()), usedNames);
+            MeshResult result = buildMesh(entry.getValue(), center, optimize, childName);
+            if (result == null) continue;
+
+            meshes.add(result.mesh());
+            JsonObject child = new JsonObject();
+            child.addProperty("name", childName);
+            child.addProperty("mesh", meshes.size() - 1);
+
+            JsonObject extras = new JsonObject();
+            extras.addProperty("minesportGroup", entry.getKey());
+            extras.addProperty("minesportObjectMode", mode.name());
+            child.add("extras", extras);
+
+            nodes.add(child);
+            children.add(nodes.size() - 1);
+
+            quadCount += result.quadCount();
+            vertexCount += result.vertexCount();
+        }
+
+        if (children.size() > 0) rootNode.add("children", children);
 
         JsonObject rootExtras = new JsonObject();
         JsonObject minesportExtras = new JsonObject();
         minesportExtras.addProperty("schema", 1);
         minesportExtras.addProperty("exportName", objectName);
         minesportExtras.addProperty("objectMode", mode.name());
+        minesportExtras.addProperty("metresPerBlock", 1.0);
         rootExtras.add("minesport", minesportExtras);
         rootNode.add("extras", rootExtras);
 
@@ -173,8 +179,8 @@ public class GltfExporter {
         JsonObject sampler = new JsonObject();
         sampler.addProperty("magFilter", 9728);
         sampler.addProperty("minFilter", 9728);
-        sampler.addProperty("wrapS", 33648);
-        sampler.addProperty("wrapT", 33648);
+        sampler.addProperty("wrapS", 10497);
+        sampler.addProperty("wrapT", 10497);
         samplers.add(sampler);
         root.add("samplers", samplers);
 
@@ -196,22 +202,17 @@ public class GltfExporter {
     private record PrimitiveResult(JsonObject primitive, int vertexCount) {}
 
     private MeshResult buildMesh(
-        Collection<List<BlockData>> blockLists,
-        GeometryBuilder builder,
+        List<Quad> sourceQuads,
         float[] center,
         boolean optimize,
         String meshName
     ) throws IOException {
-        Map<String,List<Quad>> byTexture = new LinkedHashMap<>();
+        Map<MaterialKey,List<Quad>> byTexture = new LinkedHashMap<>();
         int quads = 0;
 
-        for (List<BlockData> list : blockLists) {
-            for (BlockData block : list) {
-                for (Quad quad : builder.buildBlock(block)) {
-                    byTexture.computeIfAbsent(quad.texturePath(), ignored -> new ArrayList<>()).add(quad);
-                    quads++;
-                }
-            }
+        for (Quad quad : sourceQuads) {
+            byTexture.computeIfAbsent(MaterialKey.forQuad(quad), ignored -> new ArrayList<>()).add(quad);
+            quads++;
         }
 
         if (byTexture.isEmpty()) return null;
@@ -240,7 +241,7 @@ public class GltfExporter {
 
     private PrimitiveResult buildPrimitive(
         List<Quad> quads,
-        String texture,
+        MaterialKey texture,
         float[] center,
         boolean weld
     ) throws IOException {
@@ -261,7 +262,9 @@ public class GltfExporter {
                 float y = vertices[i][1] - center[1];
                 float z = vertices[i][2] - center[2];
                 float u = quadUvs[i][0];
-                float v = 1f - quadUvs[i][1];
+                // Minecraft JSON and glTF both define (0,0) at the upper-left
+                // of the image. OBJ needs a V flip; glTF explicitly does not.
+                float v = quadUvs[i][1];
 
                 String key = String.format(
                     Locale.ROOT,
@@ -322,7 +325,7 @@ public class GltfExporter {
             .trim();
     }
 
-    private int getMaterial(String texture) throws IOException {
+    private int getMaterial(MaterialKey texture) throws IOException {
         Integer existing = materialMap.get(texture);
         if (existing != null) return existing;
 
@@ -336,12 +339,20 @@ public class GltfExporter {
         pbr.addProperty("roughnessFactor", 1);
 
         JsonObject material = new JsonObject();
-        material.addProperty("name", texture);
+        material.addProperty("name", texture.materialName());
         material.add("pbrMetallicRoughness", pbr);
+        // Minecraft model faces are rendered from either side. This also keeps
+        // thin multipart models (chairs, fences, plants) from losing faces in
+        // glTF viewers that enable back-face culling by default.
+        material.addProperty("doubleSided", true);
 
-        BufferedImage image = resolvers.resolveTexture(texture);
+        BufferedImage image = texture.apply(resolvers.resolveTexture(texture.texturePath()));
         if (image != null && hasAlpha(image)) {
-            material.addProperty("alphaMode", "BLEND");
+            // Minecraft block textures are alpha-tested cutouts, not sorted
+            // translucent layers. BLEND caused black/see-through bands where
+            // the cuboids of multipart furniture overlap in Blender.
+            material.addProperty("alphaMode", "MASK");
+            material.addProperty("alphaCutoff", 0.5);
         }
 
         materials.add(material);
@@ -350,11 +361,11 @@ public class GltfExporter {
         return index;
     }
 
-    private int getTexture(String texture) throws IOException {
+    private int getTexture(MaterialKey texture) throws IOException {
         Integer existing = textureMap.get(texture);
         if (existing != null) return existing;
 
-        BufferedImage image = resolvers.resolveTexture(texture);
+        BufferedImage image = texture.apply(resolvers.resolveTexture(texture.texturePath()));
         if (image == null) {
             image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
             for (int y = 0; y < 16; y++) {
@@ -366,7 +377,7 @@ public class GltfExporter {
         ImageIO.write(image, "PNG", png);
 
         JsonObject imageJson = new JsonObject();
-        imageJson.addProperty("name", texture);
+        imageJson.addProperty("name", texture.materialName());
         imageJson.addProperty(
             "uri",
             "data:image/png;base64," + Base64.getEncoder().encodeToString(png.toByteArray())

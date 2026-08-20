@@ -31,9 +31,29 @@ class MINESPORT_OT_import_obj(bpy.types.Operator, ImportHelper):
             return result
 
         imported = [obj for obj in bpy.data.objects if obj.as_pointer() not in before]
+        _prepare_blender_scene(imported)
         metadata = load_sidecar(path)
         translate_scene(metadata, imported)
         return {"FINISHED"}
+
+
+def _prepare_blender_scene(imported):
+    # One Minecraft block unit is one metre. Make that explicit in Blender and
+    # bake the OBJ importer's axis conversion so the Transform panel reports
+    # zero rotation / unit scale without changing the world geometry.
+    units = bpy.context.scene.unit_settings
+    units.system = "METRIC"
+    units.length_unit = "METERS"
+    units.scale_length = 1.0
+
+    meshes = [obj for obj in imported if obj.type == "MESH"]
+    if not meshes:
+        return
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in meshes:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = meshes[0]
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
 
 
 def _menu_import(self, context):

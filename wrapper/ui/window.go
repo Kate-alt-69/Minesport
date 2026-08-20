@@ -34,6 +34,7 @@ type MinesportApp struct {
 	fyneApp                                                           fyne.App
 	engine                                                            *ipc.Engine
 	mu                                                                sync.Mutex
+	heightmapMu                                                       sync.Mutex
 	engineStateMu                                                     sync.Mutex
 	engineAvailable                                                   bool
 	engineFailureShown                                                bool
@@ -65,18 +66,20 @@ type MinesportApp struct {
 	selectionModeSelect                                  *widget.Select
 	boxCoordGroup, bubbleCoordGroup                      *fyne.Container
 
-	worldMap                                        *WorldMapV2
-	logContent                                      *widget.Label
-	logScroll                                       *container.Scroll
-	progressBar                                     *widget.ProgressBar
-	statusLabel                                     *widget.Label
-	stateIcon                                       *widget.Icon
-	cursorLabel                                     *widget.Label
-	metaHUD                                         *widget.Label
-	viewToggle2D, viewToggle3D, fitBtn, settingsBtn *widget.Button
-	previewHost                                     *fyne.Container
-	embeddedViewer                                  *EmbeddedViewer
-	viewHint                                        *widget.Label
+	worldMap                           *WorldMapV2
+	logContent                         *widget.Label
+	logScroll                          *container.Scroll
+	progressBar                        *widget.ProgressBar
+	statusLabel                        *widget.Label
+	stateIcon                          *widget.Icon
+	cursorLabel                        *widget.Label
+	metaHUD                            *widget.Label
+	viewToggle2D, viewToggle3D, fitBtn *widget.Button
+	settingsBtn                        *AnimatedSettingsButton
+	previewHost                        *fyne.Container
+	mapPreparing                       *fyne.Container
+	embeddedViewer                     *EmbeddedViewer
+	viewHint                           *widget.Label
 
 	exportWindow fyne.Window
 	exportTitle  *widget.Label
@@ -95,6 +98,15 @@ func Run(jarPath string) {
 	ms.settings = LoadSettings()
 	ms.engine = ipc.NewEngine(jarPath)
 	w.SetContent(ms.buildUI())
+	ms.installViewportShortcuts()
+	w.SetCloseIntercept(func() {
+		if ms.embeddedViewer != nil {
+			ms.embeddedViewer.Close()
+		}
+		ms.engine.Stop()
+		w.SetCloseIntercept(nil)
+		w.Close()
+	})
 	if ms.settings.DebugMode {
 		ms.openDebugConsole()
 	}
@@ -136,7 +148,9 @@ func (ms *MinesportApp) buildInspector() fyne.CanvasObject {
 	ms.exportNameEntry.SetPlaceHolder("Export name")
 	selectBtn := widget.NewButtonWithIcon("Select world", theme.FolderOpenIcon(), ms.onSelectWorld)
 	selectBtn.Importance = widget.HighImportance
-	worldCard := widget.NewCard("WORLD INSPECTOR", "", container.NewVBox(ms.worldNameLabel, ms.worldMetaLabel, compactEntryRow("Export name", ms.exportNameEntry), widget.NewLabel("Used for the exported filename and imported 3D object name."), container.NewPadded(selectBtn)))
+	ms.settingsBtn = NewAnimatedSettingsButton(ms.onOpenSettings)
+	worldHeader := container.NewBorder(nil, nil, widget.NewLabelWithStyle("WORLD INSPECTOR", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), ms.settingsBtn)
+	worldCard := widget.NewCard("", "", container.NewVBox(worldHeader, ms.worldNameLabel, ms.worldMetaLabel, compactEntryRow("Export name", ms.exportNameEntry), widget.NewLabel("Used for the exported filename and imported 3D object name."), container.NewPadded(selectBtn)))
 
 	ms.selectionModeSelect = widget.NewSelect([]string{"Box selection", "Bubble selection"}, func(choice string) {
 		if ms.boxCoordGroup == nil || ms.bubbleCoordGroup == nil {
@@ -229,9 +243,7 @@ func (ms *MinesportApp) buildMainArea() fyne.CanvasObject {
 			ms.worldMap.FitToWindow()
 		}
 	})
-	ms.settingsBtn = widget.NewButtonWithIcon("Settings", theme.SettingsIcon(), ms.onOpenSettings)
 	ms.viewHint = widget.NewLabel("LMB select · MMB pan · scroll zoom")
-	toolbar := container.NewBorder(nil, nil, container.NewHBox(ms.viewToggle2D, ms.viewToggle3D), container.NewHBox(ms.fitBtn, ms.settingsBtn), ms.viewHint)
 	ms.worldMap = NewWorldMapV2()
 	ms.worldMap.OnSelectionChanged = func(minX, minZ, maxX, maxZ int) {
 		ms.minXRange.Front.SetText(fmt.Sprintf("%d", minX))
@@ -242,7 +254,12 @@ func (ms *MinesportApp) buildMainArea() fyne.CanvasObject {
 	}
 	ms.worldMap.OnCursorMoved = func(x, z int) { ms.cursorLabel.SetText(fmt.Sprintf("X %d  ·  Z %d", x, z)) }
 	ms.worldMap.OnCenterPicked = func(x, z int) { ms.centerX.SetText(fmt.Sprintf("%d", x)); ms.centerZ.SetText(fmt.Sprintf("%d", z)) }
-	mapArea := container.NewStack(ms.worldMap, container.NewVBox(layout.NewSpacer(), container.NewHBox(layout.NewSpacer(), ms.buildMetaHUD())))
+	preparingText := widget.NewLabelWithStyle("Preparing 2D map…", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	preparingProgress := widget.NewProgressBarInfinite()
+	preparingCard := widget.NewCard("", "", container.NewVBox(preparingText, preparingProgress))
+	ms.mapPreparing = container.NewCenter(preparingCard)
+	ms.mapPreparing.Hide()
+	mapArea := container.NewStack(ms.worldMap, container.NewVBox(layout.NewSpacer(), container.NewHBox(layout.NewSpacer(), ms.buildMetaHUD())), ms.mapPreparing)
 	ms.previewHost = container.NewMax(mapArea)
 	ms.logContent = widget.NewLabel("")
 	ms.logContent.TextStyle = fyne.TextStyle{Monospace: true}
@@ -253,7 +270,26 @@ func (ms *MinesportApp) buildMainArea() fyne.CanvasObject {
 	ms.stateIcon = widget.NewIcon(theme.InfoIcon())
 	ms.cursorLabel = widget.NewLabel("")
 	state := container.NewBorder(nil, nil, container.NewHBox(ms.stateIcon, ms.statusLabel), ms.cursorLabel, ms.progressBar)
-	return container.NewBorder(toolbar, state, nil, nil, ms.previewHost)
+	viewControls := container.NewHBox(layout.NewSpacer(), ms.viewHint, ms.viewToggle2D, ms.viewToggle3D, ms.fitBtn)
+	viewportOverlay := container.NewVBox(container.NewPadded(viewControls), layout.NewSpacer())
+	return container.NewBorder(nil, state, nil, nil, container.NewStack(ms.previewHost, viewportOverlay))
+}
+
+func (ms *MinesportApp) installViewportShortcuts() {
+	ms.window.Canvas().SetOnTypedKey(func(event *fyne.KeyEvent) {
+		if event.Name != fyne.KeyF6 {
+			return
+		}
+		if ms.embeddedViewer != nil && ms.embeddedViewer.Visible() {
+			ms.embeddedViewer.Fit()
+			ms.statusLabel.SetText("3D camera centered")
+			return
+		}
+		if ms.worldMap != nil {
+			ms.worldMap.FitToWindow()
+			ms.statusLabel.SetText("2D map fitted")
+		}
+	})
 }
 
 func (ms *MinesportApp) buildMetaHUD() fyne.CanvasObject {
@@ -309,8 +345,13 @@ func formatCount(n int) string {
 }
 
 func (ms *MinesportApp) onSelectWorld() {
-	ShowWorldPicker(ms.window, func(worldPath, modsPath string) {
+	if ms.embeddedViewer != nil {
+		ms.embeddedViewer.Close()
+		ms.viewerSession = nil
 		ms.embeddedViewer = nil
+		ms.show2DPreview()
+	}
+	ShowWorldPicker(ms.window, func(worldPath, modsPath string) {
 		ms.show2DPreview()
 		ms.worldPath = worldPath
 		ms.modsPath = modsPath
@@ -689,38 +730,78 @@ func (ms *MinesportApp) finishExport(resp ipc.Response, ok bool, msg string) {
 	}
 }
 func (ms *MinesportApp) generateHeightmap(worldFolder string) {
+	ms.heightmapMu.Lock()
+	defer ms.heightmapMu.Unlock()
+	if ms.worldPath != worldFolder {
+		return
+	}
+	ms.setMapPreparing(true, "Preparing 2D map…")
+	if cached, pngBytes, ok := loadCachedHeightmap(worldFolder); ok {
+		ms.appendLog("2D map cache hit: using saved heightmap")
+		if err := ms.applyHeightmapBytes(worldFolder, pngBytes, cached.MinX, cached.MinZ, cached.MaxX, cached.MaxZ, cached.Scale); err == nil {
+			ms.statusLabel.SetText("Heightmap ready · cached")
+			ms.stateIcon.SetResource(theme.ConfirmIcon())
+			ms.setMapPreparing(false, "")
+			return
+		}
+		ms.appendLog("Cached 2D map was unreadable; rebuilding it")
+	}
 	ms.appendLog("Heightmap request: " + worldFolder)
 	resp, err := ms.engine.SendCommand(map[string]interface{}{"command": "heightmap", "worldPath": worldFolder, "scale": 1})
 	if err != nil {
+		ms.setMapPreparing(false, "")
 		ms.heightmapFailed("Heightmap IPC failed: " + err.Error())
 		return
 	}
 	if resp == nil {
+		ms.setMapPreparing(false, "")
 		ms.heightmapFailed("Engine returned no heightmap response")
 		return
 	}
 	if resp.Type == "error" {
+		ms.setMapPreparing(false, "")
 		ms.heightmapFailed("Engine error: " + resp.Message)
 		return
 	}
 	if resp.Type != "heightmap" {
+		ms.setMapPreparing(false, "")
 		ms.heightmapFailed("Unexpected response type " + resp.Type)
 		return
 	}
 	if resp.Image == "" {
+		ms.setMapPreparing(false, "")
 		ms.heightmapFailed("Engine response contained no image")
 		return
 	}
 	ms.appendLog(fmt.Sprintf("Heightmap response: %d base64 bytes, bounds X %d..%d Z %d..%d, scale %d", len(resp.Image), resp.MinX, resp.MaxX, resp.MinZ, resp.MaxZ, resp.Scale))
 	b, err := base64.StdEncoding.DecodeString(resp.Image)
 	if err != nil {
+		ms.setMapPreparing(false, "")
 		ms.heightmapFailed("Heightmap base64 decode failed: " + err.Error())
 		return
 	}
-	img, _, err := image.Decode(bytes.NewReader(b))
-	if err != nil {
+	if err := ms.applyHeightmapBytes(worldFolder, b, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ, resp.Scale); err != nil {
+		ms.setMapPreparing(false, "")
 		ms.heightmapFailed("Heightmap PNG decode failed: " + err.Error())
 		return
+	}
+	if err := saveCachedHeightmap(worldFolder, b, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ, resp.Scale); err != nil {
+		ms.appendLog("Could not cache 2D map: " + err.Error())
+	} else {
+		ms.appendLog("2D map cached for the next launch")
+	}
+	ms.setMapPreparing(false, "")
+	ms.statusLabel.SetText("Heightmap ready")
+	ms.stateIcon.SetResource(theme.ConfirmIcon())
+}
+
+func (ms *MinesportApp) applyHeightmapBytes(worldFolder string, pngBytes []byte, minX, minZ, maxX, maxZ, scale int) error {
+	img, _, err := image.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		return err
+	}
+	if ms.worldPath != worldFolder {
+		return fmt.Errorf("world selection changed while the map was preparing")
 	}
 	rgba := image.NewRGBA(img.Bounds())
 	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
@@ -728,16 +809,30 @@ func (ms *MinesportApp) generateHeightmap(worldFolder string) {
 			rgba.Set(x, y, img.At(x, y))
 		}
 	}
-	ms.worldMap.LoadHeightmap(rgba, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ)
+	ms.worldMap.LoadHeightmap(rgba, minX, minZ, maxX, maxZ)
 	ms.worldMap.FitToWindow()
-	ms.minXRange.Front.SetText(fmt.Sprintf("%d", resp.MinX))
-	ms.minXRange.Back.SetText(fmt.Sprintf("%d", resp.MaxX))
-	ms.minZRange.Front.SetText(fmt.Sprintf("%d", resp.MinZ))
-	ms.minZRange.Back.SetText(fmt.Sprintf("%d", resp.MaxZ))
-	ms.statusLabel.SetText("Heightmap ready")
-	ms.stateIcon.SetResource(theme.ConfirmIcon())
+	ms.minXRange.Front.SetText(fmt.Sprintf("%d", minX))
+	ms.minXRange.Back.SetText(fmt.Sprintf("%d", maxX))
+	ms.minZRange.Front.SetText(fmt.Sprintf("%d", minZ))
+	ms.minZRange.Back.SetText(fmt.Sprintf("%d", maxZ))
+	_ = scale
+	return nil
+}
+
+func (ms *MinesportApp) setMapPreparing(preparing bool, message string) {
+	if ms.mapPreparing == nil {
+		return
+	}
+	if preparing {
+		ms.mapPreparing.Show()
+		ms.statusLabel.SetText(message)
+		ms.stateIcon.SetResource(theme.ViewRefreshIcon())
+	} else {
+		ms.mapPreparing.Hide()
+	}
 }
 func (ms *MinesportApp) heightmapFailed(reason string) {
+	ms.setMapPreparing(false, "")
 	ms.statusLabel.SetText("Heightmap failed — see log")
 	ms.stateIcon.SetResource(theme.ErrorIcon())
 	ms.showOperationFailure("2D preview failed", reason)
@@ -762,7 +857,17 @@ func (ms *MinesportApp) appendLog(msg string) {
 	}
 }
 func (ms *MinesportApp) onOpenSettings() {
-	ShowSettingsDialog(ms.window, ms.settings, ms.applySettings)
+	previewVisible := ms.embeddedViewer != nil && ms.embeddedViewer.Visible()
+	if previewVisible {
+		ms.embeddedViewer.Hide()
+	}
+	ms.settingsBtn.StartPulse()
+	ShowSettingsDialog(ms.window, ms.settings, ms.applySettings, func() {
+		ms.settingsBtn.StopPulse()
+		if previewVisible && ms.embeddedViewer != nil {
+			ms.embeddedViewer.Show()
+		}
+	})
 }
 func (ms *MinesportApp) applySettings(s Settings) {
 	was := ms.settings.DebugMode

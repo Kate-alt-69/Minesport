@@ -124,6 +124,18 @@ public class BlockGrouper {
         return colon >= 0 ? blockId.substring(colon + 1) : blockId;
     }
 
+    /** Stable object name for one physical block in OBJ, glTF and sidecars. */
+    public static String physicalName(BlockData block) {
+        return shortName(block.blockId)
+            + stateSuffix(block.properties)
+            + "_" + block.x + "_" + block.y + "_" + block.z;
+    }
+
+    /** Stable name for a separately exported movable/model part. */
+    public static String partName(BlockData block, String part) {
+        return physicalName(block) + "__" + sanitize(part == null ? "part" : part);
+    }
+
     public static float[] boundingBoxCenter(List<BlockData> blocks) {
         if (blocks.isEmpty()) return new float[]{0, 0, 0};
 

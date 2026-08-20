@@ -14,8 +14,20 @@ public record Quad(
     String texturePath,
     float[] normal,
     String cullface,
-    int tintindex
+    int tintindex,
+    String partName
 ) {
+    public Quad(
+        float[][] verts,
+        float[] uv,
+        String texturePath,
+        float[] normal,
+        String cullface,
+        int tintindex
+    ) {
+        this(verts, uv, texturePath, normal, cullface, tintindex, null);
+    }
+
     @Override
     public float[][] verts() {
         if (verts == null || verts.length < 4) return verts;

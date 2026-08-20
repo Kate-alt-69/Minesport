@@ -10,19 +10,23 @@ import (
 // yet), and a representative color (same palette the 2D heightmap uses,
 // computed engine-side so both views agree visually).
 type Block struct {
-	X, Y, Z int
-	ID      string
-	R, G, B uint8
+	X, Y, Z                                int
+	ID                                     string
+	TextureTop, TextureSide, TextureBottom string
+	R, G, B                                uint8
 }
 
 type rawBlock struct {
-	X  int    `json:"x"`
-	Y  int    `json:"y"`
-	Z  int    `json:"z"`
-	ID string `json:"id"`
-	R  int    `json:"r"`
-	G  int    `json:"g"`
-	B  int    `json:"b"`
+	X             int    `json:"x"`
+	Y             int    `json:"y"`
+	Z             int    `json:"z"`
+	ID            string `json:"id"`
+	TextureTop    string `json:"textureTop"`
+	TextureSide   string `json:"textureSide"`
+	TextureBottom string `json:"textureBottom"`
+	R             int    `json:"r"`
+	G             int    `json:"g"`
+	B             int    `json:"b"`
 }
 
 // LoadBlocks reads the JSON file written by the engine's "listBlocks"
@@ -42,8 +46,9 @@ func LoadBlocks(path string) ([]Block, error) {
 	for i, r := range raw {
 		blocks[i] = Block{
 			X: r.X, Y: r.Y, Z: r.Z,
-			ID: r.ID,
-			R:  uint8(clamp255(r.R)), G: uint8(clamp255(r.G)), B: uint8(clamp255(r.B)),
+			ID:         r.ID,
+			TextureTop: r.TextureTop, TextureSide: r.TextureSide, TextureBottom: r.TextureBottom,
+			R: uint8(clamp255(r.R)), G: uint8(clamp255(r.G)), B: uint8(clamp255(r.B)),
 		}
 	}
 	return blocks, nil

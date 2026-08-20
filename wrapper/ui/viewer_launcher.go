@@ -8,15 +8,17 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	fynedriver "fyne.io/fyne/v2/driver"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/kastrick/minesport/ipc"
 	"github.com/kastrick/minesport/processutil"
-	"github.com/kastrick/minesport/viewer"
 )
 
 type ViewerEvent struct {
@@ -44,11 +46,12 @@ type ViewerSession struct {
 	OnPick        func(int, int, int)
 	OnSelection   func([][3]int, int)
 	OnBoxSelected func([3]int, [3]int, int)
+	OnScreenshot  func(string)
 	OnClosed      func()
 }
 
 func LaunchViewer(exePath, blocksPath string) (*ViewerSession, error) {
-	cmd := exec.Command(exePath, "--viewer", blocksPath)
+	cmd := exec.Command(exePath, "--viewer-embed", blocksPath)
 	processutil.HideWindow(cmd)
 	in, err := cmd.StdinPipe()
 	if err != nil {
@@ -115,6 +118,10 @@ func (vs *ViewerSession) readLoop(stdout io.Reader) {
 			if vs.OnBoxSelected != nil {
 				vs.OnBoxSelected(ev.Min, ev.Max, ev.Count)
 			}
+		case "screenshot":
+			if vs.OnScreenshot != nil {
+				vs.OnScreenshot(ev.Message)
+			}
 		}
 	}
 }
@@ -154,7 +161,74 @@ func (vs *ViewerSession) HighlightBox(min, max [3]int) {
 func (vs *ViewerSession) ClearHighlight() {
 	vs.send(map[string]interface{}{"command": "clearHighlight"})
 }
+func (vs *ViewerSession) Embed(parent uintptr, x, y, width, height int) {
+	vs.send(map[string]interface{}{
+		"command": "embed", "parent": uint64(parent),
+		"x": x, "y": y, "width": width, "height": height,
+	})
+}
+func (vs *ViewerSession) SetRect(x, y, width, height int) {
+	vs.send(map[string]interface{}{"command": "embedRect", "x": x, "y": y, "width": width, "height": height})
+}
+func (vs *ViewerSession) SetVisible(visible bool) {
+	vs.send(map[string]interface{}{"command": "visible", "visible": visible})
+}
+func (vs *ViewerSession) Fit()   { vs.send(map[string]interface{}{"command": "fit"}) }
 func (vs *ViewerSession) Close() { vs.send(map[string]interface{}{"command": "quit"}) }
+
+func nativeWindowHandle(window fyne.Window) uintptr {
+	native, ok := window.(fynedriver.NativeWindow)
+	if !ok {
+		return 0
+	}
+	result := make(chan uintptr, 1)
+	native.RunNative(func(context any) {
+		var handle uintptr
+		switch value := context.(type) {
+		case fynedriver.WindowsWindowContext:
+			handle = value.HWND
+		case fynedriver.X11WindowContext:
+			handle = value.WindowHandle
+		case fynedriver.WaylandWindowContext:
+			handle = value.WaylandSurface
+		case fynedriver.MacWindowContext:
+			handle = value.NSWindow
+		}
+		result <- handle
+	})
+	select {
+	case handle := <-result:
+		return handle
+	case <-time.After(2 * time.Second):
+		return 0
+	}
+}
+
+const maxPaddedPreviewVolume int64 = 2_500_000
+
+func addPreviewContext(p ipc.ListBlocksParams) ipc.ListBlocksParams {
+	width := int64(p.MaxX - p.MinX + 1)
+	height := int64(p.MaxY - p.MinY + 1)
+	depth := int64(p.MaxZ - p.MinZ + 1)
+	if width < 1 || height < 1 || depth < 1 {
+		return p
+	}
+	paddedWidth, paddedHeight, paddedDepth := width+64, height+32, depth+64
+	if paddedWidth*paddedHeight*paddedDepth > maxPaddedPreviewVolume {
+		return p
+	}
+	p.MinX -= 32
+	p.MaxX += 32
+	p.MinY -= 16
+	p.MaxY += 16
+	p.MinZ -= 32
+	p.MaxZ += 32
+	// The live viewer needs the rectangular surroundings as context. Selection
+	// semantics remain in the UI/export request and are highlighted separately.
+	p.CenterX, p.CenterY, p.CenterZ = nil, nil, nil
+	p.RadiusX, p.RadiusY, p.RadiusZ = nil, nil, nil
+	return p
+}
 
 func (ms *MinesportApp) onExplore3D() {
 	if ms.worldPath == "" {
@@ -170,24 +244,33 @@ func (ms *MinesportApp) onExplore3D() {
 		return
 	}
 	ms.statusLabel.SetText("Loading 3D preview…")
-	ms.appendLog("Embedded 3D preview: requesting blocks from engine")
+	ms.appendLog("Live 3D renderer: requesting blocks from engine")
 	ms.stateIcon.SetResource(theme.ViewRefreshIcon())
+	ms.viewToggle3D.Disable()
 	go func() {
-		p := ipc.ListBlocksParams{WorldPath: ms.worldPath}
+		p := ipc.ListBlocksParams{WorldPath: ms.worldPath, ModsPath: ms.modsPath, ModLoader: ms.loaderType}
+		var selectedMin, selectedMax [3]int
 		if ms.selectionModeSelect.Selected == "Bubble selection" {
 			cx, cy, cz := ms.centerX.Int(0), ms.centerY.Int(64), ms.centerZ.Int(0)
 			rx, ry, rz := ms.radiusX.Int(32), ms.radiusY.Int(32), ms.radiusZ.Int(32)
 			p.MinX, p.MaxX = cx-rx, cx+rx
 			p.MinY, p.MaxY = cy-ry, cy+ry
 			p.MinZ, p.MaxZ = cz-rz, cz+rz
-			p.CenterX, p.CenterY, p.CenterZ = &cx, &cy, &cz
-			p.RadiusX, p.RadiusY, p.RadiusZ = &rx, &ry, &rz
 		} else {
 			p.MinX, p.MaxX = ms.minXRange.Bounds()
 			p.MinY, p.MaxY = ms.minYRange.Bounds()
 			p.MinZ, p.MaxZ = ms.minZRange.Bounds()
 		}
-		path, count, err := ms.engine.ListBlocks(p)
+		selectedMin = [3]int{p.MinX, p.MinY, p.MinZ}
+		selectedMax = [3]int{p.MaxX, p.MaxY, p.MaxZ}
+		previewParams := addPreviewContext(p)
+		if previewParams.MinX != p.MinX || previewParams.MinY != p.MinY || previewParams.MinZ != p.MinZ {
+			ms.appendLog(fmt.Sprintf(
+				"3D context bounds: X %d..%d, Y %d..%d, Z %d..%d (selection remains highlighted)",
+				previewParams.MinX, previewParams.MaxX, previewParams.MinY, previewParams.MaxY, previewParams.MinZ, previewParams.MaxZ,
+			))
+		}
+		path, count, err := ms.engine.ListBlocks(previewParams)
 		if err != nil {
 			ms.appendLog("3D block request failed: " + err.Error())
 			ms.explore3DFailed(err.Error())
@@ -198,30 +281,69 @@ func (ms *MinesportApp) onExplore3D() {
 			ms.explore3DFailed("No solid blocks were found in the current selection.")
 			return
 		}
-		blocks, err := viewer.LoadBlocks(path)
-		_ = os.Remove(path)
+		executable, err := os.Executable()
 		if err != nil {
-			ms.explore3DFailed("Could not load 3D block data: " + err.Error())
+			_ = os.Remove(path)
+			ms.explore3DFailed("Could not locate the Minesport executable: " + err.Error())
 			return
 		}
-		preview, err := NewEmbeddedViewer(blocks)
-		if err != nil {
-			ms.explore3DFailed(err.Error())
+		parentHandle := nativeWindowHandle(ms.window)
+		if parentHandle == 0 {
+			_ = os.Remove(path)
+			ms.explore3DFailed("Could not obtain the Minesport window handle needed to host the live 3D renderer.")
 			return
 		}
-		preview.OnBoxSelected = func(min, max [3]int, count int) { ms.applyBoxSelectionFromViewer(min, max, count) }
-		preview.OnHint = func(message string) { ms.statusLabel.SetText(message); ms.updateMetaHUD(message) }
-		ms.embeddedViewer = preview
-		ms.showEmbedded3D()
-		ms.statusLabel.SetText(fmt.Sprintf("3D ready · %s blocks", formatCount(count)))
-		ms.stateIcon.SetResource(theme.ConfirmIcon())
-		ms.appendLog(fmt.Sprintf("Embedded 3D preview ready: %d blocks", count))
+		session, err := LaunchViewer(executable, path)
+		if err != nil {
+			_ = os.Remove(path)
+			ms.explore3DFailed("Could not start the original 3D renderer: " + err.Error())
+			return
+		}
+		preview := NewEmbeddedViewer(session, parentHandle)
+		session.OnReady = func(readyCount int) {
+			ms.viewerSession = session
+			ms.embeddedViewer = preview
+			ms.showEmbedded3D()
+			ms.statusLabel.SetText(fmt.Sprintf("3D ready · %s blocks", formatCount(readyCount)))
+			ms.stateIcon.SetResource(theme.ConfirmIcon())
+			ms.viewToggle3D.Enable()
+			ms.appendLog(fmt.Sprintf("Original OpenGL 3D renderer embedded: %d blocks", readyCount))
+			session.HighlightBox(selectedMin, selectedMax)
+		}
+		session.OnError = func(message string) {
+			ms.appendLog("Live 3D renderer error: " + message)
+			ms.explore3DFailed(message)
+		}
+		session.OnPick = func(x, y, z int) { ms.showSelectionPopup(x, y, z) }
+		session.OnBoxSelected = func(min, max [3]int, selectedCount int) {
+			ms.applyBoxSelectionFromViewer(min, max, selectedCount)
+		}
+		session.OnScreenshot = func(path string) {
+			ms.statusLabel.SetText("3D screenshot saved")
+			ms.appendLog("3D screenshot saved: " + path)
+		}
+		session.OnClosed = func() {
+			_ = os.Remove(path)
+			if ms.viewerSession != session {
+				return
+			}
+			ms.viewerSession = nil
+			ms.embeddedViewer = nil
+			ms.show2DPreview()
+			ms.statusLabel.SetText("3D preview closed")
+			ms.viewToggle3D.Enable()
+			ms.appendLog("Live 3D renderer closed")
+		}
+		session.replayLifecycle()
 	}()
 }
 
 func (ms *MinesportApp) explore3DFailed(msg string) {
 	ms.statusLabel.SetText("3D preview failed — see log")
 	ms.stateIcon.SetResource(theme.ErrorIcon())
+	if ms.worldPath != "" && ms.isEngineAvailable() {
+		ms.viewToggle3D.Enable()
+	}
 	ms.showOperationFailure("3D preview failed", msg)
 }
 
@@ -235,7 +357,7 @@ func (ms *MinesportApp) showEmbedded3D() {
 	ms.embeddedViewer.Show()
 	ms.viewToggle3D.Importance = widget.HighImportance
 	ms.viewToggle2D.Importance = widget.MediumImportance
-	ms.viewHint.SetText("drag orbit · scroll zoom · LMB point A/B · RMB clear")
+	ms.viewHint.SetText("WASD fly · Space/Shift vertical · Ctrl sprint · MMB look · ESC controls")
 }
 
 func (ms *MinesportApp) show2DPreview() {
