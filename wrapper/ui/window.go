@@ -22,6 +22,7 @@ import (
     "fyne.io/fyne/v2/theme"
     "fyne.io/fyne/v2/widget"
 
+    "github.com/kastrick/minesport/bridgecompat"
     "github.com/kastrick/minesport/ipc"
     "github.com/kastrick/minesport/launcher"
     _ "image/png"
@@ -161,12 +162,13 @@ func(ms *MinesportApp)updateMetaHUD(text string){if ms.metaHUD!=nil{ms.metaHUD.S
 func(ms *MinesportApp)selectionSizeText()string{var w,h,d int;if ms.selectionModeSelect!=nil&&ms.selectionModeSelect.Selected=="Bubble selection"{w=2*ms.radiusX.Int(32)+1;h=2*ms.radiusY.Int(32)+1;d=2*ms.radiusZ.Int(32)+1}else{a,b:=ms.minXRange.Bounds();c,e:=ms.minYRange.Bounds();f,g:=ms.minZRange.Bounds();w=b-a+1;h=e-c+1;d=g-f+1};if w<0{w=-w};if h<0{h=-h};if d<0{d=-d};return fmt.Sprintf("%s blocks  ·  %s × %s × %s",formatCount(w*h*d),formatCount(w),formatCount(h),formatCount(d))}
 func formatCount(n int)string{if n<0{n=0};s:=fmt.Sprintf("%d",n);out:="";for i,c:=range s{if i>0&&(len(s)-i)%3==0{out+=","};out+=string(c)};return out}
 
-func(ms *MinesportApp)onSelectWorld(){ShowWorldPicker(ms.window,func(worldPath,modsPath string){ms.worldPath=worldPath;ms.modsPath=modsPath;ms.worldName=filepath.Base(worldPath);ms.worldNameLabel.SetText(ms.worldName);ms.worldMetaLabel.SetText(ms.detectWorldMeta(worldPath));if strings.TrimSpace(ms.exportNameEntry.Text)==""||ms.exportNameEntry.Text=="Minesport_Export"{ms.exportNameEntry.SetText(sanitizeExportName(ms.worldName)+"_export")};if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)};ms.exportBtn.Enable();ms.autoDetectBtn.Enable();ms.viewToggle3D.Enable();go ms.generateHeightmap(worldPath)})}
+func(ms *MinesportApp)onSelectWorld(){ShowWorldPicker(ms.window,func(worldPath,modsPath string){ms.worldPath=worldPath;ms.modsPath=modsPath;ms.worldName=filepath.Base(worldPath);ms.worldNameLabel.SetText(ms.worldName);ms.worldMetaLabel.SetText(ms.detectWorldMeta(worldPath));ms.appendLog(fmt.Sprintf("Selected world: %s (Minecraft %s, %s)",worldPath,ms.mcVersion,ms.loaderType));if strings.TrimSpace(ms.exportNameEntry.Text)==""||ms.exportNameEntry.Text=="Minesport_Export"{ms.exportNameEntry.SetText(sanitizeExportName(ms.worldName)+"_export")};if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)};ms.exportBtn.Enable();ms.autoDetectBtn.Enable();ms.viewToggle3D.Enable();ms.requireBridgeCompatibility(nil);go ms.generateHeightmap(worldPath)})}
 func(ms *MinesportApp)onSelectOutput(){go func(){f:=nativeOpenFolder("Select Output Folder");if f!=""{ms.outputPath=f;ms.outputLabel.SetText(f)}}()}
 func(ms *MinesportApp)onAutoDetect(){if ms.worldPath==""{return};go func(){r,e:=ms.engine.SendCommand(map[string]interface{}{"command":"heightmap","worldPath":ms.worldPath,"scale":1});if e!=nil||r==nil||r.Type!="heightmap"{return};ms.minXRange.Front.SetText(fmt.Sprintf("%d",r.MinX));ms.minXRange.Back.SetText(fmt.Sprintf("%d",r.MaxX));ms.minZRange.Front.SetText(fmt.Sprintf("%d",r.MinZ));ms.minZRange.Back.SetText(fmt.Sprintf("%d",r.MaxZ))}()}
 
 func(ms *MinesportApp)onExport(){
     if ms.worldPath==""{dialog.ShowError(fmt.Errorf("no world selected"),ms.window);return}
+    if ms.requireBridgeCompatibility(ms.onExport){return}
     name:=sanitizeExportName(ms.exportNameEntry.Text);if name==""{name=sanitizeExportName(ms.worldName);if name==""{name="Minesport_Export"}}
     ext:=".gltf";if strings.Contains(ms.formatSelect.Selected,"OBJ"){ext=".obj"}
     if ms.outputPath==""{home,_:=os.UserHomeDir();ms.outputPath=filepath.Join(home,"Minesport_Exports");ms.outputLabel.SetText(ms.outputPath)}
@@ -191,9 +193,26 @@ func(ms *MinesportApp)startExport(outputPath string){
     format:="gltf";if strings.HasSuffix(strings.ToLower(outputPath),".obj"){format="obj"};mode:="grouped";switch ms.modeSelect.Selected{case "Individual blocks":mode="individual";case "Merged":mode="merged"}
     p:=ipc.ExportParams{WorldPath:ms.worldPath,OutputPath:outputPath,Format:format,ExportMode:mode}
     if ms.selectionModeSelect.Selected=="Bubble selection"{cx,cy,cz:=ms.centerX.Int(0),ms.centerY.Int(64),ms.centerZ.Int(0);rx,ry,rz:=ms.radiusX.Int(32),ms.radiusY.Int(32),ms.radiusZ.Int(32);p.MinX,p.MaxX=cx-rx,cx+rx;p.MinY,p.MaxY=cy-ry,cy+ry;p.MinZ,p.MaxZ=cz-rz,cz+rz;p.CenterX,p.CenterY,p.CenterZ=&cx,&cy,&cz;p.RadiusX,p.RadiusY,p.RadiusZ=&rx,&ry,&rz}else{p.MinX,p.MaxX=ms.minXRange.Bounds();p.MinY,p.MaxY=ms.minYRange.Bounds();p.MinZ,p.MaxZ=ms.minZRange.Bounds()}
-    options:=map[string]string{"faceCulling":strconv.FormatBool(ms.settings.OptimizeOutputEnabled)}
+    options:=map[string]string{"faceCulling":strconv.FormatBool(ms.settings.OptimizeOutputEnabled),"minecraftVersion":bridgecompat.NormalizeVersion(ms.mcVersion)}
     if ms.optimizeCheck.Checked{options["optimize"]="true"};if ms.settings.HiddenBlockCullingEnabled{options["hiddenBlockCulling"]="true"};if ms.customSelectionFile!=""{options["customSelectionFile"]=ms.customSelectionFile};if len(ms.settings.ResourcePackPaths)>0{options["resourcePacks"]=PathListString(ms.settings.ResourcePackPaths)};if len(ms.settings.DataPackPaths)>0{options["dataPacks"]=PathListString(ms.settings.DataPackPaths)};p.Options=options
     if err:=ms.engine.Export(p);err!=nil{ms.finishExport(ipc.Response{},false,err.Error())}
+}
+
+func(ms *MinesportApp)requireBridgeCompatibility(onReady func())bool{
+    version:=bridgecompat.NormalizeVersion(ms.mcVersion)
+    if version==""||!bridgecompat.NeedsPreparation(version){return false}
+    if bridge,ok:=bridgecompat.PreparedBridge(version);ok{ms.appendLog("Compatibility bridge ready: "+bridge);return false}
+    message:=fmt.Sprintf("Minesport compatibility for Minecraft %s is not installed.\n\nInstall it now? This one-time setup downloads the matching Java/Gradle/Fabric dependencies and caches the compiled bridge.",version)
+    dialog.NewConfirm("Install Minecraft compatibility",message,func(install bool){
+        if !install{ms.appendLog("Compatibility installation declined for Minecraft "+version);ms.statusLabel.SetText("Compatibility not installed");return}
+        ms.exportBtn.Disable();ms.statusLabel.SetText("Installing Minecraft "+version+" compatibility…");ms.stateIcon.SetResource(theme.ViewRefreshIcon())
+        go func(){
+            bridge,err:=bridgecompat.Ensure(version,func(update bridgecompat.Progress){ms.progressBar.SetValue(float64(update.Percent)/100);ms.statusLabel.SetText(update.Stage);ms.appendLog(fmt.Sprintf("Compatibility %d%%: %s %s",update.Percent,update.Stage,update.Detail))})
+            if err!=nil{ms.appendLog("Compatibility installation failed: "+err.Error());ms.statusLabel.SetText("Compatibility installation failed");ms.stateIcon.SetResource(theme.ErrorIcon());ms.exportBtn.Enable();dialog.ShowError(fmt.Errorf("Minecraft %s compatibility installation failed: %w",version,err),ms.window);return}
+            ms.appendLog("Compatibility bridge installed: "+bridge);ms.statusLabel.SetText("Compatibility ready");ms.stateIcon.SetResource(theme.ConfirmIcon());ms.exportBtn.Enable();if onReady!=nil{onReady()}
+        }()
+    },ms.window).Show()
+    return true
 }
 
 func exportFilesExist(path string)bool{for _,p:=range relatedExportFiles(path){if _,err:=os.Stat(p);err==nil{return true}};return false}
