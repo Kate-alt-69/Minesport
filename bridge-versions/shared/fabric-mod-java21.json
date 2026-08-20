@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "minesport_bridge",
+  "version": "${version}",
+  "name": "Minesport Bridge",
+  "description": "Dynamically prepared Minesport bridge for Minecraft ${minecraft_version}.",
+  "authors": ["Kastrick"],
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.kastrick.minesport.bridge.MinesportBridge"]
+  },
+  "depends": {
+    "fabricloader": "*",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}",
+    "java": ">=21"
+  },
+  "suggests": {
+    "polymer": "*"
+  }
+}

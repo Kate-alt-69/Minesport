@@ -1,65 +1,149 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DEB=false
+BUILD_APPIMAGE=false
+
+show_help() {
+  cat <<'EOF'
+Minesport build script
+
+Usage:
+  ./build.sh [options]
+
+Default behavior:
+  Builds the bundled 1.21.10 Fabric bridge, Java engine, and Minesport binary.
+  No installer/package is built unless an installer flag is supplied.
+
+Installer options (Linux):
+  --build-installer           Build the default Linux installer (.deb)
+  --build-installer-all       Build all Linux formats (.deb + .AppImage)
+  --build-installer-deb       Build a Debian/Ubuntu/Mint .deb package
+  --build-installer-appimage  Build a portable AppImage
+
+Help:
+  -h, --help                  Show this help text
+
+Windows equivalents are available through build.ps1/build.bat:
+  --build-installer           .exe
+  --build-installer-all       .exe + .msi
+  --build-installer-exe
+  --build-installer-msi
+EOF
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) show_help; exit 0 ;;
+    --build-installer) BUILD_DEB=true ;;
+    --build-installer-all) BUILD_DEB=true; BUILD_APPIMAGE=true ;;
+    --build-installer-deb) BUILD_DEB=true ;;
+    --build-installer-appimage) BUILD_APPIMAGE=true ;;
+    --build-installer-exe|--build-installer-msi)
+      echo "ERROR: $arg is Windows-only; use build.ps1/build.bat on Windows." >&2
+      exit 2
+      ;;
+    *)
+      echo "ERROR: unknown option: $arg" >&2
+      echo "Run ./build.sh --help for supported options." >&2
+      exit 2
+      ;;
+  esac
+done
+
+OS_NAME="$(uname -s)"
+if [[ "$OS_NAME" != "Linux" ]] && { $BUILD_DEB || $BUILD_APPIMAGE; }; then
+  echo "ERROR: Linux installer flags require Linux. Current OS: $OS_NAME" >&2
+  exit 2
+fi
+
+cd "$ROOT"
 echo "============================================"
 echo " Minesport Build Script"
 echo "============================================"
+echo "Target: ${OS_NAME} / $(uname -m)"
+if ! $BUILD_DEB && ! $BUILD_APPIMAGE; then
+  echo "Packaging: disabled (binary only)"
+else
+  formats=()
+  $BUILD_DEB && formats+=("DEB")
+  $BUILD_APPIMAGE && formats+=("AppImage")
+  echo "Packaging: ${formats[*]}"
+fi
 echo
-echo "Target: $(uname -s) / $(uname -m)"
-echo
-echo "[1/3] Building Fabric bridge mod..."
-cd bridge
+
+echo "[1/3] Building bundled Fabric bridge mod..."
+cd "$ROOT/bridge"
 chmod +x gradlew
 ./gradlew jar
-cd ..
-echo "Bridge mod built: bridge/build/libs/"
+BRIDGE_JAR="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' | head -n 1)"
+if [[ -z "$BRIDGE_JAR" ]]; then
+  echo "ERROR: bundled bridge JAR was not produced!" >&2
+  exit 1
+fi
+mkdir -p "$ROOT/dist/bundled-bridge"
+cp "$BRIDGE_JAR" "$ROOT/dist/bundled-bridge/minesport-bridge-0.1.0.jar"
+echo "Bundled bridge staged: dist/bundled-bridge/minesport-bridge-0.1.0.jar"
 echo
+
 echo "[2/3] Building Java engine..."
-cd engine
+cd "$ROOT/engine"
 chmod +x gradlew
 ./gradlew jar
-ENGINE_JAR=$(find build/libs -maxdepth 1 -type f -name 'minesport-engine-*.jar' | head -n 1)
-if [[ -z "${ENGINE_JAR}" ]]; then
-    echo "ERROR: Java engine JAR was not produced!"
-    exit 1
+ENGINE_JAR="$(find build/libs -maxdepth 1 -type f -name 'minesport-engine-*.jar' | head -n 1)"
+if [[ -z "$ENGINE_JAR" ]]; then
+  echo "ERROR: Java engine JAR was not produced!" >&2
+  exit 1
 fi
 ENGINE_JAR_ABS="$(pwd)/${ENGINE_JAR}"
-cd ..
 echo "Java engine built: ${ENGINE_JAR_ABS}"
 echo
+
 echo "[3/3] Building Go wrapper..."
-cd wrapper
+cd "$ROOT/wrapper"
 echo "  -> go mod tidy..."
 go mod tidy
 
-echo "  -> embedding Java engine into Minesport..."
-go run ./cmd/embed-engine -input "${ENGINE_JAR_ABS}" -output embedded_engine_generated.go
+echo "  -> embedding Java engine..."
+go run ./cmd/embed-engine -input "$ENGINE_JAR_ABS" -output embedded_engine_generated.go
 
 if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && [[ -z "${CC:-}" ]]; then
-    echo
-    echo "ERROR: No C compiler found. Fyne requires CGO for its desktop backend."
-    if [[ "${OSTYPE:-}" == "darwin"* ]]; then
-        echo "  Install Apple's command line tools: xcode-select --install"
-    elif command -v apt-get >/dev/null 2>&1; then
-        echo "  Install build tools: sudo apt install build-essential"
-    else
-        echo "  Install a native C compiler for your distribution."
-    fi
-    exit 1
+  echo "ERROR: no C compiler found. Fyne requires CGO." >&2
+  if [[ "${OSTYPE:-}" == "darwin"* ]]; then
+    echo "Install Apple's command line tools: xcode-select --install" >&2
+  elif command -v apt-get >/dev/null 2>&1; then
+    echo "Install build tools: sudo apt install build-essential" >&2
+  fi
+  exit 1
 fi
 
-go build -tags minesport_embedded_engine -trimpath -ldflags="-s -w" -o minesport .
-cd ..
+mkdir -p dist
+go build -tags minesport_embedded_engine -trimpath -ldflags="-s -w" -o dist/minesport .
+cp dist/minesport minesport
+cd "$ROOT"
+echo "Minesport built: wrapper/dist/minesport"
+
+if $BUILD_DEB; then
+  echo
+  echo "Building Debian package..."
+  chmod +x installer/linux/build-deb.sh
+  installer/linux/build-deb.sh
+fi
+
+if $BUILD_APPIMAGE; then
+  echo
+  echo "Building AppImage..."
+  chmod +x installer/linux/build-appimage.sh
+  installer/linux/build-appimage.sh
+fi
 
 echo
 echo "============================================"
 echo " Build complete!"
 echo "============================================"
-echo " wrapper/minesport              (engine embedded)"
-echo " bridge/build/libs/*.jar        (Bridge mod)"
+echo " wrapper/dist/minesport"
+$BUILD_DEB && echo " dist/installer/Minesport-*.deb"
+$BUILD_APPIMAGE && echo " dist/installer/Minesport-*.AppImage"
 echo
-echo " Run: cd wrapper && ./minesport"
-echo " Java engine: ./minesport --java-e"
-echo
-echo " Diagnostics: wrapper/minesport.log"
-echo "============================================"
+echo "Run ./build.sh --help to see packaging options."

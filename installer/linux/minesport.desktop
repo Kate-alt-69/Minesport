@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Minesport
+Comment=Minecraft world exporter
+Exec=minesport
+Icon=minesport
+Terminal=false
+Categories=Graphics;Utility;
+StartupNotify=true

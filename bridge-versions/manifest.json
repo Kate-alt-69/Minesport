@@ -26,6 +26,46 @@
   },
   "profiles": [
     {
+      "id": "1.21.0-1.21.4",
+      "match": "^1\\.21(?:\\.[0-4])?$",
+      "patch": "bridge-versions/1.21.0-1.21.4/patch.json",
+      "java": 21,
+      "gradle": "9.5.1",
+      "loom": "1.17.18",
+      "loader": "dynamic",
+      "fabric_api": "dynamic"
+    },
+    {
+      "id": "1.21.5",
+      "match": "^1\\.21\\.5$",
+      "patch": "bridge-versions/1.21.5/patch.json",
+      "java": 21,
+      "gradle": "9.5.1",
+      "loom": "1.17.18",
+      "loader": "dynamic",
+      "fabric_api": "dynamic"
+    },
+    {
+      "id": "1.21.6",
+      "match": "^1\\.21\\.6$",
+      "patch": "bridge-versions/1.21.6/patch.json",
+      "java": 21,
+      "gradle": "9.5.1",
+      "loom": "1.17.18",
+      "loader": "dynamic",
+      "fabric_api": "dynamic"
+    },
+    {
+      "id": "1.21.7-1.21.8",
+      "match": "^1\\.21\\.[7-8]$",
+      "patch": "bridge-versions/1.21.7-1.21.8/patch.json",
+      "java": 21,
+      "gradle": "9.5.1",
+      "loom": "1.17.18",
+      "loader": "dynamic",
+      "fabric_api": "dynamic"
+    },
+    {
       "id": "1.21.11",
       "match": "^1\\.21\\.11$",
       "patch": "bridge-versions/1.21.11/patch.json",
@@ -36,9 +76,29 @@
       "fabric_api": "dynamic"
     },
     {
-      "id": "26.x",
-      "match": "^26\\.",
-      "patch": "bridge-versions/26.x/patch.json",
+      "id": "26.1",
+      "match": "^26\\.1(?:\\.[0-9]+)?$",
+      "patch": "bridge-versions/26.1/patch.json",
+      "java": 25,
+      "gradle": "9.5.1",
+      "loom": "1.17.18",
+      "loader": "dynamic",
+      "fabric_api": "dynamic"
+    },
+    {
+      "id": "26.2",
+      "match": "^26\\.2(?:\\.[0-9]+)?$",
+      "patch": "bridge-versions/26.2/patch.json",
+      "java": 25,
+      "gradle": "9.5.1",
+      "loom": "1.17.18",
+      "loader": "dynamic",
+      "fabric_api": "dynamic"
+    },
+    {
+      "id": "26.3-snapshot",
+      "match": "^26\\.3-snapshot-[0-9]+$",
+      "patch": "bridge-versions/26.2/patch.json",
       "java": 25,
       "gradle": "9.5.1",
       "loom": "1.17.18",
