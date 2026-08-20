@@ -27,7 +27,7 @@
           Root="HKLM"
           Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
           Name="CurrentBuildNumber"
-          Type="integer"
+          Type="raw"
           Win64="yes" />
     </Property>
     <Condition Message="Minesport requires 64-bit Windows 10 or Windows 11.">
