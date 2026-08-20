@@ -1,5 +1,5 @@
 #define MyAppName "Minesport"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #define MyAppPublisher "Kastrick"
 #ifndef SourceDir
   #define SourceDir "..\.."
@@ -38,7 +38,7 @@ Name: "{commonpf64}\kastrick's_software\minesport\bridge-data\bundled\1.21.10"
 Name: "{commonpf64}\kastrick's_software\minesport\bridge-data\compiled"; Permissions: users-modify
 
 [Files]
-Source: "{#SourceDir}\wrapper\dist\minesport.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\dist\source\Minesport.exe"; DestDir: "{app}"; DestName: "minesport.exe"; Flags: ignoreversion
 Source: "{#SourceDir}\installer\windows\install-blender.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "{#SourceDir}\bridge-versions\manifest.json"; DestDir: "{commonpf64}\kastrick's_software\minesport\bridge-data"; Flags: ignoreversion
 Source: "{#SourceDir}\dist\bundled-bridge\minesport-bridge-0.1.0.jar"; DestDir: "{commonpf64}\kastrick's_software\minesport\bridge-data\bundled\1.21.10"; Flags: ignoreversion

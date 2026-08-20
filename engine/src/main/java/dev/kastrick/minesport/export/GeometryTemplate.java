@@ -54,7 +54,8 @@ public final class GeometryTemplate {
                 q.texturePath(),
                 q.normal().clone(),
                 q.cullface(),
-                q.tintindex()
+                q.tintindex(),
+                q.partName()
             ));
         }
         return placed;

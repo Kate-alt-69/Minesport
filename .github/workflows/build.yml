@@ -234,6 +234,8 @@ jobs:
           mkdir -p dist
           if [ "$RUNNER_OS" = "Windows" ]; then
             go build -tags minesport_embedded_engine -trimpath -ldflags='-H windowsgui -s -w' -o dist/minesport.exe .
+            mkdir -p ../dist/source
+            cp dist/minesport.exe ../dist/source/Minesport.exe
           else
             go build -tags minesport_embedded_engine -trimpath -ldflags='-s -w' -o dist/minesport .
           fi
@@ -288,6 +290,13 @@ jobs:
           path: wrapper/dist/${{ matrix.binary }}
           if-no-files-found: error
           retention-days: 7
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: minesport-windows-standalone
+          path: dist/source/Minesport.exe
+          if-no-files-found: error
+          retention-days: 7
 
   windows-installer:
     name: Windows installers · NSIS EXE + WiX 7 MSI
@@ -305,6 +314,10 @@ jobs:
         with:
           name: minesport-Windows-X64
           path: wrapper/dist
+      - uses: actions/download-artifact@v7
+        with:
+          name: minesport-windows-standalone
+          path: dist/source
       - uses: actions/download-artifact@v7
         with:
           name: fabric-bridge-1.21.10
@@ -336,7 +349,7 @@ jobs:
         run: |
           $project = Join-Path $env:GITHUB_WORKSPACE 'installer\windows\Minesport.wixproj'
           $output = Join-Path $env:GITHUB_WORKSPACE 'dist\installer'
-          & dotnet build $project --configuration Release --output $output "-p:SourceDir=$env:GITHUB_WORKSPACE"
+          & dotnet build $project --configuration Release --output $output --no-incremental "-p:SourceDir=$env:GITHUB_WORKSPACE"
           if ($LASTEXITCODE -ne 0) { throw 'WiX 7 MSI build failed.' }
       - name: Build NSIS setup EXE
         shell: pwsh
@@ -346,15 +359,17 @@ jobs:
       - name: Verify Windows installer outputs
         shell: pwsh
         run: |
-          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.0-x64.msi'
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.0-Setup-x64.exe'
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.1-x64.msi'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.1-Setup-x64.exe'
+          $standalone = Join-Path $env:GITHUB_WORKSPACE 'dist\source\Minesport.exe'
           if (-not (Test-Path $msi)) { throw "Missing MSI: $msi" }
           if (-not (Test-Path $exe)) { throw "Missing setup EXE: $exe" }
+          if (-not (Test-Path $standalone)) { throw "Missing standalone executable: $standalone" }
           if ((Get-Item $msi).Length -le 0 -or (Get-Item $exe).Length -le 0) { throw 'An installer output is empty.' }
       - name: Install and uninstall MSI smoke test
         shell: pwsh
         run: |
-          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.0-x64.msi'
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.1-x64.msi'
           $installLog = Join-Path $env:RUNNER_TEMP 'minesport-msi-install.log'
           $installArgs = @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$installLog`"")
           $installProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $installArgs -Wait -PassThru
@@ -385,8 +400,9 @@ jobs:
         with:
           name: minesport-windows-installers
           path: |
-            dist/installer/Minesport-0.1.0-x64.msi
-            dist/installer/Minesport-0.1.0-Setup-x64.exe
+            dist/installer/Minesport-0.1.1-x64.msi
+            dist/installer/Minesport-0.1.1-Setup-x64.exe
+            dist/source/Minesport.exe
           if-no-files-found: error
           retention-days: 7
 

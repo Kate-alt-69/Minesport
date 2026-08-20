@@ -5,7 +5,7 @@
   <Package
       Name="Minesport"
       Language="1033"
-      Version="0.1.0"
+      Version="0.1.1"
       Manufacturer="Kastrick"
       UpgradeCode="28E176EA-1E29-4EA0-B22A-BB77A9865AA8"
       InstallerVersion="500"
@@ -21,7 +21,8 @@
           <Component Id="MainExecutable" Guid="A4A7E0C8-2B1E-4D4E-9D1B-44A4B1F6C6A1">
             <File
                 Id="MinesportExe"
-                Source="$(var.SourceDir)\wrapper\dist\minesport.exe"
+                Source="$(var.SourceDir)\dist\source\Minesport.exe"
+                Name="minesport.exe"
                 KeyPath="yes">
               <Shortcut
                   Id="StartMenuShortcut"

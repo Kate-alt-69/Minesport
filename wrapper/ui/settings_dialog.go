@@ -12,10 +12,8 @@ import (
 	"github.com/kastrick/minesport/blendertranslator"
 )
 
-func infoButton(parent fyne.Window, title, body string) *widget.Button {
-	return widget.NewButton("ⓘ", func() {
-		dialog.ShowInformation(title, body, parent)
-	})
+func infoButton(_ fyne.Window, title, body string) fyne.CanvasObject {
+	return newInfoPopoverButton(title, body)
 }
 
 func basicSettingRow(parent fyne.Window, label string, value bool, onChange func(bool), info string) fyne.CanvasObject {
@@ -24,7 +22,7 @@ func basicSettingRow(parent fyne.Window, label string, value bool, onChange func
 	return container.NewBorder(nil, nil, nil, infoButton(parent, label, info), check)
 }
 
-func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settings)) {
+func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settings), onDismiss func()) {
 	working := current
 
 	face := basicSettingRow(
@@ -148,6 +146,11 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 		"Cancel",
 		container.NewPadded(tabs),
 		func(save bool) {
+			defer func() {
+				if onDismiss != nil {
+					onDismiss()
+				}
+			}()
 			if !save {
 				return
 			}

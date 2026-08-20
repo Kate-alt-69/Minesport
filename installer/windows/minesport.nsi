@@ -3,7 +3,7 @@
 !endif
 
 !define APP_NAME "Minesport"
-!define APP_VERSION "0.1.0"
+!define APP_VERSION "0.1.1"
 !define APP_PUBLISHER "Kastrick"
 !define APP_EXE "minesport.exe"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Minesport"
@@ -18,7 +18,7 @@ SetCompressor /SOLID lzma
 CRCCheck force
 BrandingText "${APP_PUBLISHER}"
 
-VIProductVersion "0.1.0.0"
+VIProductVersion "0.1.1.0"
 VIAddVersionKey /LANG=1033 "ProductName" "${APP_NAME}"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=1033 "CompanyName" "${APP_PUBLISHER}"
@@ -52,11 +52,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright ${APP_PUBLISHER}"
 
 Function .onInit
   ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP|MB_OK "Minesport requires 64-bit Windows 10 or Windows 11."
-    Abort
-  ${EndIf}
-  ${IfNot} ${AtLeastWin10}
-    MessageBox MB_ICONSTOP|MB_OK "Minesport requires 64-bit Windows 10 or Windows 11."
+	MessageBox MB_ICONSTOP|MB_OK "Minesport requires 64-bit Windows."
     Abort
   ${EndIf}
 FunctionEnd
@@ -67,7 +63,7 @@ Section "!Minesport core (required)" SEC_CORE
   SetRegView 64
 
   SetOutPath "$INSTDIR"
-  File "${SourceDir}\wrapper\dist\minesport.exe"
+	File /oname=minesport.exe "${SourceDir}\dist\source\Minesport.exe"
 
   SetOutPath "$INSTDIR\tools"
   File "${SourceDir}\installer\windows\install-blender.ps1"

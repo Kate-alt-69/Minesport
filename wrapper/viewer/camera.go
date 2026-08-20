@@ -97,6 +97,21 @@ func (c *Camera) Move(in Input, dt float32) {
 	c.Position = c.Position.Add(move.Scale(speed * dt))
 }
 
+// AdjustSpeed changes creative-flight speed in 10% steps and keeps it within
+// a useful range for both tiny builds and very large worlds.
+func (c *Camera) AdjustSpeed(steps float64) {
+	if steps == 0 {
+		return
+	}
+	c.MoveSpeed *= float32(math.Pow(1.1, steps))
+	if c.MoveSpeed < 1 {
+		c.MoveSpeed = 1
+	}
+	if c.MoveSpeed > 1200 {
+		c.MoveSpeed = 1200
+	}
+}
+
 // Forward returns the camera's full look direction (yaw AND pitch),
 // for raycasting/picking — as opposed to Move's horizontal-only forward.
 func (c *Camera) Forward() Vec3 {

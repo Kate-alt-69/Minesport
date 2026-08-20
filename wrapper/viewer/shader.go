@@ -59,17 +59,16 @@ func newProgram(vertexSrc, fragmentSrc string) (uint32, error) {
 	return program, nil
 }
 
-// Phase 1 renders solid-colored voxels (the same palette the 2D heightmap
-// uses), not per-model textures yet — see the note in buildMesh/window.go
-// about why that's a deliberate, separately-scoped next phase rather than
-// an oversight here.
 const vertexShaderSource = `#version 120
 attribute vec3 aPos;
 attribute vec3 aColor;
 attribute vec3 aNormal;
+attribute vec2 aUV;
 
 varying vec3 vColor;
 varying vec3 vNormal;
+varying vec3 vWorldPos;
+varying vec2 vUV;
 
 uniform mat4 uModel;
 uniform mat4 uView;
@@ -79,23 +78,29 @@ void main() {
     gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
     vColor = aColor;
     vNormal = aNormal;
+    vWorldPos = aPos;
+	vUV = aUV;
 }
 `
 
 const fragmentShaderSource = `#version 120
 varying vec3 vColor;
 varying vec3 vNormal;
+varying vec3 vWorldPos;
+varying vec2 vUV;
+uniform sampler2D uAtlas;
 
 void main() {
-    // Simple directional shading so faces facing different directions read
-    // as distinct — same idea as Minecraft's own per-face brightness cue
-    // (top brightest, sides medium, bottom darkest), just with a fixed
-    // light instead of the real sky.
+    vec3 n = normalize(vNormal);
+    vec4 atlas = texture2D(uAtlas, vUV);
+    if (atlas.a < 0.05) discard;
+	vec3 textured = atlas.rgb;
+
     float brightness = 0.65 + 0.35 * max(vNormal.y, 0.0);
     if (vNormal.y < -0.5) {
         brightness = 0.5;
     }
-    gl_FragColor = vec4(vColor * brightness, 1.0);
+    gl_FragColor = vec4(textured * brightness, atlas.a);
 }
 `
 

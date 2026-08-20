@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/kastrick/minesport/viewer"
+	"github.com/kastrick/minesport/ipc"
 )
 
 func TestNormalizedLoader(t *testing.T) {
@@ -21,28 +21,18 @@ func TestNormalizedLoader(t *testing.T) {
 	}
 }
 
-func TestOrderedBounds(t *testing.T) {
-	minB, maxB := orderedBounds([3]int{8, -4, 12}, [3]int{-2, 9, 3})
-	if minB != [3]int{-2, -4, 3} || maxB != [3]int{8, 9, 12} {
-		t.Fatalf("orderedBounds = %v..%v", minB, maxB)
+func TestAddPreviewContextPadsSmallSelection(t *testing.T) {
+	input := ipc.ListBlocksParams{MinX: 10, MaxX: 20, MinY: 50, MaxY: 70, MinZ: -4, MaxZ: 8}
+	got := addPreviewContext(input)
+	if got.MinX != -22 || got.MaxX != 52 || got.MinY != 34 || got.MaxY != 86 || got.MinZ != -36 || got.MaxZ != 40 {
+		t.Fatalf("padded bounds = X %d..%d Y %d..%d Z %d..%d", got.MinX, got.MaxX, got.MinY, got.MaxY, got.MinZ, got.MaxZ)
 	}
 }
 
-func TestEmbeddedViewerCullsSharedFacesAndRenders(t *testing.T) {
-	preview, err := NewEmbeddedViewer([]viewer.Block{
-		{X: 0, Y: 0, Z: 0, R: 120, G: 160, B: 90},
-		{X: 1, Y: 0, Z: 0, R: 120, G: 160, B: 90},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := len(preview.faces); got != 10 {
-		t.Fatalf("visible faces = %d, want 10", got)
-	}
-	if got := preview.render(320, 240).Bounds(); got.Dx() != 320 || got.Dy() != 240 {
-		t.Fatalf("render bounds = %v", got)
-	}
-	if len(preview.hits) == 0 {
-		t.Fatal("render did not produce selectable faces")
+func TestAddPreviewContextLeavesLargeSelectionUnchanged(t *testing.T) {
+	input := ipc.ListBlocksParams{MinX: -256, MaxX: 256, MinY: -64, MaxY: 320, MinZ: -256, MaxZ: 256}
+	got := addPreviewContext(input)
+	if got.MinX != input.MinX || got.MaxX != input.MaxX || got.MinY != input.MinY || got.MaxY != input.MaxY || got.MinZ != input.MinZ || got.MaxZ != input.MaxZ {
+		t.Fatalf("large preview bounds changed: %#v", got)
 	}
 }
