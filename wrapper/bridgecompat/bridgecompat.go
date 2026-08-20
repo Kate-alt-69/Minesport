@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kastrick/minesport/processutil"
 )
 
 const (
@@ -587,6 +589,7 @@ func runGradleBuild(workspace, javaHome string) (string, error) {
 	if runtime.GOOS == "windows" { wrapper = filepath.Join(workspace, "gradlew.bat") }
 	if runtime.GOOS != "windows" { _ = os.Chmod(wrapper, 0o755) }
 	cmd := exec.Command(wrapper, "--no-daemon", "--stacktrace", "clean", "build")
+	processutil.HideWindow(cmd)
 	cmd.Dir = workspace
 	cmd.Env = append(os.Environ(), "JAVA_HOME="+javaHome)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
