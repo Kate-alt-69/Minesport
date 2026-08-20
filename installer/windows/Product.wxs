@@ -19,8 +19,19 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Minesport is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- VersionNT/VersionNT64 deliberately report 6.3 on Windows 10+.
+         Use the real build number while retaining VersionNT64 as the x64 check. -->
+    <Property Id="WINDOWSBUILDNUMBER" Secure="yes">
+      <RegistrySearch
+          Id="WindowsBuildNumberSearch"
+          Root="HKLM"
+          Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+          Name="CurrentBuildNumber"
+          Type="integer"
+          Win64="yes" />
+    </Property>
     <Condition Message="Minesport requires 64-bit Windows 10 or Windows 11.">
-      Installed OR (VersionNT64 &gt;= 1000)
+      Installed OR (VersionNT64 AND WINDOWSBUILDNUMBER &gt;= 10240)
     </Condition>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
