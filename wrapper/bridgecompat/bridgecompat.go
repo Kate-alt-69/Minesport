@@ -163,6 +163,19 @@ func NeedsPreparation(version string) bool {
 	return !IsBundledCompatible(version, manifest)
 }
 
+func PreparedBridge(version string) (string, bool) {
+	version = NormalizeVersion(version)
+	if version == "" {
+		return "", false
+	}
+	if !NeedsPreparation(version) {
+		bridge, err := BundledBridge()
+		return bridge, err == nil
+	}
+	bridge := cachedBridgePath(version)
+	return bridge, bridge != ""
+}
+
 func ProfileForVersion(version string, manifest Manifest) (*Profile, error) {
 	version = NormalizeVersion(version)
 	for i := range manifest.Profiles {
