@@ -26,7 +26,7 @@ Installer options (Windows):
   --build-installer-exe   Build the default NSIS .exe installer
   --build-installer-nsis  Build the NSIS .exe installer
   --build-installer-inno  Build the optional Inno Setup .exe installer
-  --build-installer-msi   Build the WiX .msi installer
+  --build-installer-msi   Build the WiX 7 .msi installer (.NET SDK 6+ required)
 
 Help:
   -h, --help              Show this help text
@@ -163,16 +163,6 @@ function Find-InnoSetup {
     return $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 
-function Find-WixBin {
-    $candidates = @(
-        'C:\Program Files (x86)\WiX Toolset v3.14\bin',
-        'C:\Program Files (x86)\WiX Toolset v3.11\bin'
-    )
-    return $candidates | Where-Object {
-        (Test-Path (Join-Path $_ 'candle.exe')) -and (Test-Path (Join-Path $_ 'light.exe'))
-    } | Select-Object -First 1
-}
-
 if ($BuildNsisInstaller -or $BuildInnoInstaller -or $BuildMsiInstaller) {
     $installerOut = Join-Path $Root 'dist\installer'
     New-Item -ItemType Directory -Force -Path $installerOut | Out-Null
@@ -196,18 +186,16 @@ if ($BuildNsisInstaller -or $BuildInnoInstaller -or $BuildMsiInstaller) {
     }
 
     if ($BuildMsiInstaller) {
-        $wix = Find-WixBin
-        if (-not $wix) { throw 'WiX Toolset 3.x was not found. Install WiX 3.11/3.14 to build the MSI.' }
-        Push-Location (Join-Path $Root 'installer\windows')
-        try {
-            & (Join-Path $wix 'candle.exe') -arch x64 -ext WixUtilExtension "-dSourceDir=$Root" Product.wxs
-            if ($LASTEXITCODE -ne 0) { throw 'WiX candle failed.' }
-            & (Join-Path $wix 'light.exe') -ext WixUIExtension -ext WixUtilExtension -out (Join-Path $installerOut 'Minesport-0.1.0-x64.msi') Product.wixobj
-            if ($LASTEXITCODE -ne 0) { throw 'WiX light failed.' }
-        } finally {
-            Pop-Location
+        if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+            throw 'WiX 7 MSI builds require the .NET SDK 6 or newer. Install the .NET SDK and try again.'
         }
-        Write-Host 'MSI installer built: dist\installer\Minesport-0.1.0-x64.msi' -ForegroundColor Green
+        $wixProject = Join-Path $Root 'installer\windows\Minesport.wixproj'
+        & dotnet build $wixProject --configuration Release --output $installerOut "-p:SourceDir=$Root"
+        if ($LASTEXITCODE -ne 0) { throw 'WiX 7 MSI build failed.' }
+
+        $msiOutput = Join-Path $installerOut 'Minesport-0.1.0-x64.msi'
+        if (-not (Test-Path $msiOutput)) { throw "WiX 7 completed but did not produce $msiOutput" }
+        Write-Host 'MSI installer built with WiX 7: dist\installer\Minesport-0.1.0-x64.msi' -ForegroundColor Green
     }
 }
 
