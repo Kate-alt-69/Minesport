@@ -290,7 +290,7 @@ jobs:
           retention-days: 7
 
   windows-installer:
-    name: Windows installers · MSI + EXE
+    name: Windows installers · NSIS EXE + MSI
     needs: [wrapper, fabric-bridge-bundled]
     runs-on: windows-latest
     timeout-minutes: 25
@@ -317,17 +317,21 @@ jobs:
           $binary = Join-Path $env:GITHUB_WORKSPACE 'wrapper\dist\minesport.exe'
           $process = Start-Process -FilePath $binary -ArgumentList @('--build-bridge', '1.21.10') -NoNewWindow -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Bundled bridge CLI smoke test failed with exit code $($process.ExitCode)." }
-      - name: Locate WiX and Inno Setup
+      - name: Install and locate WiX and NSIS
         shell: pwsh
         run: |
           $wixCandidates = @('C:\Program Files (x86)\WiX Toolset v3.14\bin','C:\Program Files (x86)\WiX Toolset v3.11\bin')
           $wix = $wixCandidates | Where-Object { (Test-Path (Join-Path $_ 'candle.exe')) -and (Test-Path (Join-Path $_ 'light.exe')) } | Select-Object -First 1
           if (-not $wix) { throw 'WiX 3.x was not found.' }
-          $innoCandidates = @('C:\Program Files (x86)\Inno Setup 6\ISCC.exe','C:\Program Files\Inno Setup 6\ISCC.exe')
-          $iscc = $innoCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $iscc) { throw 'Inno Setup 6 was not found.' }
+
+          & choco install nsis --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey could not install NSIS.' }
+          $nsisCandidates = @('C:\Program Files (x86)\NSIS\makensis.exe','C:\Program Files\NSIS\makensis.exe')
+          $makensis = $nsisCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) { throw 'NSIS makensis.exe was not found after installation.' }
+
           "WIX_BIN=$wix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NSIS_EXE=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path (Join-Path $env:GITHUB_WORKSPACE 'dist\installer') | Out-Null
       - name: Build MSI
         shell: pwsh
@@ -339,11 +343,11 @@ jobs:
             & (Join-Path $env:WIX_BIN 'light.exe') -ext WixUIExtension -ext WixUtilExtension -out (Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.0-x64.msi') Product.wixobj
             if ($LASTEXITCODE -ne 0) { throw 'WiX light failed.' }
           } finally { Pop-Location }
-      - name: Build setup EXE
+      - name: Build NSIS setup EXE
         shell: pwsh
         run: |
-          & $env:ISCC "/DSourceDir=$env:GITHUB_WORKSPACE" (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\minesport.iss')
-          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
+          & $env:NSIS_EXE '/V2' "/DSourceDir=$env:GITHUB_WORKSPACE" (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\minesport.nsi')
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed.' }
       - name: Verify Windows installer outputs
         shell: pwsh
         run: |
@@ -458,7 +462,7 @@ jobs:
             echo "| Java engine | $ENGINE_RESULT |"
             echo "| Blender translator | $TRANSLATOR_RESULT |"
             echo "| Wrapper · Linux + Windows + macOS | $WRAPPER_RESULT |"
-            echo "| Windows · MSI + EXE | $WIN_INSTALLER_RESULT |"
+            echo "| Windows · NSIS EXE + MSI | $WIN_INSTALLER_RESULT |"
             echo "| Linux · DEB + AppImage | $LINUX_INSTALLER_RESULT |"
           } >> "$GITHUB_STEP_SUMMARY"
 

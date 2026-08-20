@@ -3,7 +3,8 @@
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$BuildExeInstaller = $false
+$BuildNsisInstaller = $false
+$BuildInnoInstaller = $false
 $BuildMsiInstaller = $false
 
 function Show-Help {
@@ -20,9 +21,11 @@ Default behavior:
   No installer is built unless an installer flag is supplied.
 
 Installer options (Windows):
-  --build-installer       Build the default Windows installer (.exe)
-  --build-installer-all   Build all Windows installer formats (.exe + .msi)
-  --build-installer-exe   Build the Inno Setup .exe installer
+  --build-installer       Build the default NSIS .exe installer
+  --build-installer-all   Build the normal Windows formats (NSIS .exe + WiX .msi)
+  --build-installer-exe   Build the default NSIS .exe installer
+  --build-installer-nsis  Build the NSIS .exe installer
+  --build-installer-inno  Build the optional Inno Setup .exe installer
   --build-installer-msi   Build the WiX .msi installer
 
 Help:
@@ -40,9 +43,11 @@ foreach ($arg in $args) {
     switch ($arg) {
         '-h' { Show-Help; exit 0 }
         '--help' { Show-Help; exit 0 }
-        '--build-installer' { $BuildExeInstaller = $true }
-        '--build-installer-all' { $BuildExeInstaller = $true; $BuildMsiInstaller = $true }
-        '--build-installer-exe' { $BuildExeInstaller = $true }
+        '--build-installer' { $BuildNsisInstaller = $true }
+        '--build-installer-all' { $BuildNsisInstaller = $true; $BuildMsiInstaller = $true }
+        '--build-installer-exe' { $BuildNsisInstaller = $true }
+        '--build-installer-nsis' { $BuildNsisInstaller = $true }
+        '--build-installer-inno' { $BuildInnoInstaller = $true }
         '--build-installer-msi' { $BuildMsiInstaller = $true }
         '--build-installer-deb' { throw '--build-installer-deb is Linux-only; use build.sh on Linux.' }
         '--build-installer-appimage' { throw '--build-installer-appimage is Linux-only; use build.sh on Linux.' }
@@ -55,11 +60,12 @@ Write-Host '============================================' -ForegroundColor Cyan
 Write-Host ' Minesport Build Script' -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host 'Target: Windows / amd64' -ForegroundColor DarkGray
-if (-not $BuildExeInstaller -and -not $BuildMsiInstaller) {
+if (-not $BuildNsisInstaller -and -not $BuildInnoInstaller -and -not $BuildMsiInstaller) {
     Write-Host 'Packaging: disabled (executable only)' -ForegroundColor DarkGray
 } else {
     $formats = @()
-    if ($BuildExeInstaller) { $formats += 'EXE' }
+    if ($BuildNsisInstaller) { $formats += 'NSIS EXE' }
+    if ($BuildInnoInstaller) { $formats += 'Inno EXE' }
     if ($BuildMsiInstaller) { $formats += 'MSI' }
     Write-Host "Packaging: $($formats -join ' + ')" -ForegroundColor DarkGray
 }
@@ -133,8 +139,24 @@ try {
 }
 Write-Host 'Minesport built: wrapper\dist\minesport.exe' -ForegroundColor Green
 
-function Find-InnoSetup {
+function Find-NSIS {
+    $command = Get-Command makensis.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+
     $candidates = @(
+        'C:\Program Files (x86)\NSIS\makensis.exe',
+        'C:\Program Files\NSIS\makensis.exe'
+    )
+    return $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+
+function Find-InnoSetup {
+    $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+
+    $candidates = @(
+        'C:\Program Files (x86)\Inno Setup 7\ISCC.exe',
+        'C:\Program Files\Inno Setup 7\ISCC.exe',
         'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
         'C:\Program Files\Inno Setup 6\ISCC.exe'
     )
@@ -151,18 +173,26 @@ function Find-WixBin {
     } | Select-Object -First 1
 }
 
-if ($BuildExeInstaller -or $BuildMsiInstaller) {
+if ($BuildNsisInstaller -or $BuildInnoInstaller -or $BuildMsiInstaller) {
     $installerOut = Join-Path $Root 'dist\installer'
     New-Item -ItemType Directory -Force -Path $installerOut | Out-Null
     Write-Host ''
     Write-Host 'Packaging installers...' -ForegroundColor Yellow
 
-    if ($BuildExeInstaller) {
+    if ($BuildNsisInstaller) {
+        $makensis = Find-NSIS
+        if (-not $makensis) { throw 'NSIS was not found. Install NSIS or use --build-installer-msi instead.' }
+        & $makensis '/V2' "/DSourceDir=$Root" (Join-Path $Root 'installer\windows\minesport.nsi')
+        if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed.' }
+        Write-Host 'NSIS installer built: dist\installer\Minesport-0.1.0-Setup-x64.exe' -ForegroundColor Green
+    }
+
+    if ($BuildInnoInstaller) {
         $iscc = Find-InnoSetup
-        if (-not $iscc) { throw 'Inno Setup 6 was not found. Install it or use --build-installer-msi instead.' }
+        if (-not $iscc) { throw 'Inno Setup 6/7 was not found. Install it or use the default NSIS installer.' }
         & $iscc "/DSourceDir=$Root" (Join-Path $Root 'installer\windows\minesport.iss')
         if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
-        Write-Host 'EXE installer built: dist\installer\Minesport-0.1.0-Setup-x64.exe' -ForegroundColor Green
+        Write-Host 'Inno installer built: dist\installer\Minesport-0.1.0-Inno-Setup-x64.exe' -ForegroundColor Green
     }
 
     if ($BuildMsiInstaller) {
@@ -186,7 +216,8 @@ Write-Host '============================================' -ForegroundColor Cyan
 Write-Host ' Build complete!' -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host ' wrapper\dist\minesport.exe' -ForegroundColor Green
-if ($BuildExeInstaller) { Write-Host ' dist\installer\Minesport-0.1.0-Setup-x64.exe' -ForegroundColor Green }
+if ($BuildNsisInstaller) { Write-Host ' dist\installer\Minesport-0.1.0-Setup-x64.exe' -ForegroundColor Green }
+if ($BuildInnoInstaller) { Write-Host ' dist\installer\Minesport-0.1.0-Inno-Setup-x64.exe' -ForegroundColor Green }
 if ($BuildMsiInstaller) { Write-Host ' dist\installer\Minesport-0.1.0-x64.msi' -ForegroundColor Green }
 Write-Host ''
 Write-Host 'Run .\build.ps1 --help to see packaging options.' -ForegroundColor Cyan
