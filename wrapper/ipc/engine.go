@@ -13,6 +13,7 @@ import (
 
 	"github.com/kastrick/minesport/bridgecompat"
 	"github.com/kastrick/minesport/launcher"
+	"github.com/kastrick/minesport/processutil"
 )
 
 type Request struct {
@@ -83,6 +84,7 @@ func (e *Engine) Start(jarPath string) error {
 		javaExe = javaHome + "/bin/java"
 	}
 	e.cmd = exec.Command(javaExe, "-jar", jarPath, "--ipc")
+	processutil.HideWindow(e.cmd)
 	var err error
 	e.stdin, err = e.cmd.StdinPipe()
 	if err != nil {
