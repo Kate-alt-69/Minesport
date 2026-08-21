@@ -12,14 +12,7 @@ import java.nio.ByteOrder;
 import java.util.*;
 import java.util.Base64;
 
-/**
- * glTF 2.0 exporter.
- *
- * The export name is always the single scene/root node. Merged mode puts one
- * mesh on that root. Grouped and Individual modes keep real child mesh nodes
- * under the root so Blender/DCC importers preserve the requested object mode
- * without spraying unrelated top-level objects into the scene.
- */
+/** glTF 2.0 exporter with optional lossless FLATTER geometry. */
 public class GltfExporter {
     private final ResolverChain resolvers;
     private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
@@ -49,6 +42,7 @@ public class GltfExporter {
         ObjExporter.ProgressCallback progress
     ) throws IOException {
         if (outputFile.getParentFile() != null) outputFile.getParentFile().mkdirs();
+        FlatterMetadataExporter.resetForExport(outputFile);
 
         String outputName = outputFile.getName();
         String objectName = safeObjectName(outputName.replaceFirst("(?i)\\.gltf$", ""));
@@ -57,6 +51,9 @@ public class GltfExporter {
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
         Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
         Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+        FlatterOptimizer.Result flatter = FlatterSettings.enabled()
+            ? FlatterOptimizer.compile(blocks, resolvers)
+            : FlatterOptimizer.Result.empty();
         Map<String,List<Quad>> groups = new LinkedHashMap<>();
 
         int done = 0;
@@ -65,6 +62,12 @@ public class GltfExporter {
 
         for (BlockData block : blocks) {
             if (block.isAir()) {
+                if (progress != null) progress.onProgress(++done, total);
+                continue;
+            }
+
+            if (flatter.contains(block)) {
+                solid++;
                 if (progress != null) progress.onProgress(++done, total);
                 continue;
             }
@@ -89,11 +92,16 @@ public class GltfExporter {
             if (progress != null) progress.onProgress(++done, total);
         }
 
+        // FLATTER objects deliberately remain separate even in ALL_MERGED mode.
+        // Their mesh is disposable render geometry; the logical block grid lives
+        // in the sidecar and must retain a stable object identity for Blender.
+        for (FlatterOptimizer.FlatterObject object : flatter.objects()) {
+            groups.put(object.id(), new ArrayList<>(object.quads()));
+        }
+
         int quadCount = 0;
         int vertexCount = 0;
 
-        // Root is always the export/file name. In merged mode it owns the mesh;
-        // otherwise it acts as the one top-level parent for all requested objects.
         JsonObject rootNode = new JsonObject();
         rootNode.addProperty("name", objectName);
         nodes.add(rootNode);
@@ -114,7 +122,13 @@ public class GltfExporter {
         Set<String> usedNames = new HashSet<>();
 
         for (var entry : groups.entrySet()) {
-            String childName = uniqueName(safeObjectName(entry.getKey()), usedNames);
+            String childName;
+            if (flatter.isFlatterObject(entry.getKey())) {
+                childName = safeObjectName(entry.getKey());
+                usedNames.add(childName);
+            } else {
+                childName = uniqueName(safeObjectName(entry.getKey()), usedNames);
+            }
             MeshResult result = buildMesh(entry.getValue(), center, optimize, childName);
             if (result == null) continue;
 
@@ -126,6 +140,11 @@ public class GltfExporter {
             JsonObject extras = new JsonObject();
             extras.addProperty("minesportGroup", entry.getKey());
             extras.addProperty("minesportObjectMode", mode.name());
+            if (flatter.isFlatterObject(entry.getKey())) {
+                extras.addProperty("minesportType", "FLATTER");
+                extras.addProperty("minesportFlatterId", entry.getKey());
+                extras.addProperty("minesportFlatterSchema", 1);
+            }
             child.add("extras", extras);
 
             nodes.add(child);
@@ -143,6 +162,8 @@ public class GltfExporter {
         minesportExtras.addProperty("exportName", objectName);
         minesportExtras.addProperty("objectMode", mode.name());
         minesportExtras.addProperty("metresPerBlock", 1.0);
+        minesportExtras.addProperty("flatter", !flatter.isEmpty());
+        minesportExtras.addProperty("flatterSchema", flatter.isEmpty() ? 0 : 1);
         rootExtras.add("minesport", minesportExtras);
         rootNode.add("extras", rootExtras);
 
@@ -195,6 +216,9 @@ public class GltfExporter {
             writer.println(gson.toJson(root));
         }
 
+        if (!flatter.isEmpty()) {
+            FlatterMetadataExporter.write(outputFile, flatter, mode, "gltf", center);
+        }
         return new ObjExporter.ExportStats(solid, quadCount, vertexCount);
     }
 
@@ -262,8 +286,6 @@ public class GltfExporter {
                 float y = vertices[i][1] - center[1];
                 float z = vertices[i][2] - center[2];
                 float u = quadUvs[i][0];
-                // Minecraft JSON and glTF both define (0,0) at the upper-left
-                // of the image. OBJ needs a V flip; glTF explicitly does not.
                 float v = quadUvs[i][1];
 
                 String key = String.format(
@@ -341,16 +363,10 @@ public class GltfExporter {
         JsonObject material = new JsonObject();
         material.addProperty("name", texture.materialName());
         material.add("pbrMetallicRoughness", pbr);
-        // Minecraft model faces are rendered from either side. This also keeps
-        // thin multipart models (chairs, fences, plants) from losing faces in
-        // glTF viewers that enable back-face culling by default.
         material.addProperty("doubleSided", true);
 
         BufferedImage image = texture.apply(resolvers.resolveTexture(texture.texturePath()));
         if (image != null && hasAlpha(image)) {
-            // Minecraft block textures are alpha-tested cutouts, not sorted
-            // translucent layers. BLEND caused black/see-through bands where
-            // the cuboids of multipart furniture overlap in Blender.
             material.addProperty("alphaMode", "MASK");
             material.addProperty("alphaCutoff", 0.5);
         }

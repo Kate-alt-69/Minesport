@@ -12,10 +12,9 @@ import java.util.List;
 /**
  * Writes DCC-neutral Minesport translation metadata next to an export.
  *
- * The sidecar deliberately stores capabilities and animation descriptors, not
- * a duplicate record for every ordinary block in the world. Exporters add only
- * objects that actually need translation (entity-model rigid parts, animated
- * textures, state transitions and bridge-provided custom render data).
+ * The sidecar deliberately stores capabilities and animation descriptors. When
+ * FLATTER is active, its lossless logical block grid is preserved from the
+ * geometry export and merged into this same sidecar.
  */
 public final class BlenderMetadataExporter {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -48,11 +47,17 @@ public final class BlenderMetadataExporter {
         }
         root.addProperty("blockCount", solidBlocks);
 
+        // Geometry exporters write FLATTER first. Preserve that lossless logical
+        // grid when Blender animation metadata is layered on afterward.
+        FlatterMetadataExporter.copyExistingFlatter(sidecar, root);
+
         JsonObject capabilities = new JsonObject();
         capabilities.addProperty("dynamicDescriptors", true);
         capabilities.addProperty("bridgeDescriptorSchema", 1);
         capabilities.addProperty("stateAnimations", !"animate_static".equals(animationMode));
         capabilities.addProperty("continuousTextureAnimations", true);
+        capabilities.addProperty("flatter", root.has("flatterObjects"));
+        capabilities.addProperty("flatterMaterialization", root.has("flatterObjects"));
         root.add("capabilities", capabilities);
 
         JsonArray animations = new JsonArray();
