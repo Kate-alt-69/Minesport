@@ -97,8 +97,17 @@ public final class FlatterMetadataExporter {
         if (exportFile == null || !exportFile.isFile()) return;
         if (!"gltf".equalsIgnoreCase(format)) return; // OBJ writes the comment inline.
 
+<<<<<<< HEAD
         try (Reader reader = new BufferedReader(new FileReader(exportFile))) {
             JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
+=======
+        try {
+            JsonObject root;
+            try (Reader reader = new BufferedReader(new FileReader(exportFile))) {
+                root = JsonParser.parseReader(reader).getAsJsonObject();
+            }
+
+>>>>>>> 3c2ef7dbfe6e55d58e03ed2c0e5903d64ffdd670
             JsonObject asset = root.has("asset") && root.get("asset").isJsonObject()
                 ? root.getAsJsonObject("asset")
                 : new JsonObject();

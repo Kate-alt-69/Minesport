@@ -34,12 +34,20 @@ class MinesportProperties(bpy.types.PropertyGroup):
         default="",
         options={"HIDDEN"},
     )
+    flatter_version: StringProperty(
+        name="FLATTER version",
+        default="",
+        options={"HIDDEN"},
+    )
     flatter_block_count: IntProperty(
         name="Logical blocks",
         default=0,
         min=0,
         options={"HIDDEN"},
     )
+    flatter_width: IntProperty(name="Width", default=0, min=0, options={"HIDDEN"})
+    flatter_height: IntProperty(name="Height", default=0, min=0, options={"HIDDEN"})
+    flatter_depth: IntProperty(name="Depth", default=0, min=0, options={"HIDDEN"})
     flatter_selected: StringProperty(
         name="Selected logical block",
         default="",
@@ -69,10 +77,13 @@ class MINESPORT_PT_properties(bpy.types.Panel):
 
         if props.is_flatter:
             box = layout.box()
-            box.label(text="FLATTER", icon="MESH_GRID")
+            version = props.flatter_version or "legacy"
+            box.label(text=f"minesport_FLATTER_object · v{version}", icon="MESH_GRID")
             box.label(text=f"{props.flatter_block_count:,} logical Minecraft blocks")
+            box.label(text=f"3D dimensions: {props.flatter_width} × {props.flatter_height} × {props.flatter_depth}")
             if props.flatter_selected:
                 box.label(text="Selected: " + props.flatter_selected)
+            box.label(text="Render geometry is greedy; green overlay is logical-only.", icon="INFO")
             box.label(text="Use the Minesport tab in the 3D View to pick/materialize blocks.", icon="INFO")
 
         box = layout.box()
