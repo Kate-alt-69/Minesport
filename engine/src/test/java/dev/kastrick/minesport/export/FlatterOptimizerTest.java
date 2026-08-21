@@ -69,6 +69,15 @@ class FlatterOptimizerTest {
         @Override
         public BufferedImage resolveTexture(String texturePath) {
             return new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+
+            BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < image.getHeight(); y++) {
+                for (int x = 0; x < image.getWidth(); x++) {
+                    image.setRGB(x, y, 0xffffffff);
+                }
+            }
+            return image;
+
         }
 
         @Override public String name() { return "FLATTER test resolver"; }

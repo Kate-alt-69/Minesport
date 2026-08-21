@@ -8,3 +8,5 @@
 **.tmp
 /**/go.mod
 /**/go.sum
+/dist/**
+/wrapper/dist/**
