@@ -232,15 +232,12 @@ def _attach_flatter_metadata(metadata, objects=None, asset_path=None):
         obj["minesport_flatter_depth"] = depth
         obj["minesport_flatter_volume"] = width * height * depth
 
-<<<<<<< HEAD
-=======
         if hasattr(obj, "minesport"):
             obj.minesport.flatter_version = obj["minesport_flatter_version"]
             obj.minesport.flatter_width = width
             obj.minesport.flatter_height = height
             obj.minesport.flatter_depth = depth
 
->>>>>>> 3c2ef7dbfe6e55d58e03ed2c0e5903d64ffdd670
         if payload is not None:
             payload["objectMode"] = obj["minesport_object_mode"]
             payload["flatterVersion"] = obj["minesport_flatter_version"]

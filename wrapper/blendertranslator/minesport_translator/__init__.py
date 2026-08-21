@@ -8,16 +8,18 @@ bl_info = {
     "category": "Import-Export",
 }
 
+import importlib
+
 import bpy
 
 from . import active_export
 from . import flatter
-from . import flatter_overlay
-from . import flatter_runtime
 from . import properties
-from . import obj_import
 from .metadata import gltf_asset_path, load_sidecar
 from .translate import translate_gltf_import
+
+
+_OPTIONAL_MODULES = {}
 
 
 class glTF2ImportUserExtension:
@@ -45,17 +47,40 @@ class glTF2ImportUserExtension:
             print(f"[Minesport Translator] translation failed: {exc}")
 
 
+def _register_optional(name):
+    """Load one experimental helper without taking down the whole addon."""
+    try:
+        module = importlib.import_module(f"{__package__}.{name}")
+        module.register()
+        _OPTIONAL_MODULES[name] = module
+        return True
+    except Exception as exc:
+        print(f"[Minesport Translator] optional subsystem '{name}' disabled: {exc}")
+        return False
+
+
 def register():
     properties.register()
     flatter.register()
-    flatter_runtime.register()
-    flatter_overlay.register()
-    obj_import.register()
+
+    # Keep experimental pieces independent. A broken runtime must not prevent
+    # the picker/overlay/importer from registering, and vice versa.
+    _register_optional("flatter_runtime")
+    _register_optional("flatter_overlay")
+    _register_optional("obj_import")
 
 
 def unregister():
-    obj_import.unregister()
-    flatter_overlay.unregister()
-    flatter_runtime.unregister()
-    flatter.unregister()
-    properties.unregister()
+    for name in ("obj_import", "flatter_overlay", "flatter_runtime"):
+        module = _OPTIONAL_MODULES.pop(name, None)
+        if module is None:
+            continue
+        try:
+            module.unregister()
+        except Exception as exc:
+            print(f"[Minesport Translator] optional subsystem '{name}' cleanup failed: {exc}")
+
+    try:
+        flatter.unregister()
+    finally:
+        properties.unregister()
