@@ -1,8 +1,8 @@
 """FLATTER schema/runtime upgrades kept separate from the core operators.
 
 Schema 2 allows multiple render layers per logical block face (for example an
-opaque grass side plus its tinted overlay). The old schema-1 single-face shape
-remains readable so existing .blend files keep working.
+opaque grass side plus its tinted overlay). FLATTER 0.1.0 also exposes explicit
+3D dimensions while keeping old schema-1 single-face data readable.
 """
 
 import json
@@ -173,12 +173,31 @@ def _create_materialized_block(parent, payload, xyz, palette_index, entry):
     return obj
 
 
+def _dimension_values(record, payload):
+    dimensions = record.get("dimensions") if isinstance(record, dict) else None
+    if not isinstance(dimensions, dict) and isinstance(payload, dict):
+        dimensions = payload.get("dimensions")
+    if isinstance(dimensions, dict):
+        return (
+            int(dimensions.get("width", 0)),
+            int(dimensions.get("height", 0)),
+            int(dimensions.get("depth", 0)),
+        )
+    size = record.get("size") if isinstance(record, dict) else None
+    if not isinstance(size, (list, tuple)) and isinstance(payload, dict):
+        size = payload.get("size")
+    if isinstance(size, (list, tuple)) and len(size) >= 3:
+        return int(size[0]), int(size[1]), int(size[2])
+    return 0, 0, 0
+
+
 def _attach_flatter_metadata(metadata, objects=None, asset_path=None):
     _ORIGINAL_ATTACH(metadata, objects=objects, asset_path=asset_path)
     if not isinstance(metadata, dict):
         return
 
     object_mode = str(metadata.get("objectMode") or "")
+    flatter_version = str(metadata.get("flatterVersion") or "legacy")
     records = metadata.get("flatterObjects")
     if not isinstance(records, list):
         return
@@ -203,9 +222,32 @@ def _attach_flatter_metadata(metadata, objects=None, asset_path=None):
 
         obj["minesport_display_type"] = "minesport_FLATTER_object"
         obj["minesport_object_mode"] = str(record.get("objectMode") or object_mode)
+        obj["minesport_flatter_version"] = str(record.get("flatterVersion") or flatter_version)
+        obj["minesport_flatter_3d"] = True
+
         payload = flatter._load_payload(obj)
+        width, height, depth = _dimension_values(record, payload)
+        obj["minesport_flatter_width"] = width
+        obj["minesport_flatter_height"] = height
+        obj["minesport_flatter_depth"] = depth
+        obj["minesport_flatter_volume"] = width * height * depth
+
+        if hasattr(obj, "minesport"):
+            obj.minesport.flatter_version = obj["minesport_flatter_version"]
+            obj.minesport.flatter_width = width
+            obj.minesport.flatter_height = height
+            obj.minesport.flatter_depth = depth
+
         if payload is not None:
             payload["objectMode"] = obj["minesport_object_mode"]
+            payload["flatterVersion"] = obj["minesport_flatter_version"]
+            payload["dimensions"] = {
+                "width": width,
+                "height": height,
+                "depth": depth,
+                "volume": width * height * depth,
+                "order": "XYZ",
+            }
             flatter._store_payload(obj, payload)
             _rebuild_flatter(obj, payload, flatter._decode_grid(payload))
 

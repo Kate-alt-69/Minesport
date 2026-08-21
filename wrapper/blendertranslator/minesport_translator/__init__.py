@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Minesport Dynamic Translator",
     "author": "Kastrick / Minesport",
-    "version": (0, 1, 4),
+    "version": (0, 1, 5),
     "blender": (4, 3, 0),
     "location": "Object Properties / 3D View > Minesport",
     "description": "Translates Minesport metadata and FLATTER logical block geometry into Blender-native data.",
@@ -10,6 +10,7 @@ bl_info = {
 
 import bpy
 
+from . import active_export
 from . import flatter
 from . import flatter_overlay
 from . import flatter_runtime
@@ -39,6 +40,7 @@ class glTF2ImportUserExtension:
             path = gltf_asset_path(gltf)
             metadata = load_sidecar(path) if path else None
             flatter.attach_flatter_metadata(metadata, asset_path=path)
+            active_export.activate(path, metadata)
         except Exception as exc:  # never break Blender's normal glTF import
             print(f"[Minesport Translator] translation failed: {exc}")
 

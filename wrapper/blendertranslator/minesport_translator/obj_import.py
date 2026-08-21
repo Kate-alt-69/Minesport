@@ -4,6 +4,7 @@ import bpy
 from bpy.props import StringProperty
 from bpy_extras.io_utils import ImportHelper
 
+from . import active_export
 from .flatter import attach_flatter_metadata
 from .metadata import load_sidecar
 from .translate import translate_scene
@@ -36,6 +37,7 @@ class MINESPORT_OT_import_obj(bpy.types.Operator, ImportHelper):
         metadata = load_sidecar(path)
         translate_scene(metadata, imported, asset_path=path)
         attach_flatter_metadata(metadata, imported, asset_path=path)
+        active_export.activate(path, metadata, imported)
         return {"FINISHED"}
 
 

@@ -29,6 +29,10 @@ dependencies {
 
 test {
     useJUnitPlatform()
+    // Unit tests must never inherit the user's real Minesport GUI setting from
+    // %APPDATA%/~/.config. Dedicated FLATTER tests explicitly enable it when
+    // exercising exporter integration.
+    systemProperty 'minesport.flatter', 'false'
 }
 
 jar {

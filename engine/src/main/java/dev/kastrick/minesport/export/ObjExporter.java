@@ -126,6 +126,9 @@ public class ObjExporter {
         int emittedVertices;
         try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(outputFile)))) {
             writer.println("# Minesport OBJ Export");
+            writer.println("# " + FlatterMetadataExporter.ACTIVE_EXPORT_TAG + " true");
+            writer.println("# Minesport active export version: " + FlatterMetadataExporter.ACTIVE_EXPORT_VERSION);
+            writer.println("# FLATTER version: " + FlatterMetadataExporter.FLATTER_VERSION);
             writer.println("# Units: metres (1 Minecraft block grid cell = 1 metre)");
             writer.println("# Export root: " + exportName);
             writer.println("# Object mode: " + mode);
@@ -160,6 +163,7 @@ public class ObjExporter {
                 if (flatter.isFlatterObject(entry.getKey())) {
                     writer.println("# MINESPORT_TYPE FLATTER");
                     writer.println("# MINESPORT_FLATTER_ID " + entry.getKey());
+                    writer.println("# MINESPORT_FLATTER_VERSION " + FlatterMetadataExporter.FLATTER_VERSION);
                 }
                 writer.println("o " + objectName);
 
