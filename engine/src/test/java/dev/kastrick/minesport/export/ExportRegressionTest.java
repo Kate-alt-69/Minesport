@@ -201,6 +201,46 @@ final class ExportRegressionTest {
     }
 
     @Test
+    void faceCullingKeepsSolidFaceVisibleBehindCutoutNeighbor() {
+        ResolverChain chain = new ResolverChain();
+        chain.addResolver(new FixtureResolver(true));
+        BlockData solid = new BlockData(0, 0, 0, "test:full_cube", Map.of());
+        BlockData cutout = new BlockData(1, 0, 0, "test:cutout_cube", Map.of());
+        List<BlockData> blocks = List.of(solid, cutout);
+        GeometryBuilder builder = new GeometryBuilder(chain);
+        builder.enableFaceCulling(blocks);
+
+        // The cutout neighbor geometrically fills the voxel but has transparent
+        // pixels. The solid block's shared face must remain visible through the
+        // holes instead of being incorrectly removed by the optimizer.
+        assertEquals(6, builder.buildBlock(solid).size());
+
+        // The inverse is safe: the opaque solid does fully hide the cutout
+        // block's coincident face at the shared boundary.
+        assertEquals(5, builder.buildBlock(cutout).size());
+    }
+
+    @Test
+    void hiddenBlockCullingDoesNotTrustTransparentSurroundingFaces() {
+        ResolverChain chain = new ResolverChain();
+        chain.addResolver(new FixtureResolver(true));
+        BlockData center = new BlockData(0, 0, 0, "test:full_cube", Map.of());
+        List<BlockData> blocks = List.of(
+            center,
+            new BlockData(1, 0, 0, "test:cutout_cube", Map.of()),
+            new BlockData(-1, 0, 0, "test:cutout_cube", Map.of()),
+            new BlockData(0, 1, 0, "test:cutout_cube", Map.of()),
+            new BlockData(0, -1, 0, "test:cutout_cube", Map.of()),
+            new BlockData(0, 0, 1, "test:cutout_cube", Map.of()),
+            new BlockData(0, 0, -1, "test:cutout_cube", Map.of())
+        );
+        GeometryBuilder builder = new GeometryBuilder(chain);
+        builder.enableHiddenBlockCulling(blocks);
+
+        assertFalse(builder.buildBlock(center).isEmpty());
+    }
+
+    @Test
     void airBlocksNeverBecomeFallbackGeometry() throws Exception {
         ObjExporter.ExportStats stats = ObjExporter.exportWithGeometry(
             List.of(
@@ -266,13 +306,17 @@ final class ExportRegressionTest {
         @Override public boolean canResolve(String blockId) { return true; }
 
         @Override public BlockState resolveBlockState(String blockId) {
-            if (!model || (!blockId.equals("test:fixture") && !blockId.equals("test:full_cube"))) return null;
+            if (!model || (!blockId.equals("test:fixture")
+                && !blockId.equals("test:full_cube")
+                && !blockId.equals("test:cutout_cube"))) return null;
             BlockState state = new BlockState();
             state.format = BlockState.Format.VARIANTS;
             BlockState.ModelApplication application = new BlockState.ModelApplication();
-            application.modelPath = blockId.equals("test:full_cube")
-                ? "test:block/full_cube"
-                : "test:block/fixture";
+            application.modelPath = switch (blockId) {
+                case "test:full_cube" -> "test:block/full_cube";
+                case "test:cutout_cube" -> "test:block/cutout_cube";
+                default -> "test:block/fixture";
+            };
             state.variants.put("", List.of(application));
             return state;
         }
@@ -280,9 +324,14 @@ final class ExportRegressionTest {
         @Override public BlockModel resolveModel(String modelPath) {
             if (!model) return null;
             BlockModel result = new BlockModel();
-            result.textures.put("all", "test:block/fixture");
             BlockModel.Element element = new BlockModel.Element();
-            if (modelPath.equals("test:block/full_cube")) {
+            if (modelPath.equals("test:block/full_cube") || modelPath.equals("test:block/cutout_cube")) {
+                result.textures.put(
+                    "all",
+                    modelPath.equals("test:block/full_cube")
+                        ? "test:block/opaque"
+                        : "test:block/cutout"
+                );
                 for (String direction : List.of("north", "south", "east", "west", "up", "down")) {
                     BlockModel.Face face = new BlockModel.Face();
                     face.texture = "#all";
@@ -293,6 +342,7 @@ final class ExportRegressionTest {
                 return result;
             }
             if (!modelPath.equals("test:block/fixture")) return null;
+            result.textures.put("all", "test:block/fixture");
             BlockModel.Face face = new BlockModel.Face();
             face.texture = "#all";
             face.uv = new float[]{0, 0, 16, 8};
@@ -303,6 +353,13 @@ final class ExportRegressionTest {
 
         @Override public BufferedImage resolveTexture(String texturePath) {
             BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB);
+            if (texturePath != null && texturePath.equals("test:block/opaque")) {
+                image.setRGB(0, 0, 0xffffffff);
+                image.setRGB(1, 0, 0xffffffff);
+                image.setRGB(0, 1, 0xffffffff);
+                image.setRGB(1, 1, 0xffffffff);
+                return image;
+            }
             image.setRGB(0, 0, 0xffffffff);
             image.setRGB(1, 0, 0xffffffff);
             image.setRGB(0, 1, 0x00ffffff);

@@ -4,6 +4,7 @@ import dev.kastrick.minesport.model.*;
 import dev.kastrick.minesport.region.BlockData;
 import dev.kastrick.minesport.resolver.ResolverChain;
 
+import java.awt.image.BufferedImage;
 import java.util.*;
 
 /**
@@ -16,13 +17,14 @@ import java.util.*;
  * - face rotation permutes UV corners instead of rotating the numeric UV
  *   rectangle around 0.5 (which breaks partial stair/model UV rectangles);
  * - uvlock only compensates rotations that are actually in-plane for the face;
- * - culling is conservative and only removes faces hidden by full coverage.
+ * - culling is conservative and only removes faces hidden by full opaque coverage.
  */
 public class GeometryBuilder {
     private final ResolverChain resolvers;
 
     private Map<Long,BlockData> occlusionIndex = Map.of();
     private final Map<String,Boolean> fullFaceCache = new HashMap<>();
+    private final Map<String,Boolean> opaqueTextureCache = new HashMap<>();
     private boolean faceCullingEnabled;
     private boolean hiddenBlockCullingEnabled;
 
@@ -69,6 +71,7 @@ public class GeometryBuilder {
         ensureOcclusionIndex(allBlocks);
         faceCullingEnabled = true;
         fullFaceCache.clear();
+        opaqueTextureCache.clear();
     }
 
     /**
@@ -80,6 +83,7 @@ public class GeometryBuilder {
         ensureOcclusionIndex(allBlocks);
         hiddenBlockCullingEnabled = true;
         fullFaceCache.clear();
+        opaqueTextureCache.clear();
     }
 
     private void ensureOcclusionIndex(List<BlockData> allBlocks) {
@@ -469,6 +473,13 @@ public class GeometryBuilder {
                         rotateDirection(face.cullface, application.x, application.y);
                     if (!worldCull.equals(side)) continue;
 
+                    // Geometry alone is not enough to occlude a neighbour. A
+                    // full-cube leaf/glass/cutout face still has visible holes.
+                    // Only fully opaque resolved face textures may contribute
+                    // to the shared-face coverage mask.
+                    String texturePath = face.resolveTexture(model.textures);
+                    if (!isTextureFullyOpaque(texturePath)) continue;
+
                     Rect rectangle =
                         projectBoundaryRect(corners, faceDef.corners(), side);
                     if (rectangle != null) rectangles.add(rectangle);
@@ -477,6 +488,27 @@ public class GeometryBuilder {
         }
 
         return coversUnitSquare(rectangles);
+    }
+
+    private boolean isTextureFullyOpaque(String texturePath) {
+        if (texturePath == null || texturePath.isBlank() || texturePath.startsWith("#")) {
+            return false;
+        }
+        return opaqueTextureCache.computeIfAbsent(texturePath, path -> {
+            BufferedImage image;
+            try {
+                image = resolvers.resolveTexture(path);
+            } catch (Exception ignored) {
+                return false;
+            }
+            if (image == null) return false;
+            for (int y = 0; y < image.getHeight(); y++) {
+                for (int x = 0; x < image.getWidth(); x++) {
+                    if ((image.getRGB(x, y) >>> 24) != 255) return false;
+                }
+            }
+            return true;
+        });
     }
 
     private static Rect projectBoundaryRect(
