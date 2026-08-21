@@ -1,8 +1,9 @@
-"""GPU-only logical block overview for selected FLATTER cells.
+"""GPU-only 3D logical-block overview for selected FLATTER cells.
 
-The overlay never adds Blender mesh geometry. It reconstructs exposed logical
-block boundaries from the embedded palette/RLE grid and draws them as green
-viewport lines, so a heavily greedy FLATTER mesh still feels block-addressable.
+The overlay never adds Blender mesh geometry. It reconstructs the complete
+logical voxel grid from the embedded palette/RLE payload and draws it as green
+viewport lines, so a heavily greedy FLATTER mesh still feels block-addressable
+in width, height and depth.
 """
 
 import json
@@ -20,17 +21,14 @@ _VIEW_HANDLE = None
 _TEXT_HANDLE = None
 _CACHE = {}
 
-_GREEN = (0.18, 1.0, 0.24, 0.72)
+_GREEN = (0.18, 1.0, 0.24, 0.58)
 _SELECTED_GREEN = (0.55, 1.0, 0.60, 1.0)
 
-_FACE_CORNERS = {
-    "north": ((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)),
-    "south": ((1, 0, 1), (0, 0, 1), (0, 1, 1), (1, 1, 1)),
-    "east": ((1, 0, 0), (1, 0, 1), (1, 1, 1), (1, 1, 0)),
-    "west": ((0, 0, 1), (0, 0, 0), (0, 1, 0), (0, 1, 1)),
-    "up": ((0, 1, 0), (1, 1, 0), (1, 1, 1), (0, 1, 1)),
-    "down": ((0, 0, 1), (1, 0, 1), (1, 0, 0), (0, 0, 0)),
-}
+_CUBE_EDGES = (
+    (0, 1), (1, 2), (2, 3), (3, 0),
+    (4, 5), (5, 6), (6, 7), (7, 4),
+    (0, 4), (1, 5), (2, 6), (3, 7),
+)
 
 
 def _active_flatter():
@@ -55,6 +53,19 @@ def _edge_key(a, b):
     return (a, b) if a <= b else (b, a)
 
 
+def _cube_corners(x, y, z):
+    return (
+        (x, y, z),
+        (x + 1, y, z),
+        (x + 1, y + 1, z),
+        (x, y + 1, z),
+        (x, y, z + 1),
+        (x + 1, y, z + 1),
+        (x + 1, y + 1, z + 1),
+        (x, y + 1, z + 1),
+    )
+
+
 def _logical_edges(obj):
     stamp = _payload_stamp(obj)
     pointer = obj.as_pointer()
@@ -72,18 +83,13 @@ def _logical_edges(obj):
     center = flatter._vec3f(payload.get("center"), (0.0, 0.0, 0.0))
     edges = set()
 
-    for xyz in grid:
-        x, y, z = xyz
-        for direction in flatter._DIRECTIONS:
-            dx, dy, dz = flatter._DELTA[direction]
-            if (x + dx, y + dy, z + dz) in grid:
-                continue
-            corners = [
-                (x + c[0], y + c[1], z + c[2])
-                for c in _FACE_CORNERS[direction]
-            ]
-            for index in range(4):
-                edges.add(_edge_key(corners[index], corners[(index + 1) % 4]))
+    # Deliberately draw every occupied voxel's cube edges, including edges on
+    # internal block boundaries. They are GPU overlay lines only; the actual
+    # Blender render mesh remains the aggressively greedy FLATTER mesh.
+    for x, y, z in grid:
+        corners = _cube_corners(x, y, z)
+        for a, b in _CUBE_EDGES:
+            edges.add(_edge_key(corners[a], corners[b]))
 
     result = []
     for a, b in edges:
@@ -107,24 +113,9 @@ def _selected_edges(obj):
         return []
     center = flatter._vec3f(payload.get("center"), (0.0, 0.0, 0.0))
 
-    x, y, z = map(int, xyz)
-    corners = [
-        (x, y, z),
-        (x + 1, y, z),
-        (x + 1, y + 1, z),
-        (x, y + 1, z),
-        (x, y, z + 1),
-        (x + 1, y, z + 1),
-        (x + 1, y + 1, z + 1),
-        (x, y + 1, z + 1),
-    ]
-    pairs = (
-        (0, 1), (1, 2), (2, 3), (3, 0),
-        (4, 5), (5, 6), (6, 7), (7, 4),
-        (0, 4), (1, 5), (2, 6), (3, 7),
-    )
+    corners = _cube_corners(*map(int, xyz))
     result = []
-    for a, b in pairs:
+    for a, b in _CUBE_EDGES:
         result.append(flatter._mc_to_blender(corners[a], center))
         result.append(flatter._mc_to_blender(corners[b], center))
     return result
@@ -161,13 +152,37 @@ def _draw_view():
         _draw_lines(_world_vertices(obj, selected), _SELECTED_GREEN, 2.5)
 
 
+def _dimensions(payload):
+    dimensions = payload.get("dimensions") if isinstance(payload, dict) else None
+    if isinstance(dimensions, dict):
+        return (
+            int(dimensions.get("width", 0)),
+            int(dimensions.get("height", 0)),
+            int(dimensions.get("depth", 0)),
+        )
+    size = payload.get("size") if isinstance(payload, dict) else None
+    if isinstance(size, (list, tuple)) and len(size) >= 3:
+        return int(size[0]), int(size[1]), int(size[2])
+    return 0, 0, 0
+
+
 def _draw_text():
     obj = _active_flatter()
     if obj is None:
         return
     count = int(obj.get("minesport_flatter_block_count", 0))
     mode = str(obj.get("minesport_object_mode") or "LOGICAL")
-    label = f"minesport_FLATTER_object  ·  {count:,} logical blocks  ·  {mode}"
+    payload = flatter._load_payload(obj) or {}
+    width, height, depth = _dimensions(payload)
+    version = str(
+        obj.get("minesport_flatter_version")
+        or payload.get("flatterVersion")
+        or "legacy"
+    )
+    label = (
+        f"minesport_FLATTER_object  ·  v{version}  ·  "
+        f"{width}×{height}×{depth}  ·  {count:,} logical blocks  ·  {mode}"
+    )
     font_id = 0
     blf.position(font_id, 18, 54, 0)
     blf.size(font_id, 14)
