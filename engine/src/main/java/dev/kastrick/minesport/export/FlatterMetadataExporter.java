@@ -13,7 +13,11 @@ import java.util.Map;
 /** Writes/merges the lossless logical FLATTER block grid beside OBJ/glTF. */
 public final class FlatterMetadataExporter {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
     public static final int FLATTER_SCHEMA = 2;
+    public static final String FLATTER_VERSION = "0.1.0";
+    public static final String ACTIVE_EXPORT_TAG = "minesport_v1.5_active_export";
+    public static final String ACTIVE_EXPORT_VERSION = "0.1.5";
 
     private FlatterMetadataExporter() {}
 
@@ -44,15 +48,20 @@ public final class FlatterMetadataExporter {
         root.addProperty("objectMode", mode.name());
         root.addProperty("linearUnit", "metre");
         root.addProperty("metresPerBlock", 1.0);
+        root.addProperty(ACTIVE_EXPORT_TAG, true);
+        root.addProperty("activeExportVersion", ACTIVE_EXPORT_VERSION);
         root.addProperty("flatterSchema", FLATTER_SCHEMA);
+        root.addProperty("flatterVersion", FLATTER_VERSION);
         root.addProperty("flatterBlockCount", result.blockCount());
         root.add("flatterObjects", flatterObjects(result, center, format, mode));
 
         JsonObject capabilities = new JsonObject();
         capabilities.addProperty("flatter", true);
+        capabilities.addProperty("flatter3D", true);
         capabilities.addProperty("flatterMaterialization", true);
         capabilities.addProperty("flatterLayeredFaces", true);
         capabilities.addProperty("flatterLogicalOverlay", true);
+        capabilities.addProperty("flatterLogical3DOverlay", true);
         root.add("capabilities", capabilities);
 
         writeJson(sidecar, root);
@@ -63,7 +72,15 @@ public final class FlatterMetadataExporter {
         if (sidecar == null || root == null || !sidecar.isFile()) return;
         try (Reader reader = new BufferedReader(new FileReader(sidecar))) {
             JsonObject existing = JsonParser.parseReader(reader).getAsJsonObject();
-            for (String key : new String[]{"flatterSchema", "flatterBlockCount", "flatterObjects"}) {
+            for (String key : new String[]{
+                ACTIVE_EXPORT_TAG,
+                "activeExportVersion",
+                "flatterSchema",
+                "flatterVersion",
+                "flatterBlockCount",
+                "flatterObjects",
+                "capabilities"
+            }) {
                 if (existing.has(key)) root.add(key, existing.get(key).deepCopy());
             }
         } catch (Exception ignored) {
@@ -79,8 +96,15 @@ public final class FlatterMetadataExporter {
         JsonArray objects = new JsonArray();
         for (FlatterOptimizer.FlatterObject object : result.objects()) {
             JsonObject json = new JsonObject();
+            int[] size = object.size();
+            int width = size.length > 0 ? size[0] : 0;
+            int height = size.length > 1 ? size[1] : 0;
+            int depth = size.length > 2 ? size[2] : 0;
+            long volume = (long) width * height * depth;
+
             json.addProperty("id", object.id());
             json.addProperty("type", "flatter");
+            json.addProperty("flatterVersion", FLATTER_VERSION);
             json.addProperty("meshObject", object.id());
             json.addProperty("chunkSize", FlatterOptimizer.CELL_SIZE);
             json.addProperty("blockCount", object.blockCount());
@@ -88,8 +112,16 @@ public final class FlatterMetadataExporter {
             json.addProperty("format", format);
             json.addProperty("objectMode", mode.name());
             json.add("origin", intArray(object.origin()));
-            json.add("size", intArray(object.size()));
+            json.add("size", intArray(size));
             json.add("center", floatArray(center));
+
+            JsonObject dimensions = new JsonObject();
+            dimensions.addProperty("width", width);
+            dimensions.addProperty("height", height);
+            dimensions.addProperty("depth", depth);
+            dimensions.addProperty("volume", volume);
+            dimensions.addProperty("order", "XYZ");
+            json.add("dimensions", dimensions);
 
             JsonArray palette = new JsonArray();
             for (FlatterOptimizer.PaletteEntry entry : object.palette()) {
