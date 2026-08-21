@@ -12,6 +12,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -42,6 +43,34 @@ class FlatterOptimizerTest {
         assertEquals(1, object.palette().size());
         assertEquals(1, object.runs().size());
         assertEquals(4, object.runs().getFirst().length());
+        for (BlockData block : blocks) assertTrue(result.contains(block));
+    }
+
+    @Test
+    void twoByTwoByTwoVolumeUsesAllThreeDimensionsAndSixGreedyPlanes() {
+        ResolverChain chain = new ResolverChain();
+        chain.addResolver(new CubeResolver());
+        List<BlockData> blocks = new ArrayList<>();
+        for (int y = 64; y < 66; y++) {
+            for (int z = 0; z < 2; z++) {
+                for (int x = 0; x < 2; x++) {
+                    blocks.add(new BlockData(x, y, z, "minecraft:stone", Map.of()));
+                }
+            }
+        }
+
+        FlatterOptimizer.Result result = FlatterOptimizer.compile(blocks, chain);
+
+        assertFalse(result.isEmpty());
+        assertEquals(8, result.blockCount());
+        assertEquals(1, result.objects().size());
+        FlatterOptimizer.FlatterObject object = result.objects().getFirst();
+        assertArrayEquals(new int[]{2, 2, 2}, object.size());
+        assertEquals(8, object.blockCount());
+        assertEquals(6, object.quads().size(),
+            "a solid 2x2x2 FLATTER volume should collapse to its six exterior planes");
+        assertEquals(1, object.runs().size());
+        assertEquals(8, object.runs().getFirst().length());
         for (BlockData block : blocks) assertTrue(result.contains(block));
     }
 
@@ -89,9 +118,16 @@ class FlatterOptimizerTest {
                     false,
                     null
                 );
-                assertTrue(Files.readString(obj.toPath()).contains("# MINESPORT_TYPE FLATTER"),
+                String objText = Files.readString(obj.toPath());
+                assertTrue(objText.contains("# MINESPORT_TYPE FLATTER"),
                     "OBJ " + mode + " must keep FLATTER active");
-                assertTrue(Files.isRegularFile(temp.resolve(stem + ".minesport.json")));
+                assertTrue(objText.contains("minesport_v1.5_active_export"),
+                    "OBJ " + mode + " must advertise the 0.1.5+ active-export contract");
+                Path sidecar = temp.resolve(stem + ".minesport.json");
+                assertTrue(Files.isRegularFile(sidecar));
+                String sidecarText = Files.readString(sidecar);
+                assertTrue(sidecarText.contains("\"flatterVersion\": \"0.1.0\""));
+                assertTrue(sidecarText.contains("\"minesport_v1.5_active_export\": true"));
 
                 File gltf = temp.resolve(stem + ".gltf").toFile();
                 new GltfExporter(chain).export(
@@ -105,6 +141,8 @@ class FlatterOptimizerTest {
                 String gltfText = Files.readString(gltf.toPath());
                 assertTrue(gltfText.contains("FLATTER"),
                     "glTF " + mode + " must keep FLATTER active");
+                assertTrue(gltfText.contains("minesport_v1.5_active_export"),
+                    "glTF " + mode + " must advertise the 0.1.5+ active-export contract");
             }
         } finally {
             if (previous == null) System.clearProperty("minesport.flatter");
@@ -156,7 +194,9 @@ class FlatterOptimizerTest {
     }
 
     private static final class LayeredCubeResolver implements AssetResolver {
-        @Override public boolean canResolve(String blockId) { return blockId.startsWith("minecraft:"); }
+        @Override public boolean canResolve(String blockId) {
+            return blockId.startsWith("minecraft:") || blockId.startsWith("test:");
+        }
 
         @Override
         public BlockState resolveBlockState(String blockId) {
