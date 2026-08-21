@@ -107,7 +107,7 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 }
 
 func (ms *MinesportApp) buildModernUI() fyne.CanvasObject {
-	return ms.buildWorkbenchUI()
+	return ms.buildWorkbenchUIV2()
 }
 
 func (ms *MinesportApp) onExportModern() {
