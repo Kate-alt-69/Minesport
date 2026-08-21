@@ -39,6 +39,8 @@ public final class FlatterMetadataExporter {
         float[] center
     ) throws IOException {
         if (result == null || result.isEmpty()) return sidecarFor(exportFile);
+        tagActiveExport(exportFile, format);
+
         File sidecar = sidecarFor(exportFile);
         JsonObject root = new JsonObject();
         root.addProperty("schema", 1);
@@ -84,6 +86,34 @@ public final class FlatterMetadataExporter {
                 if (existing.has(key)) root.add(key, existing.get(key).deepCopy());
             }
         } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Mark the raw interchange file itself so Translator 0.1.5+ can select the
+     * richer Minesport import contract before/alongside the sidecar.
+     */
+    private static void tagActiveExport(File exportFile, String format) {
+        if (exportFile == null || !exportFile.isFile()) return;
+        if (!"gltf".equalsIgnoreCase(format)) return; // OBJ writes the comment inline.
+
+        try (Reader reader = new BufferedReader(new FileReader(exportFile))) {
+            JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
+            JsonObject asset = root.has("asset") && root.get("asset").isJsonObject()
+                ? root.getAsJsonObject("asset")
+                : new JsonObject();
+            JsonObject extras = asset.has("extras") && asset.get("extras").isJsonObject()
+                ? asset.getAsJsonObject("extras")
+                : new JsonObject();
+            extras.addProperty(ACTIVE_EXPORT_TAG, true);
+            extras.addProperty("minesportActiveExportVersion", ACTIVE_EXPORT_VERSION);
+            extras.addProperty("minesportFlatterVersion", FLATTER_VERSION);
+            asset.add("extras", extras);
+            root.add("asset", asset);
+            writeJson(exportFile, root);
+        } catch (Exception ignored) {
+            // The sidecar remains authoritative. Never make a successful export
+            // fail just because the convenience raw-file marker could not be injected.
         }
     }
 
