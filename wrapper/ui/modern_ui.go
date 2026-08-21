@@ -17,12 +17,12 @@ import (
 	"github.com/kastrick/minesport/ipc"
 )
 
-// RunModern is the production UI entrypoint. It reuses the stable Minesport
-// inspector/map controls and adds the Blender translation controls around them.
+// RunModern is the production UI entrypoint. The Workbench shell keeps the
+// viewport alive while long engine/download/export tasks run in the background.
 func RunModern(jarPath, diagnosticsLogPath string) {
 	a := app.NewWithID("kastrick.dev.minesport")
 	w := a.NewWindow("Minesport — by Kastrick")
-	w.Resize(fyne.NewSize(1180, 740))
+	w.Resize(fyne.NewSize(1280, 800))
 	w.SetMaster()
 
 	ms := &MinesportApp{window: w, fyneApp: a, diagnosticsLogPath: diagnosticsLogPath}
@@ -31,6 +31,7 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	w.SetContent(ms.buildModernUI())
 	ms.installViewportShortcuts()
 	w.SetCloseIntercept(func() {
+		workbenchStates.Delete(ms)
 		if ms.embeddedViewer != nil {
 			ms.embeddedViewer.Close()
 		}
@@ -65,13 +66,15 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	}
 	ms.engine.OnError = func(msg string) {
 		ms.appendLog("Engine operation failed: " + msg)
-		if ms.exportWindow != nil {
+		if ms.workbenchExportActive() {
 			ms.finishModernExport(ipc.Response{}, false, msg)
-		} else {
-			ms.showOperationFailure("Core engine operation failed", msg)
+			return
 		}
+		ms.finishWorkbenchTask(false, "Engine operation failed", msg)
+		ms.showOperationFailure("Core engine operation failed", msg)
 	}
 	ms.engine.OnExit = func(msg string) {
+		ms.finishWorkbenchTask(false, "Core engine stopped", msg)
 		ms.handleCoreEngineFailure(msg)
 	}
 	if diagnosticsLogPath != "" {
@@ -79,22 +82,23 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	}
 
 	w.Show()
+	ms.beginWorkbenchTask("ENGINE", "Starting core engine…", false)
 	if jarPath == "" {
+		ms.finishWorkbenchTask(false, "Engine unavailable", "The bundled engine could not be found.")
 		ms.handleCoreEngineFailure("The bundled engine could not be found.")
 	} else if err := ms.engine.Start(jarPath); err != nil {
+		ms.finishWorkbenchTask(false, "Engine failed to start", err.Error())
 		ms.handleCoreEngineFailure("The Java engine could not be started: " + err.Error())
 	} else {
-		ms.statusLabel.SetText("Starting core engine…")
-		ms.stateIcon.SetResource(theme.ViewRefreshIcon())
 		go func() {
 			if err := ms.engine.Ping(15 * time.Second); err != nil {
+				ms.finishWorkbenchTask(false, "Engine did not become ready", err.Error())
 				ms.handleCoreEngineFailure("The Java process started but IPC did not become ready: " + err.Error())
 				return
 			}
 			ms.setEngineAvailable(true)
 			ms.appendLog("Core engine readiness check passed")
-			ms.statusLabel.SetText("Ready")
-			ms.stateIcon.SetResource(theme.ConfirmIcon())
+			ms.finishWorkbenchTask(true, "Core engine ready", "Minecraft world tools are ready.")
 			maybePromptBlenderTranslator(ms)
 		}()
 	}
@@ -103,14 +107,7 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 }
 
 func (ms *MinesportApp) buildModernUI() fyne.CanvasObject {
-	inspector := ms.buildInspector()
-	blender := buildBlenderInspectorCard(ms.window, ms.settings)
-	left := container.NewBorder(blender, nil, nil, nil, inspector)
-	main := ms.buildMainArea()
-	ms.updateMetaHUD(ms.selectionSizeText())
-	split := container.NewHSplit(left, main)
-	split.SetOffset(0.29)
-	return split
+	return ms.buildWorkbenchUI()
 }
 
 func (ms *MinesportApp) onExportModern() {
@@ -191,6 +188,7 @@ func (ms *MinesportApp) startModernExport(outputPath string) {
 	ms.progressBar.SetValue(0)
 	ms.statusLabel.SetText("Preparing export…")
 	ms.showModernExportProgress()
+	ms.updateWorkbenchWorldContext()
 
 	format := "gltf"
 	if strings.HasSuffix(strings.ToLower(outputPath), ".obj") {
@@ -235,9 +233,6 @@ func (ms *MinesportApp) startModernExport(outputPath string) {
 	}
 	if ms.optimizeCheck.Checked {
 		options["optimize"] = "true"
-		// The main optimization switch must produce a visibly smaller mesh, not
-		// merely request vertex reuse. Safe covered-face removal is part of that
-		// promise; the Basic setting can still enable it independently.
 		options["faceCulling"] = "true"
 	}
 	if ms.settings.OptimizeOutputEnabled {
@@ -266,79 +261,45 @@ func (ms *MinesportApp) startModernExport(outputPath string) {
 	}
 }
 
+// showModernExportProgress now opens the persistent Workbench task shelf instead
+// of hiding the main Minesport window behind a modal export window.
 func (ms *MinesportApp) showModernExportProgress() {
-	if ms.exportWindow != nil {
-		return
-	}
-
-	w := ms.fyneApp.NewWindow("Minesport — Exporting")
-	w.Resize(fyne.NewSize(520, 230))
-	w.SetFixedSize(true)
-	w.CenterOnScreen()
-
-	ms.exportWindow = w
-	ms.exportTitle = widget.NewLabel("Exporting…")
-	ms.exportTitle.TextStyle = fyne.TextStyle{Bold: true}
-	ms.exportStage = widget.NewLabel("Preparing export")
-	ms.exportDetail = widget.NewLabel("")
-	ms.exportBar = widget.NewProgressBar()
-	ms.exportStats = widget.NewLabel("")
-
-	card := container.NewVBox(
-		ms.exportTitle,
-		ms.exportStage,
-		ms.exportBar,
-		ms.exportDetail,
-		ms.exportStats,
-	)
-
-	w.SetContent(container.NewPadded(card))
-	ms.window.Hide()
-	w.Show()
-	w.CenterOnScreen()
+	ms.setWorkbenchExportActive(true)
+	ms.beginWorkbenchTask("EXPORT", "Preparing export…", true)
 }
 
 func (ms *MinesportApp) updateModernExportProgress(pct int, msg string) {
-	if ms.exportWindow == nil || ms.exportBar == nil {
+	if !ms.workbenchExportActive() {
 		return
 	}
-
-	ms.exportBar.SetValue(float64(pct) / 100)
-	ms.exportStage.SetText(msg)
-
 	blocks := ms.estimateBlocks()
 	estimatedBlocks := int(float64(blocks) * float64(pct) / 100)
 	verts := estimatedBlocks * 24
 	data := estimatedBlocks * 80
-
-	ms.exportDetail.SetText(fmt.Sprintf(
-		"Blocks %s / ~%s",
+	detail := fmt.Sprintf(
+		"Blocks %s / ~%s · estimated vertices ~%s · geometry ~%s KB",
 		formatCount(estimatedBlocks),
 		formatCount(blocks),
-	))
-	ms.exportStats.SetText(fmt.Sprintf(
-		"Estimated vertices  ~%s\nEstimated geometry  ~%s KB",
 		formatCount(verts),
 		formatCount(data/1024),
-	))
+	)
+	ms.updateWorkbenchTask(pct, msg, detail)
 }
 
 func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg string) {
+	ms.setWorkbenchExportActive(false)
+	ms.exportBtn.Enable()
+
 	if !ok {
-		ms.statusLabel.SetText("Failed")
+		ms.statusLabel.SetText("Export failed")
 		ms.stateIcon.SetResource(theme.ErrorIcon())
-		if ms.exportWindow != nil {
-			ms.exportWindow.Close()
-			ms.exportWindow = nil
-		}
-		ms.window.Show()
-		ms.exportBtn.Enable()
+		ms.finishWorkbenchTask(false, "Export failed", msg)
 		ms.showOperationFailure("Export failed", msg)
 		return
 	}
 
 	ms.progressBar.SetValue(1)
-	ms.statusLabel.SetText("Done")
+	ms.statusLabel.SetText("Export complete")
 	ms.stateIcon.SetResource(theme.ConfirmIcon())
 	ms.updateMetaHUD(fmt.Sprintf(
 		"%s blocks · %s faces · %s verts",
@@ -346,15 +307,11 @@ func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg strin
 		formatCount(resp.QuadCount),
 		formatCount(resp.VertexCount),
 	))
-
-	if ms.exportWindow != nil {
-		ms.exportWindow.Close()
-		ms.exportWindow = nil
-	}
-
-	ms.window.Show()
-	ms.window.RequestFocus()
-	ms.exportBtn.Enable()
+	ms.finishWorkbenchTask(
+		true,
+		"Export complete",
+		fmt.Sprintf("%s blocks · %s faces · %s vertices", formatCount(resp.BlockCount), formatCount(resp.QuadCount), formatCount(resp.VertexCount)),
+	)
 
 	exportedPath := resp.Output
 	if exportedPath == "" {
