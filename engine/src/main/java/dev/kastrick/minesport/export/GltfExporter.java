@@ -143,7 +143,10 @@ public class GltfExporter {
             if (flatter.isFlatterObject(entry.getKey())) {
                 extras.addProperty("minesportType", "FLATTER");
                 extras.addProperty("minesportFlatterId", entry.getKey());
-                extras.addProperty("minesportFlatterSchema", 1);
+                extras.addProperty(
+                    "minesportFlatterSchema",
+                    FlatterMetadataExporter.FLATTER_SCHEMA
+                );
             }
             child.add("extras", extras);
 
@@ -163,7 +166,10 @@ public class GltfExporter {
         minesportExtras.addProperty("objectMode", mode.name());
         minesportExtras.addProperty("metresPerBlock", 1.0);
         minesportExtras.addProperty("flatter", !flatter.isEmpty());
-        minesportExtras.addProperty("flatterSchema", flatter.isEmpty() ? 0 : 1);
+        minesportExtras.addProperty(
+            "flatterSchema",
+            flatter.isEmpty() ? 0 : FlatterMetadataExporter.FLATTER_SCHEMA
+        );
         rootExtras.add("minesport", minesportExtras);
         rootNode.add("extras", rootExtras);
 

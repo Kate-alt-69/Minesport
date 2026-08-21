@@ -11,6 +11,8 @@ bl_info = {
 import bpy
 
 from . import flatter
+from . import flatter_overlay
+from . import flatter_runtime
 from . import properties
 from . import obj_import
 from .metadata import gltf_asset_path, load_sidecar
@@ -21,8 +23,9 @@ class glTF2ImportUserExtension:
     """Hook used by Blender's glTF importer.
 
     Normal Minesport metadata is translated one-shot into Blender-native data.
-    FLATTER keeps only a lightweight Blender helper layer for logical block
-    picking/materialization; there is still no per-frame Minesport runtime.
+    FLATTER keeps a lightweight Blender helper layer for logical block
+    picking/materialization and a GPU-only logical-block overview; there is
+    still no per-frame Minesport simulation runtime.
     """
 
     def __init__(self):
@@ -43,10 +46,14 @@ class glTF2ImportUserExtension:
 def register():
     properties.register()
     flatter.register()
+    flatter_runtime.register()
+    flatter_overlay.register()
     obj_import.register()
 
 
 def unregister():
     obj_import.unregister()
+    flatter_overlay.unregister()
+    flatter_runtime.unregister()
     flatter.unregister()
     properties.unregister()

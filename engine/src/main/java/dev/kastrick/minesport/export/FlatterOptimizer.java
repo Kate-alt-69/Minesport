@@ -10,9 +10,11 @@ import java.util.*;
 /**
  * Lossless chunk-local geometry compiler for FLATTER.
  *
- * Minecraft blocks remain the source of truth. Only proven opaque full cubes
- * are virtualized; their logical positions/states are retained in palette/RLE
- * metadata while exposed coplanar faces are greedily merged for rendering.
+ * Minecraft blocks remain the source of truth. Eligibility is based on the
+ * final resolved geometry, not the export grouping mode or the number of JSON
+ * model elements. A block may therefore contain layered full-cube faces (for
+ * example grass base + tinted overlay) as long as every side has at least one
+ * fully opaque full-cell layer. All face layers are retained in metadata.
  */
 public final class FlatterOptimizer {
     public static final int CELL_SIZE = 16;
@@ -40,11 +42,15 @@ public final class FlatterOptimizer {
     public record PaletteEntry(
         String blockId,
         Map<String,String> properties,
-        Map<String,FaceInfo> faces
+        Map<String,List<FaceInfo>> faces
     ) {
         public PaletteEntry {
             properties = Collections.unmodifiableMap(new LinkedHashMap<>(properties));
-            faces = Collections.unmodifiableMap(new LinkedHashMap<>(faces));
+            Map<String,List<FaceInfo>> copied = new LinkedHashMap<>();
+            for (var entry : faces.entrySet()) {
+                copied.put(entry.getKey(), List.copyOf(entry.getValue()));
+            }
+            faces = Collections.unmodifiableMap(copied);
         }
     }
 
@@ -105,8 +111,8 @@ public final class FlatterOptimizer {
     private record CellKey(int x, int y, int z) {}
     private record Candidate(
         BlockData block,
-        Map<String,Quad> faces,
-        Map<String,FaceInfo> faceInfo,
+        Map<String,List<Quad>> faces,
+        Map<String,List<FaceInfo>> faceInfo,
         String paletteKey
     ) {}
     private record AxisEdge(int axis, int sign) {}
@@ -123,26 +129,21 @@ public final class FlatterOptimizer {
     public static Result compile(List<BlockData> blocks, ResolverChain resolvers) {
         if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
 
-        BlockGeometryClassifier classifier = new BlockGeometryClassifier(resolvers);
         GeometryBuilder geometry = new GeometryBuilder(resolvers);
         Map<MaterialKey,Boolean> opaqueCache = new HashMap<>();
         Map<CellKey,List<Candidate>> cells = new LinkedHashMap<>();
 
         for (BlockData block : blocks) {
             if (block == null || block.isAir()) continue;
-            if (classifier.classify(block) != BlockGeometryKind.FULL_BLOCK) continue;
             Candidate candidate = analyze(block, geometry, resolvers, opaqueCache);
             if (candidate == null) continue;
-            CellKey key = cellFor(block);
-            cells.computeIfAbsent(key, ignored -> new ArrayList<>()).add(candidate);
+            cells.computeIfAbsent(cellFor(block), ignored -> new ArrayList<>()).add(candidate);
         }
 
         List<FlatterObject> objects = new ArrayList<>();
         Set<BlockData> included = Collections.newSetFromMap(new IdentityHashMap<>());
 
         for (var entry : cells.entrySet()) {
-            // One isolated cube does not benefit from FLATTER and would only
-            // add metadata/interaction overhead.
             if (entry.getValue().size() < 2) continue;
             FlatterObject object = buildObject(entry.getKey(), entry.getValue());
             if (object == null || object.blockCount() < 2) continue;
@@ -160,29 +161,45 @@ public final class FlatterOptimizer {
         Map<MaterialKey,Boolean> opaqueCache
     ) {
         List<Quad> quads = geometry.buildBlock(block);
-        if (quads.size() != 6) return null;
+        if (quads.size() < 6) return null;
 
-        Map<String,Quad> faces = new LinkedHashMap<>();
-        Map<String,FaceInfo> faceInfo = new LinkedHashMap<>();
+        Map<String,List<Quad>> faces = new LinkedHashMap<>();
+        Map<String,List<FaceInfo>> faceInfo = new LinkedHashMap<>();
+        Set<String> opaqueDirections = new HashSet<>();
 
         for (Quad quad : quads) {
             if (quad.partName() != null) return null;
             String direction = directionOf(quad);
-            if (direction == null || faces.putIfAbsent(direction, quad) != null) return null;
-            if (!isUnitAxisAlignedFace(block, quad)) return null;
+            if (direction == null || !isUnitAxisAlignedFace(block, quad)) return null;
 
             MaterialKey material = MaterialKey.forQuad(quad);
             boolean opaque = opaqueCache.computeIfAbsent(
                 material,
                 key -> isOpaqueTexture(key, resolvers)
             );
-            if (!opaque) return null;
+            if (opaque) opaqueDirections.add(direction);
 
-            faceInfo.put(direction, faceInfo(block, quad, material));
+            faces.computeIfAbsent(direction, ignored -> new ArrayList<>()).add(quad);
+            faceInfo.computeIfAbsent(direction, ignored -> new ArrayList<>())
+                .add(faceInfo(block, quad, material));
         }
 
         if (!faces.keySet().containsAll(DIRECTIONS)) return null;
-        return new Candidate(block, faces, faceInfo, paletteKey(block));
+        if (!opaqueDirections.containsAll(DIRECTIONS)) return null;
+
+        Map<String,List<Quad>> immutableFaces = new LinkedHashMap<>();
+        Map<String,List<FaceInfo>> immutableInfo = new LinkedHashMap<>();
+        for (String direction : DIRECTIONS) {
+            immutableFaces.put(direction, List.copyOf(faces.getOrDefault(direction, List.of())));
+            immutableInfo.put(direction, List.copyOf(faceInfo.getOrDefault(direction, List.of())));
+        }
+
+        return new Candidate(
+            block,
+            Collections.unmodifiableMap(immutableFaces),
+            Collections.unmodifiableMap(immutableInfo),
+            paletteKey(block, immutableInfo)
+        );
     }
 
     private static boolean isOpaqueTexture(MaterialKey material, ResolverChain resolvers) {
@@ -238,8 +255,6 @@ public final class FlatterOptimizer {
             BlockData block = candidate.block();
             for (String direction : DIRECTIONS) {
                 int[] delta = delta(direction);
-                // Never cull across a FLATTER cell boundary. Each cell must be
-                // independently rebuildable after Blender materializes a block.
                 Candidate neighbour = local.get(SpatialKey.of(
                     block.x + delta[0],
                     block.y + delta[1],
@@ -247,26 +262,27 @@ public final class FlatterOptimizer {
                 ));
                 if (neighbour != null) continue;
 
-                Quad quad = candidate.faces().get(direction);
-                AxisEdge edge1 = edgeOf(quad, 1);
-                AxisEdge edge3 = edgeOf(quad, 3);
-                if (edge1 == null || edge3 == null || edge1.axis() == edge3.axis()) {
-                    edge1 = fallbackEdge1(direction);
-                    edge3 = fallbackEdge3(direction);
-                }
+                for (Quad quad : candidate.faces().getOrDefault(direction, List.of())) {
+                    AxisEdge edge1 = edgeOf(quad, 1);
+                    AxisEdge edge3 = edgeOf(quad, 3);
+                    if (edge1 == null || edge3 == null || edge1.axis() == edge3.axis()) {
+                        edge1 = fallbackEdge1(direction);
+                        edge3 = fallbackEdge3(direction);
+                    }
 
-                MergeKey key = new MergeKey(
-                    direction,
-                    MaterialKey.forQuad(quad),
-                    uvSignature(quad),
-                    plane(block, direction),
-                    edge1,
-                    edge3
-                );
-                int a = axisCoordinate(block, edge1);
-                int b = axisCoordinate(block, edge3);
-                faceGroups.computeIfAbsent(key, ignored -> new ArrayList<>())
-                    .add(new FaceCell(candidate, quad, a, b));
+                    MergeKey key = new MergeKey(
+                        direction,
+                        MaterialKey.forQuad(quad),
+                        uvSignature(quad),
+                        plane(block, direction),
+                        edge1,
+                        edge3
+                    );
+                    int a = axisCoordinate(block, edge1);
+                    int b = axisCoordinate(block, edge3);
+                    faceGroups.computeIfAbsent(key, ignored -> new ArrayList<>())
+                        .add(new FaceCell(candidate, quad, a, b));
+                }
             }
         }
 
@@ -349,7 +365,6 @@ public final class FlatterOptimizer {
         return runs;
     }
 
-    /** X is fastest, then Z, then Y. Blender uses the same ordering. */
     private static int linearIndex(int x, int y, int z, int[] size) {
         return (y * size[2] + z) * size[0] + x;
     }
@@ -426,11 +441,7 @@ public final class FlatterOptimizer {
             outUv[1][1] + du3[1] * height
         };
 
-        // Quad stores raw order and reverses 1/3 on access. Convert the desired
-        // post-correction rectangle back into raw order here.
-        float[][] raw = {
-            out[0], out[3], out[2], out[1]
-        };
+        float[][] raw = {out[0], out[3], out[2], out[1]};
         float[] rawUv = {
             outUv[0][0], outUv[0][1],
             outUv[3][0], outUv[3][1],
@@ -457,20 +468,41 @@ public final class FlatterOptimizer {
         );
     }
 
-    private static String paletteKey(BlockData block) {
-        return block.blockId + "[" + BlockGrouper.stateKey(block.properties) + "]";
+    private static String paletteKey(BlockData block, Map<String,List<FaceInfo>> faceInfo) {
+        StringBuilder value = new StringBuilder();
+        value.append(block.blockId)
+            .append('[').append(BlockGrouper.stateKey(block.properties)).append(']');
+        for (String direction : DIRECTIONS) {
+            value.append('|').append(direction);
+            for (FaceInfo info : faceInfo.getOrDefault(direction, List.of())) {
+                value.append('{')
+                    .append(info.material()).append(';')
+                    .append(info.texturePath()).append(';')
+                    .append(info.tintRgb()).append(';');
+                appendFloatBits(value, info.uv());
+                value.append(';');
+                appendFloatBits(value, info.vertices());
+                value.append('}');
+            }
+        }
+        return value.toString();
+    }
+
+    private static void appendFloatBits(StringBuilder value, float[] values) {
+        for (float f : values) value.append(Float.floatToIntBits(f)).append(',');
     }
 
     private static String directionOf(Quad quad) {
+        float[] normal = quad.normal();
+        if (normal != null && normal.length >= 3) {
+            float ax = Math.abs(normal[0]), ay = Math.abs(normal[1]), az = Math.abs(normal[2]);
+            if (ax >= ay && ax >= az && ax > .9f) return normal[0] > 0 ? "east" : "west";
+            if (ay >= ax && ay >= az && ay > .9f) return normal[1] > 0 ? "up" : "down";
+            if (az > .9f) return normal[2] > 0 ? "south" : "north";
+        }
         if (quad.cullface() != null && DIRECTIONS.contains(quad.cullface())) {
             return quad.cullface();
         }
-        float[] normal = quad.normal();
-        if (normal == null || normal.length < 3) return null;
-        float ax = Math.abs(normal[0]), ay = Math.abs(normal[1]), az = Math.abs(normal[2]);
-        if (ax >= ay && ax >= az && ax > .9f) return normal[0] > 0 ? "east" : "west";
-        if (ay >= ax && ay >= az && ay > .9f) return normal[1] > 0 ? "up" : "down";
-        if (az > .9f) return normal[2] > 0 ? "south" : "north";
         return null;
     }
 
@@ -488,9 +520,9 @@ public final class FlatterOptimizer {
         }
         float[] span = {max[0] - min[0], max[1] - min[1], max[2] - min[2]};
         int zero = 0, one = 0;
-        for (float value : span) {
-            if (Math.abs(value) < eps) zero++;
-            if (Math.abs(value - 1f) < eps) one++;
+        for (float s : span) {
+            if (Math.abs(s) < eps) zero++;
+            if (Math.abs(s - 1f) < eps) one++;
         }
         if (zero != 1 || one != 2) return false;
         return min[0] >= block.x - eps && max[0] <= block.x + 1 + eps

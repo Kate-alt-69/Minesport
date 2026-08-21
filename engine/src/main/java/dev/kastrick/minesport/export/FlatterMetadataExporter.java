@@ -7,11 +7,13 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import java.io.*;
+import java.util.List;
 import java.util.Map;
 
 /** Writes/merges the lossless logical FLATTER block grid beside OBJ/glTF. */
 public final class FlatterMetadataExporter {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    public static final int FLATTER_SCHEMA = 2;
 
     private FlatterMetadataExporter() {}
 
@@ -42,13 +44,15 @@ public final class FlatterMetadataExporter {
         root.addProperty("objectMode", mode.name());
         root.addProperty("linearUnit", "metre");
         root.addProperty("metresPerBlock", 1.0);
-        root.addProperty("flatterSchema", 1);
+        root.addProperty("flatterSchema", FLATTER_SCHEMA);
         root.addProperty("flatterBlockCount", result.blockCount());
-        root.add("flatterObjects", flatterObjects(result, center, format));
+        root.add("flatterObjects", flatterObjects(result, center, format, mode));
 
         JsonObject capabilities = new JsonObject();
         capabilities.addProperty("flatter", true);
         capabilities.addProperty("flatterMaterialization", true);
+        capabilities.addProperty("flatterLayeredFaces", true);
+        capabilities.addProperty("flatterLogicalOverlay", true);
         root.add("capabilities", capabilities);
 
         writeJson(sidecar, root);
@@ -66,7 +70,12 @@ public final class FlatterMetadataExporter {
         }
     }
 
-    private static JsonArray flatterObjects(FlatterOptimizer.Result result, float[] center, String format) {
+    private static JsonArray flatterObjects(
+        FlatterOptimizer.Result result,
+        float[] center,
+        String format,
+        ObjExporter.ExportMode mode
+    ) {
         JsonArray objects = new JsonArray();
         for (FlatterOptimizer.FlatterObject object : result.objects()) {
             JsonObject json = new JsonObject();
@@ -77,6 +86,7 @@ public final class FlatterMetadataExporter {
             json.addProperty("blockCount", object.blockCount());
             json.addProperty("encoding", "palette_rle_v1");
             json.addProperty("format", format);
+            json.addProperty("objectMode", mode.name());
             json.add("origin", intArray(object.origin()));
             json.add("size", intArray(object.size()));
             json.add("center", floatArray(center));
@@ -90,16 +100,14 @@ public final class FlatterMetadataExporter {
                     properties.addProperty(property.getKey(), property.getValue());
                 }
                 p.add("properties", properties);
+
                 JsonObject faces = new JsonObject();
-                for (Map.Entry<String,FlatterOptimizer.FaceInfo> face : entry.faces().entrySet()) {
-                    FlatterOptimizer.FaceInfo info = face.getValue();
-                    JsonObject f = new JsonObject();
-                    f.addProperty("material", info.material());
-                    f.addProperty("texture", info.texturePath());
-                    f.addProperty("tint", info.tintRgb());
-                    f.add("uv", floatArray(info.uv()));
-                    f.add("vertices", floatArray(info.vertices()));
-                    faces.add(face.getKey(), f);
+                for (Map.Entry<String,List<FlatterOptimizer.FaceInfo>> face : entry.faces().entrySet()) {
+                    JsonArray layers = new JsonArray();
+                    for (FlatterOptimizer.FaceInfo info : face.getValue()) {
+                        layers.add(faceJson(info));
+                    }
+                    faces.add(face.getKey(), layers);
                 }
                 p.add("faces", faces);
                 palette.add(p);
@@ -118,6 +126,16 @@ public final class FlatterMetadataExporter {
             objects.add(json);
         }
         return objects;
+    }
+
+    private static JsonObject faceJson(FlatterOptimizer.FaceInfo info) {
+        JsonObject face = new JsonObject();
+        face.addProperty("material", info.material());
+        face.addProperty("texture", info.texturePath());
+        face.addProperty("tint", info.tintRgb());
+        face.add("uv", floatArray(info.uv()));
+        face.add("vertices", floatArray(info.vertices()));
+        return face;
     }
 
     private static JsonArray intArray(int[] values) {
