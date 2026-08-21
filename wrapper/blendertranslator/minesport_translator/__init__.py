@@ -3,7 +3,7 @@ bl_info = {
     "author": "Kastrick / Minesport",
     "version": (0, 1, 5),
     "blender": (4, 3, 0),
-    "location": "Object Properties / 3D View > Minesport",
+    "location": "Object Properties / Node Editor / 3D View > Minesport",
     "description": "Translates Minesport metadata and FLATTER logical block geometry into Blender-native data.",
     "category": "Import-Export",
 }
@@ -64,15 +64,22 @@ def register():
 
     # Keep experimental pieces independent. Registration order matters here:
     # schema/runtime upgrades wrap the core first, Liquid Merge wraps that
-    # result, then the overlay/OBJ helpers can consume the enriched objects.
+    # result, then UI/overlay/OBJ helpers consume the enriched objects.
     _register_optional("flatter_runtime")
     _register_optional("liquid_merge")
+    _register_optional("liquid_ui")
     _register_optional("flatter_overlay")
     _register_optional("obj_import")
 
 
 def unregister():
-    for name in ("obj_import", "flatter_overlay", "liquid_merge", "flatter_runtime"):
+    for name in (
+        "obj_import",
+        "flatter_overlay",
+        "liquid_ui",
+        "liquid_merge",
+        "flatter_runtime",
+    ):
         module = _OPTIONAL_MODULES.pop(name, None)
         if module is None:
             continue
