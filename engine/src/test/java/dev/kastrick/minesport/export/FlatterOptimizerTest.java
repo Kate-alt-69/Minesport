@@ -56,6 +56,8 @@ class FlatterOptimizerTest {
         public BlockModel resolveModel(String modelPath) {
             BlockModel model = new BlockModel();
             BlockModel.Element cube = new BlockModel.Element();
+            cube.from = new float[]{0f, 0f, 0f};
+            cube.to = new float[]{16f, 16f, 16f};
             for (String direction : List.of("north", "south", "east", "west", "up", "down")) {
                 BlockModel.Face face = new BlockModel.Face();
                 face.texture = "minecraft:block/stone";
@@ -68,8 +70,6 @@ class FlatterOptimizerTest {
 
         @Override
         public BufferedImage resolveTexture(String texturePath) {
-            return new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
-
             BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
             for (int y = 0; y < image.getHeight(); y++) {
                 for (int x = 0; x < image.getWidth(); x++) {
@@ -77,7 +77,6 @@ class FlatterOptimizerTest {
                 }
             }
             return image;
-
         }
 
         @Override public String name() { return "FLATTER test resolver"; }
