@@ -32,6 +32,13 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 		func(v bool) { working.OptimizeOutputEnabled = v },
 		"Removes a face only when neighboring geometry fully covers that face.",
 	)
+	flatter := basicSettingRow(
+		parent,
+		"FLATTER geometry",
+		working.FlatterOptimizationEnabled,
+		func(v bool) { working.FlatterOptimizationEnabled = v },
+		"Losslessly compiles safe full Minecraft blocks into chunk-local greedy surfaces. The .minesport.json sidecar keeps every logical block so Minesport Translator 0.1.4 can select, materialize and rebuild blocks in Blender 4.3+.",
+	)
 	hidden := basicSettingRow(
 		parent,
 		"Hidden block culling (Experimental)",
@@ -40,7 +47,8 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 		"Removes a whole block only when all six sides are proven fully covered. Uncertain/custom geometry is kept.",
 	)
 	basic := container.NewVBox(
-		widget.NewCard("VISIBILITY", "", container.NewVBox(face, hidden)),
+		widget.NewCard("GEOMETRY", "", container.NewVBox(face, flatter)),
+		widget.NewCard("VISIBILITY", "", container.NewVBox(hidden)),
 		widget.NewLabel("Simple by default. Use ⓘ for details."),
 	)
 
@@ -55,7 +63,7 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 	})
 	blenderEnabled.SetChecked(working.BlenderExportEnabled)
 
-	blenderInfo := widget.NewLabel("Blender 4.3+ translation metadata and one-shot translator integration. No per-frame Minesport runtime is installed.")
+	blenderInfo := widget.NewLabel("Blender 4.3+ translation metadata and one-shot translator integration. FLATTER metadata is written automatically whenever FLATTER geometry is enabled.")
 	blenderInfo.Wrapping = fyne.TextWrapWord
 
 	translatorStatus := blendertranslator.CurrentStatus()
@@ -106,7 +114,7 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 			container.NewBorder(nil, nil, nil, infoButton(
 				parent,
 				"Blender Export",
-				"When enabled, the World Inspector shows Animate export / Animate static. Minesport writes translation metadata; Blender's translator converts it once into native collections, actions, bones and material nodes. Continuous animation controls stay inside Blender.",
+				"When enabled, the World Inspector shows Animate export / Animate static. Minesport writes translation metadata; Blender's translator converts it once into native collections, actions, bones and material nodes. FLATTER logical-block metadata is emitted independently when its Basic setting is enabled.",
 			), blenderEnabled),
 			blenderInfo,
 			container.NewBorder(nil, nil, installIcon, nil, installStatus),

@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const Version = "0.1.3"
+const Version = "0.1.4"
 
 // The translator is bundled into Minesport so release builds do not depend on
 // loose Python files beside minesport.exe.
@@ -75,9 +75,6 @@ func DiscoverTargets() []Target {
 		}
 	}
 
-	// Windows Blender installs expose the version in the installation folder.
-	// Add a target even when the user has not opened that version yet, so the
-	// first-launch Minesport prompt can create its user add-on directory.
 	if runtime.GOOS == "windows" {
 		programFiles := os.Getenv("ProgramFiles")
 		appData := os.Getenv("APPDATA")

@@ -5,14 +5,7 @@ import dev.kastrick.minesport.region.BlockData;
 import java.io.*;
 import java.util.*;
 
-/**
- * OBJ + MTL exporter using Minesport's explicit geometry/UV data.
- *
- * OBJ has no real nested collection format, so the export filename is emitted
- * as a common `g` group. `o` records still follow the selected object mode:
- * one object for Merged, one per logical block type for Grouped, and one per
- * physical/compound structure for Individual.
- */
+/** OBJ + MTL exporter using Minesport's explicit geometry/UV data. */
 public class ObjExporter {
     public record ExportStats(int blockCount, int quadCount, int vertexCount) {
         public static ExportStats of(int blocks, int quads) {
@@ -39,7 +32,6 @@ public class ObjExporter {
     }
 
     private static int bits(float value) {
-        // Treat -0 and +0 as the same coordinate during welding.
         return Float.floatToIntBits(value == 0f ? 0f : value);
     }
 
@@ -57,10 +49,14 @@ public class ObjExporter {
         ProgressCallback progress
     ) throws IOException {
         if (outputFile.getParentFile() != null) outputFile.getParentFile().mkdirs();
+        FlatterMetadataExporter.resetForExport(outputFile);
 
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
         Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
         Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+        FlatterOptimizer.Result flatter = FlatterSettings.enabled()
+            ? FlatterOptimizer.compile(blocks, builder.getResolvers())
+            : FlatterOptimizer.Result.empty();
 
         String exportName = safeObjectName(
             outputFile.getName().replaceFirst("(?i)\\.obj$", "")
@@ -76,6 +72,12 @@ public class ObjExporter {
 
         for (BlockData block : blocks) {
             if (block.isAir()) {
+                if (progress != null) progress.onProgress(++done, total);
+                continue;
+            }
+
+            if (flatter.contains(block)) {
+                solid++;
                 if (progress != null) progress.onProgress(++done, total);
                 continue;
             }
@@ -100,9 +102,6 @@ public class ObjExporter {
             };
 
             for (Quad quad : quads) {
-                // Movable entity-model parts (currently chest base/lid) remain
-                // separate even in merged/grouped exports. Blender can then
-                // attach the lid object to a bone without guessing vertices.
                 String objectName = quad.partName() == null
                     ? logicalName
                     : BlockGrouper.partName(block, quad.partName());
@@ -110,6 +109,13 @@ public class ObjExporter {
             }
 
             if (progress != null) progress.onProgress(++done, total);
+        }
+
+        for (FlatterOptimizer.FlatterObject object : flatter.objects()) {
+            List<Quad> quads = new ArrayList<>(object.quads());
+            objects.put(object.id(), quads);
+            quadCount += quads.size();
+            for (Quad quad : quads) textures.add(MaterialKey.forQuad(quad));
         }
 
         File mtl = new File(
@@ -124,11 +130,10 @@ public class ObjExporter {
             writer.println("# Export root: " + exportName);
             writer.println("# Object mode: " + mode);
             writer.println("# Optimize requested: " + optimize);
+            writer.println("# FLATTER: " + (!flatter.isEmpty()));
             writer.println("mtllib " + mtl.getName());
             writer.println();
 
-            // Common root/group name. DCCs that support OBJ groups can keep the
-            // export together, while `o` records retain real selectable objects.
             writer.println("g " + exportName);
             writer.println("s off");
 
@@ -141,11 +146,21 @@ public class ObjExporter {
             Set<String> usedObjectNames = new HashSet<>();
 
             for (var entry : objects.entrySet()) {
-                String objectName = mode == ExportMode.ALL_MERGED && entry.getKey().equals(exportName)
-                    ? exportName
-                    : uniqueName(safeObjectName(entry.getKey()), usedObjectNames);
+                String objectName;
+                if (flatter.isFlatterObject(entry.getKey())) {
+                    objectName = safeObjectName(entry.getKey());
+                    usedObjectNames.add(objectName);
+                } else {
+                    objectName = mode == ExportMode.ALL_MERGED && entry.getKey().equals(exportName)
+                        ? exportName
+                        : uniqueName(safeObjectName(entry.getKey()), usedObjectNames);
+                }
 
                 writer.println();
+                if (flatter.isFlatterObject(entry.getKey())) {
+                    writer.println("# MINESPORT_TYPE FLATTER");
+                    writer.println("# MINESPORT_FLATTER_ID " + entry.getKey());
+                }
                 writer.println("o " + objectName);
 
                 Map<MaterialKey,List<Quad>> byTexture = new LinkedHashMap<>();
@@ -219,6 +234,9 @@ public class ObjExporter {
         }
 
         MtlExporter.export(textures, mtl, builder.getResolvers());
+        if (!flatter.isEmpty()) {
+            FlatterMetadataExporter.write(outputFile, flatter, mode, "obj", center);
+        }
         return new ExportStats(solid, quadCount, emittedVertices);
     }
 

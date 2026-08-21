@@ -1,5 +1,5 @@
 import bpy
-from bpy.props import BoolProperty, FloatProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 
 
 class MinesportProperties(bpy.types.PropertyGroup):
@@ -24,6 +24,27 @@ class MinesportProperties(bpy.types.PropertyGroup):
         min=0.0,
         soft_max=4.0,
     )
+    is_flatter: BoolProperty(
+        name="FLATTER",
+        default=False,
+        options={"HIDDEN"},
+    )
+    flatter_id: StringProperty(
+        name="FLATTER ID",
+        default="",
+        options={"HIDDEN"},
+    )
+    flatter_block_count: IntProperty(
+        name="Logical blocks",
+        default=0,
+        min=0,
+        options={"HIDDEN"},
+    )
+    flatter_selected: StringProperty(
+        name="Selected logical block",
+        default="",
+        options={"HIDDEN"},
+    )
 
 
 class MINESPORT_PT_properties(bpy.types.Panel):
@@ -40,10 +61,19 @@ class MINESPORT_PT_properties(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        props = context.object.minesport
+        obj = context.object
+        props = obj.minesport
 
         if props.source_block:
             layout.label(text=props.source_block)
+
+        if props.is_flatter:
+            box = layout.box()
+            box.label(text="FLATTER", icon="MESH_GRID")
+            box.label(text=f"{props.flatter_block_count:,} logical Minecraft blocks")
+            if props.flatter_selected:
+                box.label(text="Selected: " + props.flatter_selected)
+            box.label(text="Use the Minesport tab in the 3D View to pick/materialize blocks.", icon="INFO")
 
         box = layout.box()
         box.label(text="Animation")
