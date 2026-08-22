@@ -276,10 +276,10 @@ func sanitizeVariants(source []BlockVariant) []BlockVariant {
 			}
 			vertices := append([]float32(nil), quad.Vertices[:32]...)
 			quads = append(quads, BakedQuad{
-				Vertices: vertices,
+				Vertices:  vertices,
 				TextureID: strings.TrimSpace(quad.TextureID),
-				Face: quad.Face,
-				Shade: quad.Shade,
+				Face:      quad.Face,
+				Shade:     quad.Shade,
 				TintIndex: quad.TintIndex,
 			})
 		}
@@ -331,8 +331,8 @@ func BeginSession(version, modsPath string) (string, error) {
 	}
 	captureSessions.Lock()
 	captureSessions.byVersion[version] = captureSession{
-		Version: version,
-		ModsPath: modsPath,
+		Version:         version,
+		ModsPath:        modsPath,
 		ModsFingerprint: fingerprint,
 	}
 	captureSessions.Unlock()
@@ -427,7 +427,7 @@ func SnapshotPath(version string) (string, bool) {
 	}
 	type candidate struct {
 		path string
-		mod time.Time
+		mod  time.Time
 	}
 	var candidates []candidate
 	for _, entry := range entries {
@@ -613,8 +613,8 @@ func cleanupCaptureJars(modsPath string) error {
 
 func isCaptureBridgeName(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasPrefix(lower, captureBridgePrefix)
-		&& strings.HasSuffix(lower, captureBridgeSuffix)
+	return strings.HasPrefix(lower, captureBridgePrefix) &&
+		strings.HasSuffix(lower, captureBridgeSuffix)
 }
 
 func copyFile(source, destination string) error {
