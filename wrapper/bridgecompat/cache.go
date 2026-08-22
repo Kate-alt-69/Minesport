@@ -29,25 +29,31 @@ func ClearGeneratedCache() ([]string, error) {
 	ensureMu.Lock()
 	defer ensureMu.Unlock()
 
-	candidates := []string{
+	rawCandidates := []string{
 		filepath.Join(supportRoot(), "compiled"),
 		filepath.Join(appdirs.CacheRoot(), "bridges"),
 		buildWorkspaceRoot(),
 	}
 
+	// Build and validate the entire destructive plan first. If any configured
+	// path is suspicious, nothing is removed.
 	seen := map[string]bool{}
-	removed := make([]string, 0, len(candidates))
-	var failures []error
-	for _, candidate := range candidates {
+	candidates := make([]string, 0, len(rawCandidates))
+	for _, candidate := range rawCandidates {
 		candidate = filepath.Clean(candidate)
 		if candidate == "" || candidate == "." || seen[candidate] {
 			continue
 		}
 		seen[candidate] = true
 		if err := validateGeneratedCachePath(candidate); err != nil {
-			failures = append(failures, err)
-			continue
+			return nil, err
 		}
+		candidates = append(candidates, candidate)
+	}
+
+	removed := make([]string, 0, len(candidates))
+	var failures []error
+	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err != nil {
 			if os.IsNotExist(err) {
 				continue
