@@ -51,11 +51,16 @@ func (ms *MinesportApp) emitRuntimeCacheProgress(percent int, message string) {
 	state.mu.Lock()
 	listeners := append([]runtimeCacheProgress(nil), state.listeners...)
 	state.mu.Unlock()
-	for _, listener := range listeners {
-		if listener != nil {
-			listener(percent, message)
-		}
+	if len(listeners) == 0 {
+		return
 	}
+	ms.dispatchUI(func() {
+		for _, listener := range listeners {
+			if listener != nil {
+				listener(percent, message)
+			}
+		}
+	})
 }
 
 func (ms *MinesportApp) finishRuntimeCacheJob(err error) {
@@ -70,11 +75,16 @@ func (ms *MinesportApp) finishRuntimeCacheJob(err error) {
 	state.callbacks = nil
 	state.listeners = nil
 	state.mu.Unlock()
-	for _, callback := range callbacks {
-		if callback != nil {
-			callback(err)
-		}
+	if len(callbacks) == 0 {
+		return
 	}
+	ms.dispatchUI(func() {
+		for _, callback := range callbacks {
+			if callback != nil {
+				callback(err)
+			}
+		}
+	})
 }
 
 func (ms *MinesportApp) generateRuntimeModelCache(
@@ -133,7 +143,7 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 		ms.finishRuntimeCacheJob(err)
 		return
 	}
-	ms.appendLog("Runtime model cache fingerprint: " + fingerprint)
+	ms.appendLogAsync("Runtime model cache fingerprint: " + fingerprint)
 	ms.emitRuntimeCacheProgress(2, "Fingerprint ready · preparing isolated Minecraft worker")
 
 	worker, err := bridgecompat.StartRuntimeWorker(
@@ -168,7 +178,7 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 	state.worker = worker
 	state.mu.Unlock()
 
-	ms.appendLog("Runtime registry worker started for Minecraft " + version)
+	ms.appendLogAsync("Runtime registry worker started for Minecraft " + version)
 	ms.emitRuntimeCacheProgress(75, "Minecraft registry worker loading mods and baked models")
 
 	ticker := time.NewTicker(250 * time.Millisecond)
@@ -178,13 +188,13 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 
 	for {
 		if path, ok := bridgecapture.SnapshotPathForMods(version, modsPath); ok {
+			// The Bridge only publishes a reusable registry after its complete
+			// packet has been received. Do not then wait forever for Gradle/the
+			// disposable client to decide to exit by itself: shut it down now.
 			ms.emitRuntimeCacheProgress(98, "Registry received · shutting down disposable worker")
-			<-worker.Done()
-			if waitErr := worker.Wait(); waitErr != nil {
-				ms.finishRuntimeCacheJob(waitErr)
-				return
-			}
-			ms.appendLog("Runtime model registry ready: " + path)
+			_ = worker.Stop()
+			bridgecapture.CancelSession(version)
+			ms.appendLogAsync("Runtime model registry ready: " + path)
 			ms.emitRuntimeCacheProgress(100, "Runtime model cache ready")
 			ms.finishRuntimeCacheJob(nil)
 			return
@@ -261,12 +271,15 @@ func (ms *MinesportApp) ensureRuntimeModelCacheForExport(continueExport func()) 
 
 	ms.exportBtn.Disable()
 	ms.beginWorkbenchTaskV3("RUNTIME CACHE", "Preparing Minecraft runtime models…", true)
+	ms.showRuntimeCacheWindow(version)
 	started, startErr := ms.generateRuntimeModelCache(
 		false,
 		func(percent int, message string) {
+			ms.updateRuntimeCacheWindow(percent, message)
 			ms.updateWorkbenchTaskV3(percent, message, "Minecraft "+version+" · exact current mod set")
 		},
 		func(cacheErr error) {
+			ms.closeRuntimeCacheWindow()
 			if cacheErr != nil {
 				ms.appendLog("[WARN] Runtime model cache unavailable; continuing with static resolver fallback: " + cacheErr.Error())
 				ms.finishWorkbenchTaskV3(false, "Runtime cache unavailable", "Continuing export with static asset resolution · "+cacheErr.Error())
@@ -280,10 +293,14 @@ func (ms *MinesportApp) ensureRuntimeModelCacheForExport(continueExport func()) 
 		},
 	)
 	if startErr != nil {
+		ms.closeRuntimeCacheWindow()
 		ms.appendLog("[WARN] Runtime model cache could not start; continuing with static resolver fallback: " + startErr.Error())
 		ms.finishWorkbenchTaskV3(false, "Runtime cache unavailable", "Continuing export with static asset resolution")
 		ms.exportBtn.Enable()
 		return false
+	}
+	if !started {
+		ms.closeRuntimeCacheWindow()
 	}
 	return started
 }
