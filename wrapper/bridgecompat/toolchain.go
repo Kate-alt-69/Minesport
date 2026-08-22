@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kastrick/minesport/appdirs"
 	"github.com/kastrick/minesport/processutil"
 )
 
@@ -185,7 +186,7 @@ func downloadAdoptiumJDK(version int) (string, error) {
 	return filepath.Dir(filepath.Dir(javac)), nil
 }
 
-func toolchainRoot() string { return filepath.Join(userDataRoot(), "toolchains") }
+func toolchainRoot() string { return filepath.Join(appdirs.CacheRoot(), "toolchains") }
 
 func javacName() string {
 	if runtime.GOOS == "windows" {
