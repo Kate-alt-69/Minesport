@@ -3,7 +3,8 @@
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AppVersion = '0.1.1'
+$AppVersion = '0.2.0'
+$BridgeVersion = '0.2.0'
 $BuildNsisInstaller = $false
 $BuildInnoInstaller = $false
 $BuildMsiInstaller = $false
@@ -58,7 +59,7 @@ foreach ($arg in $args) {
 
 Set-Location $Root
 Write-Host '============================================' -ForegroundColor Cyan
-Write-Host ' Minesport Build Script' -ForegroundColor Cyan
+Write-Host " Minesport $AppVersion Build Script" -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host 'Target: Windows / amd64' -ForegroundColor DarkGray
 if (-not $BuildNsisInstaller -and -not $BuildInnoInstaller -and -not $BuildMsiInstaller) {
@@ -87,8 +88,12 @@ try {
 }
 $bundledDir = Join-Path $Root 'dist\bundled-bridge'
 New-Item -ItemType Directory -Force -Path $bundledDir | Out-Null
+$bundledBridge = Join-Path $bundledDir "minesport-bridge-$BridgeVersion.jar"
+Copy-Item -Force $bridgeJar $bundledBridge
+# Keep one filename alias for older installed manifests/fallback code. New
+# manifests and installers always reference the official 0.2.0 artifact.
 Copy-Item -Force $bridgeJar (Join-Path $bundledDir 'minesport-bridge-0.1.0.jar')
-Write-Host 'Bundled bridge staged: dist\bundled-bridge\minesport-bridge-0.1.0.jar' -ForegroundColor Green
+Write-Host "Bundled bridge staged: dist\bundled-bridge\minesport-bridge-$BridgeVersion.jar" -ForegroundColor Green
 Write-Host ''
 
 Write-Host '[2/3] Building Java engine...' -ForegroundColor Yellow
@@ -172,37 +177,39 @@ function Find-InnoSetup {
 if ($BuildNsisInstaller -or $BuildInnoInstaller -or $BuildMsiInstaller) {
     $installerOut = Join-Path $Root 'dist\installer'
     New-Item -ItemType Directory -Force -Path $installerOut | Out-Null
-	# Remove the known pre-fix packages so an unsuccessful packaging command can
-	# never leave the broken 0.1.0 MSI looking like this run produced it.
-	@(
-		'Minesport-0.1.0-Setup-x64.exe',
-		'Minesport-0.1.0-Inno-Setup-x64.exe',
-		'Minesport-0.1.0-x64.msi',
-		'Minesport-0.1.0-x64.wixpdb'
-	) | ForEach-Object { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $installerOut $_) }
+    @(
+        'Minesport-0.1.0-Setup-x64.exe',
+        'Minesport-0.1.0-Inno-Setup-x64.exe',
+        'Minesport-0.1.0-x64.msi',
+        'Minesport-0.1.0-x64.wixpdb',
+        'Minesport-0.1.1-Setup-x64.exe',
+        'Minesport-0.1.1-Inno-Setup-x64.exe',
+        'Minesport-0.1.1-x64.msi',
+        'Minesport-0.1.1-x64.wixpdb'
+    ) | ForEach-Object { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $installerOut $_) }
     Write-Host ''
     Write-Host 'Packaging installers...' -ForegroundColor Yellow
 
     if ($BuildNsisInstaller) {
-		$nsisOutput = Join-Path $installerOut "Minesport-$AppVersion-Setup-x64.exe"
-		Remove-Item -Force -ErrorAction SilentlyContinue $nsisOutput
+        $nsisOutput = Join-Path $installerOut "Minesport-$AppVersion-Setup-x64.exe"
+        Remove-Item -Force -ErrorAction SilentlyContinue $nsisOutput
         $makensis = Find-NSIS
         if (-not $makensis) { throw 'NSIS was not found. Install NSIS or use --build-installer-msi instead.' }
         & $makensis '/V2' "/DSourceDir=$Root" (Join-Path $Root 'installer\windows\minesport.nsi')
         if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed.' }
-		if (-not (Test-Path $nsisOutput)) { throw "NSIS completed but did not produce $nsisOutput" }
-		Write-Host "NSIS installer built fresh: dist\installer\Minesport-$AppVersion-Setup-x64.exe" -ForegroundColor Green
+        if (-not (Test-Path $nsisOutput)) { throw "NSIS completed but did not produce $nsisOutput" }
+        Write-Host "NSIS installer built fresh: dist\installer\Minesport-$AppVersion-Setup-x64.exe" -ForegroundColor Green
     }
 
     if ($BuildInnoInstaller) {
-		$innoOutput = Join-Path $installerOut "Minesport-$AppVersion-Inno-Setup-x64.exe"
-		Remove-Item -Force -ErrorAction SilentlyContinue $innoOutput
+        $innoOutput = Join-Path $installerOut "Minesport-$AppVersion-Inno-Setup-x64.exe"
+        Remove-Item -Force -ErrorAction SilentlyContinue $innoOutput
         $iscc = Find-InnoSetup
         if (-not $iscc) { throw 'Inno Setup 6/7 was not found. Install it or use the default NSIS installer.' }
         & $iscc "/DSourceDir=$Root" (Join-Path $Root 'installer\windows\minesport.iss')
         if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
-		if (-not (Test-Path $innoOutput)) { throw "Inno Setup completed but did not produce $innoOutput" }
-		Write-Host "Inno installer built fresh: dist\installer\Minesport-$AppVersion-Inno-Setup-x64.exe" -ForegroundColor Green
+        if (-not (Test-Path $innoOutput)) { throw "Inno Setup completed but did not produce $innoOutput" }
+        Write-Host "Inno installer built fresh: dist\installer\Minesport-$AppVersion-Inno-Setup-x64.exe" -ForegroundColor Green
     }
 
     if ($BuildMsiInstaller) {
@@ -210,13 +217,13 @@ if ($BuildNsisInstaller -or $BuildInnoInstaller -or $BuildMsiInstaller) {
             throw 'WiX 7 MSI builds require the .NET SDK 6 or newer. Install the .NET SDK and try again.'
         }
         $wixProject = Join-Path $Root 'installer\windows\Minesport.wixproj'
-		$msiOutput = Join-Path $installerOut "Minesport-$AppVersion-x64.msi"
-		Remove-Item -Force -ErrorAction SilentlyContinue $msiOutput
-		& dotnet build $wixProject --configuration Release --output $installerOut --no-incremental "-p:SourceDir=$Root"
+        $msiOutput = Join-Path $installerOut "Minesport-$AppVersion-x64.msi"
+        Remove-Item -Force -ErrorAction SilentlyContinue $msiOutput
+        & dotnet build $wixProject --configuration Release --output $installerOut --no-incremental "-p:SourceDir=$Root"
         if ($LASTEXITCODE -ne 0) { throw 'WiX 7 MSI build failed.' }
 
         if (-not (Test-Path $msiOutput)) { throw "WiX 7 completed but did not produce $msiOutput" }
-		Write-Host "MSI installer built fresh with WiX 7: dist\installer\Minesport-$AppVersion-x64.msi" -ForegroundColor Green
+        Write-Host "MSI installer built fresh with WiX 7: dist\installer\Minesport-$AppVersion-x64.msi" -ForegroundColor Green
     }
 }
 
