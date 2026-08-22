@@ -42,45 +42,55 @@ public final class BlockGeometryExtractor {
         SpriteFinder spriteFinder = SpriteFinder.get(atlas);
 
         for (BlockState state : block.getStateDefinition().getPossibleStates()) {
-            BlockStateModel model = shaper.getBlockModel(state);
-            if (model == null) continue;
-
             var properties = new LinkedHashMap<String, String>();
             state.getValues().forEach((property, value) ->
                 properties.put(property.getName(), value.toString())
             );
 
-            List<BlockModelPart> parts;
-            try {
-                parts = model.collectParts(RandomSource.create(42L));
-            } catch (Exception exception) {
-                continue;
-            }
+            var quads = new ArrayList<BakedQuadData>();
+            BlockStateModel model = shaper.getBlockModel(state);
+            if (model != null) {
+                List<BlockModelPart> parts;
+                try {
+                    parts = model.collectParts(RandomSource.create(stableSeed(block, state)));
+                } catch (Exception exception) {
+                    parts = List.of();
+                }
 
-            MutableMesh mesh = Renderer.get().mutableMesh();
-            var emitter = mesh.emitter();
-            for (BlockModelPart part : parts) {
-                for (Direction direction : DIRECTIONS) {
-                    List<BakedQuad> baked;
-                    try {
-                        baked = part.getQuads(direction);
-                    } catch (Exception exception) {
-                        continue;
-                    }
-                    for (BakedQuad quad : baked) {
-                        emitter.fromBakedQuad(quad).emit();
+                MutableMesh mesh = Renderer.get().mutableMesh();
+                var emitter = mesh.emitter();
+                for (BlockModelPart part : parts) {
+                    for (Direction direction : DIRECTIONS) {
+                        List<BakedQuad> baked;
+                        try {
+                            baked = part.getQuads(direction);
+                        } catch (Exception exception) {
+                            continue;
+                        }
+                        for (BakedQuad quad : baked) {
+                            emitter.fromBakedQuad(quad).emit();
+                        }
                     }
                 }
+
+                mesh.forEach(quad -> {
+                    BakedQuadData converted = convertQuad(quad, spriteFinder);
+                    if (converted != null) quads.add(converted);
+                });
             }
 
-            var quads = new ArrayList<BakedQuadData>();
-            mesh.forEach(quad -> {
-                BakedQuadData converted = convertQuad(quad, spriteFinder);
-                if (converted != null) quads.add(converted);
-            });
-            if (!quads.isEmpty()) variants.add(new BlockVariant(properties, quads));
+            variants.add(new BlockVariant(properties, quads));
         }
         return variants;
+    }
+
+    private static long stableSeed(Block block, BlockState state) {
+        long seed = 1469598103934665603L;
+        seed ^= System.identityHashCode(block);
+        seed *= 1099511628211L;
+        seed ^= state.toString().hashCode();
+        seed *= 1099511628211L;
+        return seed;
     }
 
     private static BakedQuadData convertQuad(QuadView quad, SpriteFinder spriteFinder) {
