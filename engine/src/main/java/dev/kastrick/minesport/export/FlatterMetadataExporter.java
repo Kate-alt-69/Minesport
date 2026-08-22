@@ -41,6 +41,7 @@ public final class FlatterMetadataExporter {
         if (result == null || result.isEmpty()) return sidecarFor(exportFile);
         tagActiveExport(exportFile, format);
 
+        int cellSize = FlatterSettings.cellSize();
         File sidecar = sidecarFor(exportFile);
         JsonObject root = new JsonObject();
         root.addProperty("schema", 1);
@@ -54,14 +55,17 @@ public final class FlatterMetadataExporter {
         root.addProperty("activeExportVersion", ACTIVE_EXPORT_VERSION);
         root.addProperty("flatterSchema", FLATTER_SCHEMA);
         root.addProperty("flatterVersion", FLATTER_VERSION);
+        root.addProperty("flatterCellSize", cellSize);
         root.addProperty("flatterBlockCount", result.blockCount());
-        root.add("flatterObjects", flatterObjects(result, center, format, mode));
+        root.add("flatterObjects", flatterObjects(result, center, format, mode, cellSize));
 
         JsonObject capabilities = new JsonObject();
         capabilities.addProperty("flatter", true);
         capabilities.addProperty("flatter3D", true);
         capabilities.addProperty("flatterMaterialization", true);
         capabilities.addProperty("flatterLayeredFaces", true);
+        capabilities.addProperty("flatterRepeatedShapes", true);
+        capabilities.addProperty("flatterConfigurableCells", true);
         capabilities.addProperty("flatterLogicalOverlay", true);
         capabilities.addProperty("flatterLogical3DOverlay", true);
         root.add("capabilities", capabilities);
@@ -79,6 +83,7 @@ public final class FlatterMetadataExporter {
                 "activeExportVersion",
                 "flatterSchema",
                 "flatterVersion",
+                "flatterCellSize",
                 "flatterBlockCount",
                 "flatterObjects",
                 "capabilities"
@@ -127,7 +132,8 @@ public final class FlatterMetadataExporter {
         FlatterOptimizer.Result result,
         float[] center,
         String format,
-        ObjExporter.ExportMode mode
+        ObjExporter.ExportMode mode,
+        int cellSize
     ) {
         JsonArray objects = new JsonArray();
         for (FlatterOptimizer.FlatterObject object : result.objects()) {
@@ -137,12 +143,14 @@ public final class FlatterMetadataExporter {
             int height = size.length > 1 ? size[1] : 0;
             int depth = size.length > 2 ? size[2] : 0;
             long volume = (long) width * height * depth;
+            boolean repeatedShape = object.id().startsWith("FLATTER_SHAPE_");
 
             json.addProperty("id", object.id());
             json.addProperty("type", "flatter");
+            json.addProperty("geometryClass", repeatedShape ? "SHAPE" : "SOLID");
             json.addProperty("flatterVersion", FLATTER_VERSION);
             json.addProperty("meshObject", object.id());
-            json.addProperty("chunkSize", FlatterOptimizer.CELL_SIZE);
+            json.addProperty("chunkSize", cellSize);
             json.addProperty("blockCount", object.blockCount());
             json.addProperty("encoding", "palette_rle_v1");
             json.addProperty("format", format);
