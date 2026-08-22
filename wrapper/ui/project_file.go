@@ -77,9 +77,23 @@ func newProjectID() string {
 	if _, err := rand.Read(value[:]); err == nil {
 		return hex.EncodeToString(value[:])
 	}
-	// Extremely unlikely crypto/rand failure. This still gives the project a
-	// useful stable identity for the current process without blocking saves.
 	return fmt.Sprintf("project-%x", value[:])
+}
+
+func normalizeProjectID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) < 8 {
+		return newProjectID()
+	}
+	return value
+}
+
+func shortProjectID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:8]
 }
 
 func readMinesportProject(path string) (MinesportProject, error) {
@@ -98,9 +112,7 @@ func readMinesportProject(path string) (MinesportProject, error) {
 			minesportProjectSchema,
 		)
 	}
-	if strings.TrimSpace(project.ProjectID) == "" {
-		project.ProjectID = newProjectID()
-	}
+	project.ProjectID = normalizeProjectID(project.ProjectID)
 	if strings.TrimSpace(project.World.Path) == "" {
 		return MinesportProject{}, fmt.Errorf("project has no Minecraft world path")
 	}
@@ -190,9 +202,7 @@ func (ms *MinesportApp) projectPresetName() string {
 }
 
 func (ms *MinesportApp) projectSnapshot(projectID string) MinesportProject {
-	if strings.TrimSpace(projectID) == "" {
-		projectID = newProjectID()
-	}
+	projectID = normalizeProjectID(projectID)
 	project := MinesportProject{
 		Schema:    minesportProjectSchema,
 		ProjectID: projectID,
@@ -283,7 +293,7 @@ func (ms *MinesportApp) saveProjectFile(saveAs bool) {
 	}
 	state.path = path
 	state.id = project.ProjectID
-	state.status.SetText(filepath.Base(path) + " · " + project.ProjectID[:8])
+	state.status.SetText(filepath.Base(path) + " · " + shortProjectID(project.ProjectID))
 	ms.appendLog("Saved Minesport project: " + path)
 }
 
@@ -308,7 +318,7 @@ func (ms *MinesportApp) openProjectFile() {
 	if state != nil {
 		state.path = path
 		state.id = project.ProjectID
-		state.status.SetText(filepath.Base(path) + " · " + project.ProjectID[:8])
+		state.status.SetText(filepath.Base(path) + " · " + shortProjectID(project.ProjectID))
 	}
 	ms.appendLog("Opened Minesport project: " + path)
 }
@@ -358,7 +368,6 @@ func (ms *MinesportApp) applyProject(project MinesportProject) error {
 		))
 	}
 
-	// Set the preset label first, then restore the exact project values below.
 	if value, ok := exportPreflightStates.Load(ms); ok {
 		if state, _ := value.(*exportPreflightState); state != nil && state.preset != nil {
 			preset := project.Preset
