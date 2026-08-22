@@ -20,6 +20,7 @@ from . import flatter
 _VIEW_HANDLE = None
 _TEXT_HANDLE = None
 _CACHE = {}
+_MIGRATION_KEY = "minesport_flatter_overlay_v2"
 
 _GRID_RGB = (0.10, 0.33, 0.14)
 _SELECTED_GREEN_RGB = (0.48, 1.0, 0.54)
@@ -42,7 +43,24 @@ def _active_flatter():
     return obj
 
 
+def _migrate_overlay_default(obj):
+    if obj is None or obj.get("minesport_type") != flatter._TYPE_FLATTER:
+        return
+    if bool(obj.get(_MIGRATION_KEY, False)):
+        return
+    props = getattr(obj, "minesport", None)
+    if props is not None:
+        # 0.1.5 defaulted every imported cell to FULL, which looked exactly
+        # like every voxel was selected. Migrate that old default once.
+        if str(getattr(props, "flatter_overlay_mode", "FULL")) == "FULL":
+            props.flatter_overlay_mode = "SELECTED"
+        if abs(float(getattr(props, "flatter_overlay_opacity", 0.58)) - 0.58) < 1e-4:
+            props.flatter_overlay_opacity = 0.32
+    obj[_MIGRATION_KEY] = True
+
+
 def _overlay_settings(obj):
+    _migrate_overlay_default(obj)
     props = getattr(obj, "minesport", None)
     if props is None:
         return "SELECTED", 0.32, False
@@ -235,6 +253,8 @@ def tag_redraw():
 
 def register():
     global _VIEW_HANDLE, _TEXT_HANDLE
+    for obj in list(bpy.context.scene.objects):
+        _migrate_overlay_default(obj)
     if _VIEW_HANDLE is None:
         _VIEW_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
             _draw_view, (), "WINDOW", "POST_VIEW"
