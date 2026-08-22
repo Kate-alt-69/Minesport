@@ -75,23 +75,34 @@ public final class FlatterSettings {
     }
 
     static File settingsFile() {
+        String override = System.getenv("MINESPORT_DATA_DIR");
+        if (override != null && !override.isBlank()) {
+            return new File(new File(override), "settings.json");
+        }
+
         String os = System.getProperty("os.name", "").toLowerCase();
         String home = System.getProperty("user.home", "");
         if (os.contains("win")) {
-            String appData = System.getenv("APPDATA");
-            return appData == null || appData.isBlank()
-                ? null
-                : new File(new File(appData, "minesport"), "settings.json");
+            String localAppData = System.getenv("LOCALAPPDATA");
+            if (localAppData == null || localAppData.isBlank()) return null;
+            return new File(
+                new File(new File(localAppData, "kastrick's_software"), "minesport"),
+                "settings.json"
+            );
         }
         if (os.contains("mac")) {
             if (home.isBlank()) return null;
-            return new File(new File(new File(home, "Library/Application Support"), "minesport"), "settings.json");
+            return new File(
+                new File(new File(new File(home, "Library/Application Support"), "kastrick's_software"), "minesport"),
+                "settings.json"
+            );
         }
-        String xdg = System.getenv("XDG_CONFIG_HOME");
+        String xdg = System.getenv("XDG_DATA_HOME");
         File base = xdg != null && !xdg.isBlank()
             ? new File(xdg)
-            : home.isBlank() ? null : new File(home, ".config");
-        return base == null ? null : new File(new File(base, "minesport"), "settings.json");
+            : home.isBlank() ? null : new File(new File(home, ".local"), "share");
+        if (base == null) return null;
+        return new File(new File(new File(base, "kastrick's_software"), "minesport"), "settings.json");
     }
 
     private static boolean parseBoolean(String value) {
