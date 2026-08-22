@@ -113,6 +113,26 @@ public class ResolverChain {
         return MissingTexture.image();
     }
 
+    /**
+     * Resolve .png.mcmeta from the exact resolver that wins the PNG lookup.
+     * Metadata must never fall through independently: if a resource pack
+     * supplies a static PNG without .mcmeta, that override intentionally turns
+     * a lower-priority animated texture into a static one, matching Minecraft.
+     */
+    public String resolveTextureMetadata(String texturePath) {
+        String normalized = texturePath;
+        String ns = normalized.contains(":") ? normalized.substring(0, normalized.indexOf(':')) : "minecraft";
+        String dummyId = ns + ":__texture__";
+        for (AssetResolver r : resolvers) {
+            if (!r.canResolve(dummyId)) continue;
+            BufferedImage img = r.resolveTexture(normalized);
+            if (img == null) continue;
+            textureSources.put(texturePath, r.name());
+            return r.resolveTextureMetadata(normalized);
+        }
+        return null;
+    }
+
     public String blockStateSource(String blockId) {
         return blockStateSources.getOrDefault(blockId, "");
     }
