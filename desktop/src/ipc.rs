@@ -23,6 +23,22 @@ pub struct Response {
     pub version: String,
     #[serde(default)]
     pub output: String,
+    #[serde(default)]
+    pub image: String,
+    #[serde(default, rename = "minX")]
+    pub min_x: i32,
+    #[serde(default, rename = "minZ")]
+    pub min_z: i32,
+    #[serde(default, rename = "maxX")]
+    pub max_x: i32,
+    #[serde(default, rename = "maxZ")]
+    pub max_z: i32,
+    #[serde(default)]
+    pub scale: i32,
+    #[serde(default)]
+    pub file: String,
+    #[serde(default)]
+    pub count: i32,
     #[serde(default, rename = "blockCount")]
     pub block_count: i32,
     #[serde(default, rename = "quadCount")]
