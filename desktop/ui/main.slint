@@ -69,8 +69,8 @@ component StatusPill inherits Rectangle {
 
 export component MainWindow inherits Window {
     title: "Minesport 0.2.0 — by Kastrick";
-    width: 1360px;
-    height: 820px;
+    preferred-width: 1360px;
+    preferred-height: 820px;
     min-width: 1060px;
     min-height: 680px;
     background: #0b1015;
@@ -111,6 +111,7 @@ export component MainWindow inherits Window {
     in-out property <int> map-max-x: 256;
     in-out property <int> map-max-z: 256;
     in-out property <int> map-scale: 1;
+    in-out property <string> map-cursor-label: "X —  ·  Z —";
 
     // Rust preview ----------------------------------------------------------
     in-out property <image> preview-image;
@@ -177,7 +178,6 @@ export component MainWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
-        // Header ------------------------------------------------------------
         Rectangle {
             height: 52px;
             background: #10171d;
@@ -217,7 +217,6 @@ export component MainWindow inherits Window {
             spacing: 0px;
             vertical-stretch: 1;
 
-            // Activity rail -------------------------------------------------
             Rectangle {
                 width: 62px;
                 background: #0d1318;
@@ -234,7 +233,6 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Sidebar -------------------------------------------------------
             Rectangle {
                 width: 330px;
                 background: #12181e;
@@ -306,7 +304,7 @@ export component MainWindow inherits Window {
                                     root.max-z = root.map-max-z;
                                 }
                             }
-                            HintText { text: "Drag on the 2D map for a box. Bubble mode uses a map click as the center. Y remains editable here."; }
+                            HintText { text: "Drag the 2D map for a box. Bubble mode uses a map click as its X/Z center. Y stays editable here."; }
                             SectionTitle { label: "RUNTIME REGISTRY"; }
                             Text { text: root.runtime-cache-status; color: root.runtime-cache-busy ? #d2b777 : #86a997; font-size: 10px; wrap: word-wrap; }
                             if root.runtime-cache-busy: Button { text: "CANCEL PREPARATION"; clicked => { root.cancel-runtime-cache(); } }
@@ -331,7 +329,6 @@ export component MainWindow inherits Window {
                             SectionTitle { label: "ANALYSIS"; }
                             Text { text: root.preflight-summary; color: #8da0af; font-size: 10px; wrap: word-wrap; }
                             Button { text: "RUN PREFLIGHT"; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.run-preflight(); } }
-                            HintText { text: "Preflight reads the selected block set and reports pressure/categories without changing export output."; }
 
                             SectionTitle { label: "EXPORT"; }
                             Button {
@@ -340,7 +337,7 @@ export component MainWindow inherits Window {
                                 enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected";
                                 clicked => { root.export-requested(); }
                             }
-                            HintText { text: "If the full instance registry is still preparing, Export joins that same worker and continues automatically when registry.data is ready."; }
+                            HintText { text: "Export waits for the same instance-wide registry worker when needed, then continues automatically."; }
                         }
                     }
 
@@ -353,9 +350,9 @@ export component MainWindow inherits Window {
                             Button { text: "INSTALL / UPDATE ADD-ON"; enabled: !root.task-active; clicked => { root.install-blender-translator(); } }
                             Text { text: "Texture animation"; color: #8191a0; font-size: 10px; }
                             ComboBox { model: ["Minecraft timing", "Static first frame"]; current-index <=> root.blender-animation-index; }
-                            HintText { text: "The Rust executable embeds the Minesport 0.2.0 add-on and installs it into detected Blender 4.3+ profiles."; }
+                            HintText { text: "The Rust executable embeds the Minesport 0.2.0 translator and installs it into detected Blender 4.3+ profiles."; }
                             SectionTitle { label: "MINECRAFT DATA"; }
-                            HintText { text: "Texture frame schedules, timeline markers, LIGHT_BLOCK levels, FLATTER data, water/glass materials and individual-block origins are carried in export metadata."; }
+                            HintText { text: "Texture frame schedules, Timeline markers, LIGHT_BLOCK levels, FLATTER data, water/glass material metadata and individual-block origins travel with the export."; }
                         }
                     }
 
@@ -370,7 +367,7 @@ export component MainWindow inherits Window {
                             SectionTitle { label: "RUNTIME REGISTRY"; }
                             Text { text: root.runtime-cache-status; color: #8fa2b4; font-size: 10px; wrap: word-wrap; }
                             if root.runtime-cache-busy: Button { text: "CANCEL RUNTIME WORKER"; clicked => { root.cancel-runtime-cache(); } }
-                            HintText { text: "Heavy work runs outside the Slint event loop. The registry is instance-wide; selection bounds never change what the Bridge caches."; }
+                            HintText { text: "Heavy parsing, hashing, Java IPC and Minecraft worker processes stay outside the Slint event loop."; }
                         }
                     }
 
@@ -399,7 +396,6 @@ export component MainWindow inherits Window {
                                 HintText { text: "Remove faces only when neighboring geometry proves they are fully hidden."; }
                                 CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; }
                                 ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; }
-                                HintText { text: "Smaller cells rebuild locally; larger cells create fewer Blender objects and broader greedy surfaces."; }
                                 CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; }
                                 CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; }
                             }
@@ -424,7 +420,7 @@ export component MainWindow inherits Window {
                                 Button { text: "ADD RESOURCE PACK…"; clicked => { root.add-resource-pack(); } }
                                 Text { text: root.data-pack-summary; color: #8798a8; font-size: 10px; wrap: word-wrap; }
                                 Button { text: "ADD DATA PACK…"; clicked => { root.add-data-pack(); } }
-                                HintText { text: "The Java resolver chain keeps precedence semantics. Rust stores the selected paths and sends them with preflight/export requests."; }
+                                HintText { text: "Rust stores selected paths and preserves Java resolver precedence when sending export/preflight requests."; }
                             }
 
                             if root.settings-page == 3: VerticalLayout {
@@ -437,7 +433,7 @@ export component MainWindow inherits Window {
                                 Button { text: "OPEN DOCUMENTATION"; clicked => { root.open-docs(); } }
                                 SectionTitle { label: "DIAGNOSTICS"; }
                                 Button { text: "REMOVE ALL MINESPORT CACHE"; enabled: !root.task-active && !root.runtime-cache-busy; clicked => { root.remove-cache(); } }
-                                HintText { text: "Deletes only regenerable Minesport cache data and compiled compatibility caches. Worlds, exports and the real mods folder are never touched."; }
+                                HintText { text: "Deletes only regenerable Minesport cache data. Worlds, exports and the real mods folder are never touched."; }
                             }
 
                             if root.settings-page == 4: VerticalLayout {
@@ -465,7 +461,6 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Viewport ------------------------------------------------------
             Rectangle {
                 horizontal-stretch: 1;
                 background: #0b1015;
@@ -525,6 +520,8 @@ export component MainWindow inherits Window {
                                 enabled: root.map-available && !root.docs-visible;
                                 mouse-cursor: crosshair;
                                 pointer-event(event) => {
+                                    root.map-cursor-label = "X " + round(root.map-min-x + self.mouse-x / self.width * (root.map-max-x - root.map-min-x))
+                                        + "  ·  Z " + round(root.map-min-z + self.mouse-y / self.height * (root.map-max-z - root.map-min-z));
                                     if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
                                         if (root.selection-mode == 0) {
                                             root.min-x = round(root.map-min-x + min(self.pressed-x, self.mouse-x) / self.width * (root.map-max-x - root.map-min-x));
@@ -537,7 +534,12 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+                                moved => {
+                                    root.map-cursor-label = "X " + round(root.map-min-x + self.mouse-x / self.width * (root.map-max-x - root.map-min-x))
+                                        + "  ·  Z " + round(root.map-min-z + self.mouse-y / self.height * (root.map-max-z - root.map-min-z));
+                                }
                             }
+
                             if map-touch.pressed && root.selection-mode == 0: Rectangle {
                                 x: min(map-touch.pressed-x, map-touch.mouse-x);
                                 y: min(map-touch.pressed-y, map-touch.mouse-y);
@@ -546,6 +548,25 @@ export component MainWindow inherits Window {
                                 background: #3e8f6240;
                                 border-width: 1px;
                                 border-color: #7ce0a3;
+                            }
+
+                            if root.map-available: Rectangle {
+                                x: parent.width - 170px;
+                                y: parent.height - 42px;
+                                width: 158px;
+                                height: 30px;
+                                background: #101820dd;
+                                border-width: 1px;
+                                border-color: #2a3945;
+                                border-radius: 5px;
+                                Text {
+                                    text: root.map-cursor-label;
+                                    color: #a0aebb;
+                                    font-size: 9px;
+                                    font-family: "monospace";
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
 
@@ -584,7 +605,6 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        // Documentation overlay ------------------------------
                         if root.docs-visible: Rectangle {
                             background: #0d1319f8;
                             border-width: 1px;
@@ -655,9 +675,7 @@ export component MainWindow inherits Window {
                             }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             if root.viewport-mode == 0 && root.map-available: Text {
-                                text: map-touch.has-hover
-                                    ? "X " + round(root.map-min-x + map-touch.mouse-x / max(1px, map-touch.width) * (root.map-max-x - root.map-min-x)) + "  ·  Z " + round(root.map-min-z + map-touch.mouse-y / max(1px, map-touch.height) * (root.map-max-z - root.map-min-z))
-                                    : "X —  ·  Z —";
+                                text: root.map-cursor-label;
                                 color: #a0aebb;
                                 font-size: 9px;
                                 font-family: "monospace";
@@ -676,7 +694,6 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Bottom task shelf -------------------------------------------------
         Rectangle {
             height: root.task-active ? 66px : 30px;
             background: root.task-active ? #131e18 : #0f161b;
