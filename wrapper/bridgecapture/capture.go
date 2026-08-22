@@ -17,10 +17,11 @@ import (
 
 const (
 	DefaultAddress      = "127.0.0.1:25590"
-	SnapshotSchema      = 1
-	maxMessageSize      = 64 << 20
+	SnapshotSchema      = 2
+	maxMessageSize      = 128 << 20
 	captureBridgePrefix = "minesport-capture-bridge-"
 	captureBridgeSuffix = ".jar"
+	registryFileName    = "registry.json"
 )
 
 type LightState struct {
@@ -28,24 +29,47 @@ type LightState struct {
 	LightLevel int               `json:"lightLevel"`
 }
 
+type BakedQuad struct {
+	Vertices  []float32 `json:"vertices"`
+	TextureID string    `json:"textureId"`
+	Face      int       `json:"face"`
+	Shade     bool      `json:"shade"`
+	TintIndex int       `json:"tintIndex"`
+}
+
+type BlockVariant struct {
+	Properties map[string]string `json:"properties"`
+	Quads      []BakedQuad       `json:"quads"`
+}
+
+type RuntimeBlock struct {
+	VanillaMapping string         `json:"vanillaMapping,omitempty"`
+	LoaderType     string         `json:"loaderType,omitempty"`
+	Variants       []BlockVariant `json:"variants,omitempty"`
+	Lights         []LightState   `json:"lights,omitempty"`
+}
+
 type Snapshot struct {
 	Schema           int                     `json:"schema"`
 	MinecraftVersion string                  `json:"minecraftVersion"`
 	LoaderVersion    string                  `json:"loaderVersion,omitempty"`
 	LoadedMods       []string                `json:"loadedMods,omitempty"`
-	ModsFingerprint  string                  `json:"modsFingerprint,omitempty"`
-	Blocks           map[string][]LightState `json:"blocks"`
+	ModsFingerprint  string                  `json:"modsFingerprint"`
+	Blocks           map[string]RuntimeBlock `json:"blocks"`
 	CapturedAt       string                  `json:"capturedAt"`
 }
 
 type wireMessage struct {
-	Type          string                  `json:"type"`
-	Message       string                  `json:"message,omitempty"`
-	MCVersion     string                  `json:"mcVersion,omitempty"`
-	LoaderVersion string                  `json:"loaderVersion,omitempty"`
-	LoadedMods    []string                `json:"loadedMods,omitempty"`
-	BlockID       string                  `json:"blockId,omitempty"`
-	States        []LightState            `json:"states,omitempty"`
+	Type           string         `json:"type"`
+	Message        string         `json:"message,omitempty"`
+	MCVersion      string         `json:"mcVersion,omitempty"`
+	LoaderVersion  string         `json:"loaderVersion,omitempty"`
+	LoadedMods     []string       `json:"loadedMods,omitempty"`
+	BlockID        string         `json:"blockId,omitempty"`
+	VanillaMapping string         `json:"vanillaMapping,omitempty"`
+	LoaderType     string         `json:"loaderType,omitempty"`
+	Variants       []BlockVariant `json:"variants,omitempty"`
+	States         []LightState   `json:"states,omitempty"`
 }
 
 type captureSession struct {
@@ -70,9 +94,7 @@ type Server struct {
 	conns    map[net.Conn]struct{}
 }
 
-// Start opens the local bridge receiver used by the Fabric bridge mod.
-// Failure is non-fatal to the rest of Minesport; callers may continue with
-// static asset resolution when the port is unavailable.
+// Start opens the local receiver for the temporary Minecraft/Fabric registry worker.
 func Start(onLog func(string)) (*Server, error) {
 	return start(DefaultAddress, cacheDir(), onLog)
 }
@@ -90,7 +112,7 @@ func start(address, dir string, onLog func(string)) (*Server, error) {
 	}
 	server.wg.Add(1)
 	go server.acceptLoop()
-	server.log("Bridge capture receiver listening on " + listener.Addr().String())
+	server.log("Runtime registry receiver listening on " + listener.Addr().String())
 	return server, nil
 }
 
@@ -126,7 +148,7 @@ func (s *Server) acceptLoop() {
 		connection, err := s.listener.Accept()
 		if err != nil {
 			if !strings.Contains(strings.ToLower(err.Error()), "closed") {
-				s.log("Bridge receiver stopped: " + err.Error())
+				s.log("Runtime registry receiver stopped: " + err.Error())
 			}
 			return
 		}
@@ -148,12 +170,11 @@ func (s *Server) acceptLoop() {
 
 func (s *Server) capture(connection net.Conn) {
 	defer connection.Close()
-	remote := connection.RemoteAddr().String()
-	s.log("Minecraft bridge connected from " + remote)
+	s.log("Minecraft runtime worker connected from " + connection.RemoteAddr().String())
 
 	snapshot := Snapshot{
 		Schema: SnapshotSchema,
-		Blocks: make(map[string][]LightState),
+		Blocks: make(map[string]RuntimeBlock),
 	}
 	complete := false
 
@@ -162,7 +183,7 @@ func (s *Server) capture(connection net.Conn) {
 	for scanner.Scan() {
 		var message wireMessage
 		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
-			s.log("Ignoring malformed bridge message: " + err.Error())
+			s.log("Ignoring malformed runtime-registry message: " + err.Error())
 			continue
 		}
 
@@ -171,32 +192,31 @@ func (s *Server) capture(connection net.Conn) {
 			snapshot.MinecraftVersion = strings.TrimSpace(message.MCVersion)
 			snapshot.LoaderVersion = strings.TrimSpace(message.LoaderVersion)
 			snapshot.LoadedMods = append([]string(nil), message.LoadedMods...)
-		case "block_light":
+		case "block":
 			blockID := strings.TrimSpace(message.BlockID)
-			if blockID == "" || len(message.States) == 0 {
+			if blockID == "" {
 				continue
 			}
-			states := make([]LightState, 0, len(message.States))
-			for _, state := range message.States {
-				level := state.LightLevel
-				if level < 1 {
-					continue
-				}
-				if level > 15 {
-					level = 15
-				}
-				properties := make(map[string]string, len(state.Properties))
-				for key, value := range state.Properties {
-					properties[key] = value
-				}
-				states = append(states, LightState{Properties: properties, LightLevel: level})
+			entry := snapshot.Blocks[blockID]
+			entry.VanillaMapping = strings.TrimSpace(message.VanillaMapping)
+			entry.LoaderType = strings.TrimSpace(message.LoaderType)
+			entry.Variants = sanitizeVariants(message.Variants)
+			snapshot.Blocks[blockID] = entry
+		case "block_light":
+			blockID := strings.TrimSpace(message.BlockID)
+			if blockID == "" {
+				continue
 			}
-			if len(states) > 0 {
-				snapshot.Blocks[blockID] = states
-			}
+			entry := snapshot.Blocks[blockID]
+			entry.Lights = sanitizeLights(message.States)
+			snapshot.Blocks[blockID] = entry
+		case "texture":
+			// Legacy bridge packets may still send images. Runtime-registry schema 2
+			// intentionally does not cache texture bytes; texture IDs on baked quads
+			// are resolved later from resource packs/mod JARs/vanilla/Piston.
 		case "error":
 			if message.Message != "" {
-				s.log("Minecraft bridge reported: " + message.Message)
+				s.log("Minecraft runtime worker reported: " + message.Message)
 			}
 		case "done":
 			complete = true
@@ -207,34 +227,84 @@ func (s *Server) capture(connection net.Conn) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		s.log("Bridge connection ended with an error: " + err.Error())
+		s.log("Runtime registry connection ended with an error: " + err.Error())
 		return
 	}
 	if !complete {
-		s.log("Bridge disconnected before completing its registry dump")
+		s.log("Runtime worker disconnected before completing its registry dump")
 		return
 	}
 	if snapshot.MinecraftVersion == "" {
-		s.log("Bridge dump completed without a Minecraft version; snapshot discarded")
+		s.log("Runtime registry dump had no Minecraft version; snapshot discarded")
 		return
 	}
 
 	if session, ok := sessionForVersion(snapshot.MinecraftVersion); ok {
 		snapshot.ModsFingerprint = session.ModsFingerprint
 	}
+	if snapshot.ModsFingerprint == "" {
+		// An externally launched bridge can still be inspected, but it is kept in
+		// an unscoped bucket and will never pass SnapshotPathForMods validation.
+		snapshot.ModsFingerprint = loadedModsFingerprint(snapshot.LoadedMods)
+	}
 	snapshot.CapturedAt = time.Now().UTC().Format(time.RFC3339)
 	path, err := writeSnapshotAt(s.cacheDir, snapshot)
 	if err != nil {
-		s.log("Could not save bridge registry snapshot: " + err.Error())
+		s.log("Could not save runtime model registry: " + err.Error())
 		return
 	}
 	cleanupSession(snapshot.MinecraftVersion)
 	s.log(fmt.Sprintf(
-		"Bridge registry cached for Minecraft %s: %d emitting block type(s) · %s",
+		"Runtime model registry cached for Minecraft %s: %d block type(s) · %s",
 		snapshot.MinecraftVersion,
 		len(snapshot.Blocks),
 		path,
 	))
+}
+
+func sanitizeVariants(source []BlockVariant) []BlockVariant {
+	result := make([]BlockVariant, 0, len(source))
+	for _, variant := range source {
+		properties := make(map[string]string, len(variant.Properties))
+		for key, value := range variant.Properties {
+			properties[key] = value
+		}
+		quads := make([]BakedQuad, 0, len(variant.Quads))
+		for _, quad := range variant.Quads {
+			if len(quad.Vertices) < 32 {
+				continue
+			}
+			vertices := append([]float32(nil), quad.Vertices[:32]...)
+			quads = append(quads, BakedQuad{
+				Vertices: vertices,
+				TextureID: strings.TrimSpace(quad.TextureID),
+				Face: quad.Face,
+				Shade: quad.Shade,
+				TintIndex: quad.TintIndex,
+			})
+		}
+		result = append(result, BlockVariant{Properties: properties, Quads: quads})
+	}
+	return result
+}
+
+func sanitizeLights(source []LightState) []LightState {
+	states := make([]LightState, 0, len(source))
+	for _, state := range source {
+		level := state.LightLevel
+		if level < 1 {
+			continue
+		}
+		if level > 15 {
+			level = 15
+		}
+		properties := make(map[string]string, len(state.Properties))
+		for key, value := range state.Properties {
+			properties[key] = value
+		}
+		states = append(states, LightState{Properties: properties, LightLevel: level})
+	}
+	return states
 }
 
 func (s *Server) log(message string) {
@@ -243,58 +313,68 @@ func (s *Server) log(message string) {
 	}
 }
 
-// StageBridge copies a prepared bridge into one Fabric instance for a capture
-// session. Minesport uses a reserved filename and never overwrites arbitrary
-// user mods. The file is removed after a successful dump or CleanupStaged.
-func StageBridge(bridgeJar, modsPath, version string) (string, error) {
-	bridgeJar = filepath.Clean(strings.TrimSpace(bridgeJar))
-	rawModsPath := strings.TrimSpace(modsPath)
+// BeginSession binds the next runtime dump for this Minecraft version to the
+// exact mod-JAR set currently selected in Minesport. The worker may run from a
+// disposable game directory; the original mods directory is only fingerprinted.
+func BeginSession(version, modsPath string) (string, error) {
 	version = strings.TrimSpace(version)
-	if bridgeJar == "" || bridgeJar == "." {
-		return "", fmt.Errorf("bridge jar path is required")
-	}
-	if rawModsPath == "" {
-		return "", fmt.Errorf("mods folder path is required")
-	}
-	modsPath = filepath.Clean(rawModsPath)
+	modsPath = filepath.Clean(strings.TrimSpace(modsPath))
 	if version == "" {
 		return "", fmt.Errorf("minecraft version is required")
 	}
-	info, err := os.Stat(bridgeJar)
-	if err != nil || info.IsDir() {
-		return "", fmt.Errorf("bridge jar is unavailable: %s", bridgeJar)
+	if modsPath == "" || modsPath == "." {
+		return "", fmt.Errorf("mods folder path is required")
 	}
-	if err := os.MkdirAll(modsPath, 0o755); err != nil {
-		return "", fmt.Errorf("prepare mods folder: %w", err)
-	}
-
-	// Remove only Minesport-owned leftovers from an interrupted older capture.
-	_ = cleanupCaptureJars(modsPath)
 	fingerprint, err := ModsFingerprint(modsPath)
 	if err != nil {
 		return "", err
 	}
+	captureSessions.Lock()
+	captureSessions.byVersion[version] = captureSession{
+		Version: version,
+		ModsPath: modsPath,
+		ModsFingerprint: fingerprint,
+	}
+	captureSessions.Unlock()
+	return fingerprint, nil
+}
 
-	staged := filepath.Join(
-		modsPath,
-		captureBridgePrefix+safeVersion(version)+captureBridgeSuffix,
-	)
+// StageBridge is retained as a compatibility fallback for launchers that still
+// require instance staging. New Minesport worker capture should prefer BeginSession
+// plus a disposable worker directory and never touch the user's instance.
+func StageBridge(bridgeJar, modsPath, version string) (string, error) {
+	bridgeJar = filepath.Clean(strings.TrimSpace(bridgeJar))
+	if bridgeJar == "" || bridgeJar == "." {
+		return "", fmt.Errorf("bridge jar path is required")
+	}
+	if info, err := os.Stat(bridgeJar); err != nil || info.IsDir() {
+		return "", fmt.Errorf("bridge jar is unavailable: %s", bridgeJar)
+	}
+	fingerprint, err := BeginSession(version, modsPath)
+	if err != nil {
+		return "", err
+	}
+	_ = fingerprint
+
+	modsPath = filepath.Clean(strings.TrimSpace(modsPath))
+	if err := os.MkdirAll(modsPath, 0o755); err != nil {
+		return "", fmt.Errorf("prepare mods folder: %w", err)
+	}
+	_ = cleanupCaptureJars(modsPath)
+	staged := filepath.Join(modsPath, captureBridgePrefix+safeVersion(version)+captureBridgeSuffix)
 	if err := copyFile(bridgeJar, staged); err != nil {
+		cleanupSession(version)
 		return "", fmt.Errorf("stage capture bridge: %w", err)
 	}
 
 	captureSessions.Lock()
-	captureSessions.byVersion[version] = captureSession{
-		Version:         version,
-		ModsPath:        modsPath,
-		ModsFingerprint: fingerprint,
-		StagedPath:      staged,
-	}
+	session := captureSessions.byVersion[version]
+	session.StagedPath = staged
+	captureSessions.byVersion[version] = session
 	captureSessions.Unlock()
 	return staged, nil
 }
 
-// CleanupStaged removes every temporary bridge file still owned by this process.
 func CleanupStaged() {
 	captureSessions.Lock()
 	sessions := make([]captureSession, 0, len(captureSessions.byVersion))
@@ -304,8 +384,14 @@ func CleanupStaged() {
 	}
 	captureSessions.Unlock()
 	for _, session := range sessions {
-		_ = os.Remove(session.StagedPath)
+		if session.StagedPath != "" {
+			_ = os.Remove(session.StagedPath)
+		}
 	}
+}
+
+func CancelSession(version string) {
+	cleanupSession(version)
 }
 
 func cleanupSession(version string) {
@@ -315,7 +401,7 @@ func cleanupSession(version string) {
 		delete(captureSessions.byVersion, version)
 	}
 	captureSessions.Unlock()
-	if ok {
+	if ok && session.StagedPath != "" {
 		_ = os.Remove(session.StagedPath)
 	}
 }
@@ -327,50 +413,77 @@ func sessionForVersion(version string) (captureSession, bool) {
 	return session, ok
 }
 
+// SnapshotPath reports any valid cached registry for a Minecraft version. It is
+// used only for UI stale/not-captured status; exports must use SnapshotPathForMods.
 func SnapshotPath(version string) (string, bool) {
-	return snapshotPathAt(cacheDir(), version)
-}
-
-// SnapshotPathForMods only returns a registry captured from the same mod JAR
-// set. This prevents stale light metadata surviving a mod upgrade/removal.
-func SnapshotPathForMods(version, modsPath string) (string, bool) {
-	path, ok := SnapshotPath(version)
-	if !ok {
-		return "", false
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	var snapshot Snapshot
-	if json.Unmarshal(data, &snapshot) != nil || snapshot.ModsFingerprint == "" {
-		return "", false
-	}
-	fingerprint, err := ModsFingerprint(modsPath)
-	if err != nil || fingerprint != snapshot.ModsFingerprint {
-		return "", false
-	}
-	return path, true
-}
-
-func snapshotPathAt(dir, version string) (string, bool) {
 	version = strings.TrimSpace(version)
 	if version == "" {
 		return "", false
 	}
-	path := filepath.Join(dir, safeVersion(version)+".json")
-	data, err := os.ReadFile(path)
+	root := filepath.Join(cacheDir(), safeVersion(version))
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return "", false
 	}
-	var snapshot Snapshot
-	if json.Unmarshal(data, &snapshot) != nil || snapshot.Schema != SnapshotSchema {
+	type candidate struct {
+		path string
+		mod time.Time
+	}
+	var candidates []candidate
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(root, entry.Name(), registryFileName)
+		info, err := os.Stat(path)
+		if err == nil && !info.IsDir() && validSnapshot(path, version, "") {
+			candidates = append(candidates, candidate{path: path, mod: info.ModTime()})
+		}
+	}
+	if len(candidates) == 0 {
 		return "", false
 	}
-	if strings.TrimSpace(snapshot.MinecraftVersion) != version {
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].mod.After(candidates[j].mod) })
+	return candidates[0].path, true
+}
+
+func SnapshotPathForMods(version, modsPath string) (string, bool) {
+	fingerprint, err := ModsFingerprint(modsPath)
+	if err != nil {
+		return "", false
+	}
+	path := snapshotPathAt(cacheDir(), version, fingerprint)
+	if !validSnapshot(path, strings.TrimSpace(version), fingerprint) {
 		return "", false
 	}
 	return path, true
+}
+
+func snapshotPathAt(dir, version, fingerprint string) string {
+	return filepath.Join(
+		dir,
+		safeVersion(version),
+		safeFingerprint(fingerprint),
+		registryFileName,
+	)
+}
+
+func validSnapshot(path, version, fingerprint string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var snapshot Snapshot
+	if json.Unmarshal(data, &snapshot) != nil || snapshot.Schema != SnapshotSchema {
+		return false
+	}
+	if strings.TrimSpace(snapshot.MinecraftVersion) != strings.TrimSpace(version) {
+		return false
+	}
+	if fingerprint != "" && snapshot.ModsFingerprint != fingerprint {
+		return false
+	}
+	return true
 }
 
 func writeSnapshotAt(dir string, snapshot Snapshot) (string, error) {
@@ -381,20 +494,24 @@ func writeSnapshotAt(dir string, snapshot Snapshot) (string, error) {
 		snapshot.Schema = SnapshotSchema
 	}
 	if snapshot.Schema != SnapshotSchema {
-		return "", fmt.Errorf("unsupported bridge snapshot schema %d", snapshot.Schema)
+		return "", fmt.Errorf("unsupported runtime registry schema %d", snapshot.Schema)
 	}
 	if snapshot.Blocks == nil {
-		snapshot.Blocks = map[string][]LightState{}
+		snapshot.Blocks = map[string]RuntimeBlock{}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if snapshot.ModsFingerprint == "" {
+		return "", fmt.Errorf("modsFingerprint is required")
+	}
+	path := snapshotPathAt(dir, snapshot.MinecraftVersion, snapshot.ModsFingerprint)
+	folder := filepath.Dir(path)
+	if err := os.MkdirAll(folder, 0o755); err != nil {
 		return "", err
 	}
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, safeVersion(snapshot.MinecraftVersion)+".json")
-	temporary, err := os.CreateTemp(dir, ".bridge-registry-*.tmp")
+	temporary, err := os.CreateTemp(folder, ".runtime-registry-*.tmp")
 	if err != nil {
 		return "", err
 	}
@@ -407,7 +524,6 @@ func writeSnapshotAt(dir string, snapshot Snapshot) (string, error) {
 	if err := temporary.Close(); err != nil {
 		return "", err
 	}
-	// Windows cannot always rename over an existing destination.
 	_ = os.Remove(path)
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return "", err
@@ -415,14 +531,16 @@ func writeSnapshotAt(dir string, snapshot Snapshot) (string, error) {
 	return path, nil
 }
 
-// ModsFingerprint is intentionally fast: the mod filenames, sizes and mtimes
-// are enough to invalidate normal add/remove/update workflows without hashing
-// potentially gigabytes of JAR contents on every export.
+// ModsFingerprint is intentionally fast: filenames, sizes and mtimes invalidate
+// normal add/remove/update workflows without hashing gigabytes on every export.
 func ModsFingerprint(modsPath string) (string, error) {
 	modsPath = filepath.Clean(strings.TrimSpace(modsPath))
+	if modsPath == "" || modsPath == "." {
+		return "", fmt.Errorf("mods folder path is required")
+	}
 	entries, err := os.ReadDir(modsPath)
 	if err != nil {
-		return "", fmt.Errorf("read mods folder for bridge fingerprint: %w", err)
+		return "", fmt.Errorf("read mods folder for runtime-registry fingerprint: %w", err)
 	}
 	type item struct {
 		name string
@@ -453,6 +571,28 @@ func ModsFingerprint(modsPath string) (string, error) {
 		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%d\n", entry.name, entry.size, entry.mod)
 	}
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+func loadedModsFingerprint(mods []string) string {
+	values := append([]string(nil), mods...)
+	sort.Strings(values)
+	hash := sha256.New()
+	for _, value := range values {
+		_, _ = fmt.Fprintln(hash, value)
+	}
+	return "unscoped-" + fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func safeFingerprint(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	// Real mod fingerprints are SHA-256. Keep unscoped values readable but safe.
+	if len(value) > 80 {
+		value = value[:80]
+	}
+	return safeVersion(value)
 }
 
 func cleanupCaptureJars(modsPath string) error {
@@ -509,7 +649,7 @@ func cacheDir() string {
 	if err != nil || strings.TrimSpace(base) == "" {
 		base = os.TempDir()
 	}
-	return filepath.Join(base, "kastrick_software", "minesport", "bridge-registry")
+	return filepath.Join(base, "kastrick_software", "minesport", "runtime-registry")
 }
 
 func safeVersion(version string) string {
