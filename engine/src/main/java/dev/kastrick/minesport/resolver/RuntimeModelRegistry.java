@@ -26,6 +26,13 @@ import java.util.function.Consumer;
 public final class RuntimeModelRegistry {
     public static final int SNAPSHOT_SCHEMA = 3;
 
+    /** Distinguishes absence from Minecraft explicitly baking an empty model. */
+    public enum StateKind {
+        UNKNOWN,
+        BAKED,
+        EMPTY_BAKED_MODEL
+    }
+
     private record RuntimeQuad(
         float[] vertices,
         String textureId,
@@ -95,6 +102,7 @@ public final class RuntimeModelRegistry {
         Map<String, RuntimeBlock> parsed = new LinkedHashMap<>();
         int variantCount = 0;
         int quadCount = 0;
+        int emptyVariantCount = 0;
         for (var blockEntry : blockObject.entrySet()) {
             if (!blockEntry.getValue().isJsonObject()) continue;
             JsonObject block = blockEntry.getValue().getAsJsonObject();
@@ -102,7 +110,10 @@ public final class RuntimeModelRegistry {
             if (variants.isEmpty()) continue;
 
             int localQuads = 0;
-            for (Variant variant : variants) localQuads += variant.quads().size();
+            for (Variant variant : variants) {
+                localQuads += variant.quads().size();
+                if (variant.quads().isEmpty()) emptyVariantCount++;
+            }
             parsed.put(blockEntry.getKey(), new RuntimeBlock(
                 safeString(block.get("vanillaMapping")),
                 safeString(block.get("loaderType")),
@@ -115,7 +126,8 @@ public final class RuntimeModelRegistry {
 
         if (log != null) {
             log.accept("Runtime model registry loaded: " + parsed.size() + " block type(s), "
-                + variantCount + " state variant(s), " + quadCount + " baked quad(s)");
+                + variantCount + " state variant(s), " + quadCount + " baked quad(s), "
+                + emptyVariantCount + " known empty state(s)");
         }
         return new RuntimeModelRegistry(parsed, capturedVersion, fingerprint);
     }
@@ -133,9 +145,16 @@ public final class RuntimeModelRegistry {
      * registration for that running instance.
      */
     public boolean shouldOverride(BlockData block) {
-        if (block == null || block.blockId == null) return false;
+        return stateKind(block) != StateKind.UNKNOWN;
+    }
+
+    public StateKind stateKind(BlockData block) {
+        if (block == null || block.blockId == null) return StateKind.UNKNOWN;
         RuntimeBlock runtime = blocks.get(block.blockId);
-        return runtime != null && bestVariant(block, runtime.variants()) != null;
+        if (runtime == null) return StateKind.UNKNOWN;
+        Variant variant = bestVariant(block, runtime.variants());
+        if (variant == null) return StateKind.UNKNOWN;
+        return variant.quads().isEmpty() ? StateKind.EMPTY_BAKED_MODEL : StateKind.BAKED;
     }
 
     /** Returns null when the registry has no matching state; empty means a real empty model. */
@@ -233,9 +252,11 @@ public final class RuntimeModelRegistry {
             JsonObject variant = variantElement.getAsJsonObject();
             Map<String, String> properties = parseProperties(variant.get("properties"));
             List<RuntimeQuad> quads = parseQuads(variant.get("quads"));
-            // Empty baked geometry is meaningful for invisible blocks, but there
-            // is no reason to override the static resolver with it yet.
-            if (!quads.isEmpty()) variants.add(new Variant(properties, quads));
+            // Empty baked geometry is meaningful. It can represent an invisible
+            // state or a state whose visual is supplied by another renderer.
+            // Preserve it so Java can distinguish that from an unknown state and
+            // never invent fallback cube geometry.
+            variants.add(new Variant(properties, quads));
         }
         return variants;
     }
