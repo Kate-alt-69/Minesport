@@ -61,13 +61,55 @@ func validateCacheRoot(root string) error {
 	if root == volumeRoot || root == string(filepath.Separator) {
 		return fmt.Errorf("refusing to remove filesystem root as Minesport cache: %s", root)
 	}
-	if home, err := os.UserHomeDir(); err == nil && samePath(root, home) {
-		return fmt.Errorf("refusing to remove the user home directory as Minesport cache: %s", root)
+	// A cache root must be a dedicated directory, not a broad top-level bucket
+	// such as C:\cache or /tmp. This makes a bad environment override fail closed.
+	if pathDepth(root) < 2 {
+		return fmt.Errorf("refusing to remove an overly broad Minesport cache path: %s", root)
 	}
-	if samePath(root, appdirs.DataRoot()) {
-		return fmt.Errorf("refusing to remove Minesport durable data as cache: %s", root)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if samePath(root, home) || containsPath(root, home) {
+			return fmt.Errorf("refusing to remove a path that contains the user home directory: %s", root)
+		}
+	}
+	dataRoot := appdirs.DataRoot()
+	if samePath(root, dataRoot) || containsPath(root, dataRoot) {
+		return fmt.Errorf("refusing to remove a path that contains Minesport durable data: %s", root)
 	}
 	return nil
+}
+
+func pathDepth(path string) int {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	volume := filepath.VolumeName(clean)
+	clean = strings.TrimPrefix(clean, volume)
+	clean = strings.Trim(clean, string(filepath.Separator))
+	if clean == "" {
+		return 0
+	}
+	parts := strings.Split(clean, string(filepath.Separator))
+	depth := 0
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			depth++
+		}
+	}
+	return depth
+}
+
+func containsPath(parent, child string) bool {
+	parent = filepath.Clean(strings.TrimSpace(parent))
+	child = filepath.Clean(strings.TrimSpace(child))
+	if parent == "" || child == "" || samePath(parent, child) {
+		return false
+	}
+	rel, err := filepath.Rel(parent, child)
+	if err != nil || rel == "." {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return !filepath.IsAbs(rel)
 }
 
 func samePath(a, b string) bool {
