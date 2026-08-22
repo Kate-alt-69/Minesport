@@ -18,12 +18,14 @@ import (
 )
 
 const (
-	DefaultAddress      = "127.0.0.1:25590"
-	SnapshotSchema      = 3
-	maxMessageSize      = 128 << 20
-	captureBridgePrefix = "minesport-capture-bridge-"
-	captureBridgeSuffix = ".jar"
-	registryFileName    = "registry.json"
+	DefaultAddress       = "127.0.0.1:25590"
+	SnapshotSchema       = 3
+	maxMessageSize       = 128 << 20
+	captureBridgePrefix  = "minesport-capture-bridge-"
+	captureBridgeSuffix  = ".jar"
+	registryFileName     = "registry.json"
+	modHashCacheFileName = "mod-hash-cache-v1.json"
+	modHashCacheSchema   = 1
 )
 
 type LightState struct {
@@ -81,10 +83,23 @@ type captureSession struct {
 	StagedPath      string
 }
 
+type jarHashCacheEntry struct {
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"modTime"`
+	SHA256  string `json:"sha256"`
+}
+
+type jarHashCacheDocument struct {
+	Schema  int                          `json:"schema"`
+	Entries map[string]jarHashCacheEntry `json:"entries"`
+}
+
 var captureSessions = struct {
 	sync.Mutex
 	byVersion map[string]captureSession
 }{byVersion: make(map[string]captureSession)}
+
+var modHashCacheMu sync.Mutex
 
 type Server struct {
 	listener net.Listener
@@ -530,12 +545,44 @@ func writeSnapshotAt(dir string, snapshot Snapshot) (string, error) {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return "", err
 	}
+
+	// A new successful capture supersedes every older mod-set fingerprint for
+	// this exact Minecraft version. Keeping those siblings wastes disk and makes
+	// cache inspection confusing; current exports can only use this fingerprint.
+	_ = pruneSiblingFingerprints(dir, snapshot.MinecraftVersion, snapshot.ModsFingerprint)
 	return path, nil
 }
 
-// ModsFingerprint is intentionally fast: filenames, sizes and mtimes invalidate
-// normal add/remove/update workflows without hashing gigabytes on every export.
+func pruneSiblingFingerprints(dir, version, keepFingerprint string) error {
+	root := filepath.Join(dir, safeVersion(version))
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	keep := safeFingerprint(keepFingerprint)
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == keep {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ModsFingerprint uses SHA-256 of the actual JAR contents. To avoid re-reading
+// every mod on every export, per-JAR content digests are cached by absolute path
+// plus size/mtime. Normal add/remove/update workflows therefore remain cheap,
+// while the registry identity itself is content-based rather than timestamp-based.
 func ModsFingerprint(modsPath string) (string, error) {
+	return modsFingerprintAt(modsPath, filepath.Join(cacheDir(), modHashCacheFileName))
+}
+
+func modsFingerprintAt(modsPath, hashCachePath string) (string, error) {
 	modsPath = filepath.Clean(strings.TrimSpace(modsPath))
 	if modsPath == "" || modsPath == "." {
 		return "", fmt.Errorf("mods folder path is required")
@@ -544,10 +591,13 @@ func ModsFingerprint(modsPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read mods folder for runtime-registry fingerprint: %w", err)
 	}
+
 	type item struct {
 		name string
+		path string
 		size int64
 		mod  int64
+		hash string
 	}
 	items := make([]item, 0, len(entries))
 	for _, entry := range entries {
@@ -563,14 +613,112 @@ func ModsFingerprint(modsPath string) (string, error) {
 		}
 		items = append(items, item{
 			name: strings.ToLower(entry.Name()),
+			path: filepath.Join(modsPath, entry.Name()),
 			size: info.Size(),
 			mod:  info.ModTime().UnixNano(),
 		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
+
+	modHashCacheMu.Lock()
+	cache := readJarHashCache(hashCachePath)
+	dirty := false
+	for index := range items {
+		key := jarHashCacheKey(items[index].path)
+		cached, ok := cache.Entries[key]
+		if ok && cached.Size == items[index].size && cached.ModTime == items[index].mod && len(cached.SHA256) == 64 {
+			items[index].hash = cached.SHA256
+			continue
+		}
+		digest, hashErr := hashFileSHA256(items[index].path)
+		if hashErr != nil {
+			modHashCacheMu.Unlock()
+			return "", fmt.Errorf("hash mod JAR %s: %w", items[index].path, hashErr)
+		}
+		items[index].hash = digest
+		cache.Entries[key] = jarHashCacheEntry{
+			Size:    items[index].size,
+			ModTime: items[index].mod,
+			SHA256:  digest,
+		}
+		dirty = true
+	}
+	if dirty {
+		// Digest caching is an optimization only. A cache write failure must not
+		// prevent a correct content fingerprint from being returned.
+		_ = writeJarHashCache(hashCachePath, cache)
+	}
+	modHashCacheMu.Unlock()
+
 	hash := sha256.New()
 	for _, entry := range items {
-		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%d\n", entry.name, entry.size, entry.mod)
+		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%s\n", entry.name, entry.size, entry.hash)
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+func jarHashCacheKey(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(absolute)
+}
+
+func readJarHashCache(path string) jarHashCacheDocument {
+	document := jarHashCacheDocument{
+		Schema:  modHashCacheSchema,
+		Entries: make(map[string]jarHashCacheEntry),
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return document
+	}
+	var decoded jarHashCacheDocument
+	if json.Unmarshal(data, &decoded) != nil || decoded.Schema != modHashCacheSchema || decoded.Entries == nil {
+		return document
+	}
+	return decoded
+}
+
+func writeJarHashCache(path string, document jarHashCacheDocument) error {
+	if document.Entries == nil {
+		document.Entries = make(map[string]jarHashCacheEntry)
+	}
+	document.Schema = modHashCacheSchema
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".mod-hash-cache-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	_ = os.Remove(path)
+	return os.Rename(temporaryPath, path)
+}
+
+func hashFileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
