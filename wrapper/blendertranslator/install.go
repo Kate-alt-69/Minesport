@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const Version = "0.1.5"
+const Version = "0.1.6"
 
 // The translator is bundled into Minesport so release builds do not depend on
 // loose Python files beside minesport.exe.
