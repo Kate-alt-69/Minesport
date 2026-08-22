@@ -11,6 +11,6 @@
     {"op": "overlay", "source": "bridge-versions/shared/fabric-mod-java21.json", "target": "src/main/resources/fabric.mod.json"},
     {"op": "overlay", "source": "bridge-versions/1.21.0-1.21.4/overlays/BlockGeometryExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"},
     {"op": "overlay", "source": "bridge-versions/1.21.0-1.21.1/overlays/TextureExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/TextureExtractor.java"},
-    {"op": "rename_at", "file": "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java", "line": 52, "column": 67, "from": "id()", "to": "getId()"}
+    {"op": "replace", "file": "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java", "from": "net.minecraft.SharedConstants.getCurrentVersion().id()", "to": "net.minecraft.SharedConstants.getCurrentVersion().getId()"}
   ]
 }
