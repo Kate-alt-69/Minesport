@@ -230,25 +230,30 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 			return
 		}
 
-		go func(expectedIndex int, expectedPath string) {
-			data, err := fetchDocumentationBytes(rawURL)
-			if selected != expectedIndex || expectedIndex < 0 || expectedIndex >= len(pages) || pages[expectedIndex].Path != expectedPath {
-				return
-			}
-			loading.Stop()
-			pageHost.RemoveAll()
-			if err != nil {
-				message := widget.NewLabel("Could not stream this page right now. Check your connection or use ‘Open page on GitHub’.\n\n" + err.Error())
-				message.Wrapping = fyne.TextWrapWord
-				pageHost.Add(container.NewVScroll(container.NewPadded(message)))
-				status.SetText("Documentation stream failed; GitHub link is still available.")
-				return
-			}
-			rich := widget.NewRichTextFromMarkdown(string(data))
-			rich.Wrapping = fyne.TextWrapWord
-			pageHost.Add(container.NewVScroll(container.NewPadded(rich)))
-			status.SetText("Loaded from GitHub · " + expectedPath)
-		}(index, page.Path)
+		go func(expectedIndex int, expectedPath, pageURL string, spinner *widget.ProgressBarInfinite) {
+			data, fetchErr := fetchDocumentationBytes(pageURL)
+			ms.dispatchUI(func() {
+				// Selection and page-list state belong to Fyne's UI queue. Checking
+				// them here also prevents a slow older request from replacing the
+				// currently selected page after the user already navigated away.
+				if selected != expectedIndex || expectedIndex < 0 || expectedIndex >= len(pages) || pages[expectedIndex].Path != expectedPath {
+					return
+				}
+				spinner.Stop()
+				pageHost.RemoveAll()
+				if fetchErr != nil {
+					message := widget.NewLabel("Could not stream this page right now. Check your connection or use ‘Open page on GitHub’.\n\n" + fetchErr.Error())
+					message.Wrapping = fyne.TextWrapWord
+					pageHost.Add(container.NewVScroll(container.NewPadded(message)))
+					status.SetText("Documentation stream failed; GitHub link is still available.")
+					return
+				}
+				rich := widget.NewRichTextFromMarkdown(string(data))
+				rich.Wrapping = fyne.TextWrapWord
+				pageHost.Add(container.NewVScroll(container.NewPadded(rich)))
+				status.SetText("Loaded from GitHub · " + expectedPath)
+			})
+		}(index, page.Path, rawURL, loading)
 	}
 
 	list = widget.NewList(
@@ -326,14 +331,18 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 	list.Select(0)
 
 	go func() {
-		data, err := fetchDocumentationBytes(documentationIndexURL)
-		if err != nil {
-			status.SetText("Using built-in page list; GitHub index could not be refreshed: " + err.Error())
+		data, fetchErr := fetchDocumentationBytes(documentationIndexURL)
+		if fetchErr != nil {
+			ms.dispatchUI(func() {
+				status.SetText("Using built-in page list; GitHub index could not be refreshed: " + fetchErr.Error())
+			})
 			return
 		}
 		var index documentationIndex
 		if err := json.Unmarshal(data, &index); err != nil || index.Schema != 1 || len(index.Pages) == 0 {
-			status.SetText("Using built-in page list; GitHub documentation index is invalid.")
+			ms.dispatchUI(func() {
+				status.SetText("Using built-in page list; GitHub documentation index is invalid.")
+			})
 			return
 		}
 		cleaned := make([]documentationPage, 0, len(index.Pages))
@@ -347,16 +356,20 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 			cleaned = append(cleaned, page)
 		}
 		if len(cleaned) == 0 {
-			status.SetText("Using built-in page list; GitHub index contained no usable pages.")
+			ms.dispatchUI(func() {
+				status.SetText("Using built-in page list; GitHub index contained no usable pages.")
+			})
 			return
 		}
-		pages = cleaned
-		list.Refresh()
-		if selected >= len(pages) {
-			selected = 0
-		}
-		updateNavigation()
-		status.SetText(fmt.Sprintf("Documentation index refreshed from GitHub · %d pages", len(pages)))
-		list.Select(widget.ListItemID(selected))
+		ms.dispatchUI(func() {
+			pages = cleaned
+			list.Refresh()
+			if selected >= len(pages) {
+				selected = 0
+			}
+			updateNavigation()
+			status.SetText(fmt.Sprintf("Documentation index refreshed from GitHub · %d pages", len(pages)))
+			list.Select(widget.ListItemID(selected))
+		})
 	}()
 }
