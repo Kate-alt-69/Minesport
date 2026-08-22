@@ -24,17 +24,17 @@ type Settings struct {
 
 	// FlatterOptimizationEnabled enables the lossless FLATTER geometry compiler.
 	// Safe full cubes are stored as logical blocks but exported as chunk-local
-	// greedy surfaces that Minesport Translator 0.1.4 can materialize on demand.
+	// greedy surfaces that Minesport Translator 0.1.5 can materialize on demand.
 	FlatterOptimizationEnabled bool `json:"flatterOptimizationEnabled"`
 
 	// BlenderExportEnabled exposes Blender translation metadata controls in the
-	// World Inspector. The translator itself is one-shot: it creates Blender-
-	// native collections, actions, bones and nodes, then does not run per-frame.
+	// Workbench. The translator itself is one-shot: it creates Blender-native
+	// collections, actions, bones and nodes, then does not run per-frame.
 	BlenderExportEnabled bool `json:"blenderExportEnabled"`
 
 	// BlenderTranslatorPrompted prevents the first-launch installer prompt from
 	// nagging after the user explicitly answers it. Install/repair remains
-	// available from Settings -> Advanced -> Model -> Blender Export.
+	// available from the Blender/advanced integration controls.
 	BlenderTranslatorPrompted bool `json:"blenderTranslatorPrompted"`
 
 	ResourcePackPaths []string `json:"resourcePackPaths"`
