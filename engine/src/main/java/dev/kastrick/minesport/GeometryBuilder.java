@@ -50,7 +50,7 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
         super(resolvers);
         this.classifier = new BlockGeometryClassifier(resolvers);
         this.hiddenBlockCullingEnabled = readHiddenBlockCullingSetting();
-        this.worldIndex = ExportWorldContext.currentIndex();
+        this.worldIndex = ExportWorldContext.takeIndex();
     }
 
     @Override
