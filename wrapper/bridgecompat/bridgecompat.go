@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kastrick/minesport/appdirs"
 	"github.com/kastrick/minesport/processutil"
 )
 
@@ -692,7 +693,10 @@ func bundledBridgePath(manifest Manifest) (string, error) {
 
 func cachedBridgePath(version string) string {
 	filename := "minesport-bridge-" + safeVersion(version) + ".jar"
-	roots := []string{filepath.Join(supportRoot(), "compiled"), filepath.Join(userDataRoot(), "bridges")}
+	roots := []string{
+		filepath.Join(supportRoot(), "compiled"),
+		filepath.Join(appdirs.CacheRoot(), "bridges"),
+	}
 	for _, root := range roots {
 		candidate := filepath.Join(root, safeVersion(version), filename)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
@@ -707,7 +711,7 @@ func writableCompiledRoot() string {
 	if canWriteDirectory(preferred) {
 		return preferred
 	}
-	fallback := filepath.Join(userDataRoot(), "bridges")
+	fallback := filepath.Join(appdirs.CacheRoot(), "bridges")
 	_ = os.MkdirAll(fallback, 0o755)
 	return fallback
 }
@@ -731,35 +735,11 @@ func supportRoot() string {
 }
 
 func userDataRoot() string {
-	if runtime.GOOS == "windows" {
-		if local := os.Getenv("LOCALAPPDATA"); local != "" {
-			return filepath.Join(local, "kastrick's_software", "minesport")
-		}
-	}
-	home, _ := os.UserHomeDir()
-	if runtime.GOOS == "darwin" {
-		return filepath.Join(home, "Library", "Application Support", "kastrick's_software", "minesport")
-	}
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		return filepath.Join(xdg, "kastrick_software", "minesport")
-	}
-	return filepath.Join(home, ".local", "share", "kastrick_software", "minesport")
+	return appdirs.DataRoot()
 }
 
 func buildWorkspaceRoot() string {
-	if runtime.GOOS == "windows" {
-		if local := os.Getenv("LOCALAPPDATA"); local != "" {
-			return filepath.Join(local, "kastrick's_software", "minesport", "bridge-build")
-		}
-	}
-	if cache := os.Getenv("XDG_CACHE_HOME"); cache != "" {
-		return filepath.Join(cache, "kastrick_software", "minesport", "bridge-build")
-	}
-	home, _ := os.UserHomeDir()
-	if runtime.GOOS == "darwin" {
-		return filepath.Join(home, "Library", "Caches", "kastrick's_software", "minesport", "bridge-build")
-	}
-	return filepath.Join(home, ".cache", "kastrick_software", "minesport", "bridge-build")
+	return filepath.Join(appdirs.CacheRoot(), "bridge-build")
 }
 
 func installedManifestPath() string { return filepath.Join(supportRoot(), "manifest.json") }
@@ -875,7 +855,7 @@ func report(progress ProgressFunc, percent int, stage, detail string) {
 	}
 }
 
-func buildProjectPath() string { return filepath.Join(userDataRoot(), "bridge-build") }
+func buildProjectPath() string { return filepath.Join(appdirs.CacheRoot(), "bridge-build") }
 
 func runGradleBuild(workspace, javaHome string, progress ProgressFunc) (string, error) {
 	wrapper := filepath.Join(workspace, "gradlew")
