@@ -80,21 +80,27 @@ public final class BlockGeometryExtractor {
             float ny = normal == null ? 0.0f : normal.getStepY();
             float nz = normal == null ? 0.0f : normal.getStepZ();
             float[] vertices = new float[4 * 8];
+            TextureAtlasSprite sprite = quad.getSprite();
 
             for (int vertex = 0; vertex < 4; vertex++) {
                 int source = vertex * stride;
                 int target = vertex * 8;
+                float u = Float.intBitsToFloat(packed[source + 4]);
+                float v = Float.intBitsToFloat(packed[source + 5]);
+                if (sprite != null) {
+                    u = SpriteUv.local(u, sprite.getU0(), sprite.getU1());
+                    v = SpriteUv.local(v, sprite.getV0(), sprite.getV1());
+                }
                 vertices[target] = Float.intBitsToFloat(packed[source]);
                 vertices[target + 1] = Float.intBitsToFloat(packed[source + 1]);
                 vertices[target + 2] = Float.intBitsToFloat(packed[source + 2]);
                 vertices[target + 3] = nx;
                 vertices[target + 4] = ny;
                 vertices[target + 5] = nz;
-                vertices[target + 6] = Float.intBitsToFloat(packed[source + 4]);
-                vertices[target + 7] = Float.intBitsToFloat(packed[source + 5]);
+                vertices[target + 6] = u;
+                vertices[target + 7] = v;
             }
 
-            TextureAtlasSprite sprite = quad.getSprite();
             String textureId = sprite == null ? "missing" : sprite.getName().toString();
             return new BakedQuadData(
                 vertices,
