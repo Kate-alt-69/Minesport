@@ -74,7 +74,8 @@ public final class FlatterSettings {
         }
     }
 
-    static File settingsFile() {
+    /** Canonical 0.2.x settings file shared by all Java engine settings readers. */
+    public static File settingsFile() {
         String override = System.getenv("MINESPORT_DATA_DIR");
         if (override != null && !override.isBlank()) {
             return new File(new File(override), "settings.json");
