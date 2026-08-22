@@ -51,17 +51,31 @@ fn main() {
     println!("cargo:rerun-if-changed={}", ui.display());
     println!("cargo:rerun-if-env-changed=MINESPORT_ENGINE_JAR");
     println!("cargo:rerun-if-env-changed=MINESPORT_BRIDGE_JAR");
+    println!("cargo:rerun-if-env-changed=MINESPORT_HEADLESS_BRIDGE_PREPARE");
     println!("cargo:rerun-if-changed={}", engine_libs.display());
     println!("cargo:rerun-if-changed={}", bridge_staged.display());
     println!("cargo:rerun-if-changed={}", bridge_source.display());
     println!("cargo:rerun-if-changed={}", bridge_versions.display());
     println!("cargo:rerun-if-changed={}", blender_addon.display());
 
+    let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let headless_recipe = env::var_os("MINESPORT_HEADLESS_BRIDGE_PREPARE").is_some();
+    if headless_recipe {
+        // `cargo run --bin bridge-prepare` does not compile the Slint main binary
+        // and never executes the embedded Java/Bridge materializers. Keep tiny
+        // placeholders only so shared runtime.rs include_bytes! paths remain
+        // syntactically valid for the headless recipe helper.
+        fs::write(out.join("minesport-engine.jar"), b"headless-recipe-helper")
+            .expect("write headless engine placeholder");
+        fs::write(out.join("minesport-bridge.jar"), b"headless-recipe-helper")
+            .expect("write headless Bridge placeholder");
+        return;
+    }
+
     slint_build::compile(ui).expect("compile Minesport Slint UI");
 
     let engine = find_engine_jar().expect("Minesport engine JAR not found. Build /engine first or set MINESPORT_ENGINE_JAR.");
     let bridge = find_bridge_jar().expect("Minesport Bridge JAR not found. Build /bridge and stage dist/bundled-bridge/minesport-bridge-0.2.0.jar first or set MINESPORT_BRIDGE_JAR.");
-    let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     fs::copy(&engine, out.join("minesport-engine.jar")).expect("embed Minesport engine JAR into Rust desktop build");
     fs::copy(&bridge, out.join("minesport-bridge.jar")).expect("embed canonical Minesport Bridge JAR into Rust desktop build");
 }

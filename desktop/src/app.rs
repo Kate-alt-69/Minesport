@@ -1,5 +1,5 @@
 use crate::{
-    MainWindow, blender,
+    MainWindow, blender, bridge_compat,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
     preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, settings,
 };
@@ -89,6 +89,7 @@ pub fn run() -> Result<()> {
     append_diagnostic(&ui, "Backend boundary: Minesport.exe --engine-worker → embedded Java engine");
     append_diagnostic(&ui, "Desktop: Rust + Slint · Fyne UI archived under /archive/go-fyne-ui");
     append_diagnostic(&ui, "Runtime registry: Rust binary registry.data capture + isolated Fabric/Loom worker");
+    append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover the manifest-supported Fabric version families");
 
     let ping_engine = engine.clone();
     let ping_weak = ui.as_weak();
@@ -237,16 +238,12 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
                 });
             }
 
-            if loader.eq_ignore_ascii_case("fabric") && version == "1.21.10" && mods_path.is_dir() {
+            if runtime_registry_supported(&loader, &version, &mods_path) {
                 let _ = start_runtime_cache_job(
                     weak.clone(), cache, engine, state, version, mods_path, false, false,
                 );
             } else {
-                let detail = if !loader.eq_ignore_ascii_case("fabric") {
-                    format!("STATIC RESOLVER · runtime registry is currently Fabric-only for {loader}")
-                } else {
-                    format!("STATIC RESOLVER · Rust full-registry fast path for Minecraft {version} is still being ported")
-                };
+                let detail = runtime_registry_unavailable_reason(&loader, &version, &mods_path);
                 let _ = weak.upgrade_in_event_loop(move |ui| ui.set_runtime_cache_status(detail.into()));
             }
         });
@@ -343,7 +340,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             return;
         }
 
-        if loader == "fabric" && version == "1.21.10" && mods_path.is_dir() {
+        if runtime_registry_supported(&loader, &version, &mods_path) {
             if let Ok(mut guard) = state.lock() {
                 guard.pending_export = Some(request);
             }
@@ -363,7 +360,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             return;
         }
 
-        append_diagnostic(&ui, "Runtime registry unavailable for this instance; exporting through static asset resolvers.");
+        append_diagnostic(&ui, &format!("{}; exporting through static asset resolvers.", runtime_registry_unavailable_reason(&loader, &version, &mods_path)));
         send_export_now(&ui, &engine, request, &output);
     });
 }
@@ -489,6 +486,16 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
         if loader != "fabric" {
             ui.set_task_title("RUNTIME CACHE".into());
             ui.set_task_detail("Full runtime registry currently requires a Fabric instance.".into());
+            return;
+        }
+        if !bridge_compat::is_supported(&version) {
+            ui.set_task_title("RUNTIME CACHE".into());
+            ui.set_task_detail(format!("No embedded runtime compatibility recipe for Minecraft {version}.").into());
+            return;
+        }
+        if !mods.is_dir() {
+            ui.set_task_title("RUNTIME CACHE".into());
+            ui.set_task_detail(format!("Mods folder is unavailable: {}", mods.display()).into());
             return;
         }
         if let Err(error) = start_runtime_cache_job(
@@ -1016,6 +1023,23 @@ fn normalize_loader(value: &str) -> String {
     if loader.is_empty() || loader == "—" { "fabric".to_string() } else { loader }
 }
 
+fn runtime_registry_supported(loader: &str, version: &str, mods_path: &Path) -> bool {
+    loader.eq_ignore_ascii_case("fabric") && mods_path.is_dir() && bridge_compat::is_supported(version)
+}
+
+fn runtime_registry_unavailable_reason(loader: &str, version: &str, mods_path: &Path) -> String {
+    if !loader.eq_ignore_ascii_case("fabric") {
+        return format!("STATIC RESOLVER · full runtime registry is currently Fabric-only for {loader}");
+    }
+    if !mods_path.is_dir() {
+        return format!("STATIC RESOLVER · mods folder unavailable: {}", mods_path.display());
+    }
+    if !bridge_compat::is_supported(version) {
+        return format!("STATIC RESOLVER · no embedded runtime compatibility recipe for Minecraft {version}");
+    }
+    "STATIC RESOLVER · runtime registry unavailable".to_string()
+}
+
 fn output_directory(ui: &MainWindow) -> PathBuf {
     let selected = ui.get_output_path().to_string();
     if !selected.trim().is_empty() { return PathBuf::from(selected); }
@@ -1096,5 +1120,17 @@ mod tests {
         assert!(looks_transparent("minecraft:oak_leaves"));
         assert!(looks_shape_heavy("minecraft:oak_stairs"));
         assert!(looks_cube_like("minecraft:stone"));
+    }
+
+    #[test]
+    fn runtime_registry_support_follows_embedded_manifest_not_one_hardcoded_version() {
+        let mods = Path::new("mods");
+        assert!(bridge_compat::is_supported("1.19.4"));
+        assert!(bridge_compat::is_supported("1.21.11"));
+        assert!(bridge_compat::is_supported("26.2"));
+        assert!(!bridge_compat::is_supported("1.5"));
+        // The directory existence portion is intentionally tested separately by
+        // runtime_cache/runtime_worker; this assertion documents the manifest gate.
+        assert!(!runtime_registry_supported("forge", "1.21.10", mods));
     }
 }

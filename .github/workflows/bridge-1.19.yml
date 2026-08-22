@@ -6,16 +6,22 @@ on:
     paths:
       - 'bridge/**'
       - 'bridge-versions/**'
-      - 'wrapper/bridgecompat/**'
-      - 'wrapper/cmd/bridge-prepare/**'
+      - 'desktop/src/bridge_compat.rs'
+      - 'desktop/src/toolchain.rs'
+      - 'desktop/src/bin/bridge-prepare.rs'
+      - 'desktop/build.rs'
+      - 'desktop/Cargo.toml'
       - '.github/workflows/bridge-1.19.yml'
   pull_request:
     branches: [main]
     paths:
       - 'bridge/**'
       - 'bridge-versions/**'
-      - 'wrapper/bridgecompat/**'
-      - 'wrapper/cmd/bridge-prepare/**'
+      - 'desktop/src/bridge_compat.rs'
+      - 'desktop/src/toolchain.rs'
+      - 'desktop/src/bin/bridge-prepare.rs'
+      - 'desktop/build.rs'
+      - 'desktop/Cargo.toml'
       - '.github/workflows/bridge-1.19.yml'
   workflow_dispatch:
 
@@ -28,9 +34,9 @@ concurrency:
 
 jobs:
   bridge-1-19:
-    name: Bridge · Minecraft ${{ matrix.minecraft }} · Java 17
+    name: Rust recipe · Minecraft ${{ matrix.minecraft }} · Java 17
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -44,20 +50,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: actions/setup-go@v7
+      - uses: dtolnay/rust-toolchain@master
         with:
-          go-version-file: wrapper/go.mod
-          cache-dependency-path: wrapper/go.sum
+          toolchain: 1.92.0
       - uses: gradle/actions/setup-gradle@v6
-      - name: Generate and compile from canonical 1.21.10 bridge source
-        working-directory: wrapper
+      - name: Generate and compile from canonical Bridge with Rust
         env:
-          MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
-          MINESPORT_BRIDGE_DATA: ${{ runner.temp }}/minesport-bridge-data
+          MINESPORT_HEADLESS_BRIDGE_PREPARE: '1'
         run: |
-          go run ./cmd/bridge-prepare \
-            -version '${{ matrix.minecraft }}' \
-            -output ../dist/recipe-bridges
+          cargo run --manifest-path desktop/Cargo.toml --bin bridge-prepare -- \
+            --version '${{ matrix.minecraft }}' \
+            --output dist/recipe-bridges
+          test -s "dist/recipe-bridges/minesport-bridge-${{ matrix.minecraft }}.jar"
       - uses: actions/upload-artifact@v7
         with:
           name: minesport-bridge-${{ matrix.minecraft }}
@@ -66,7 +70,7 @@ jobs:
           retention-days: 7
 
   bridge-1-19-clean:
-    name: Minecraft 1.19 bridge family compiles
+    name: Minecraft 1.19 Rust recipe family compiles
     if: always()
     needs: bridge-1-19
     runs-on: ubuntu-latest
@@ -75,5 +79,5 @@ jobs:
         env:
           RESULT: ${{ needs.bridge-1-19.result }}
         run: |
-          echo "1.19 bridge matrix result: $RESULT"
+          echo "1.19 Rust Bridge matrix result: $RESULT"
           test "$RESULT" = success
