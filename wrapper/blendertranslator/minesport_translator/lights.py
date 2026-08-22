@@ -100,6 +100,34 @@ def _vec3(value, fallback):
     return fallback
 
 
+def _set_viewport_extras(visible):
+    """Use Blender's overlay layer to hide/show light helper drawings.
+
+    Hiding the Light object itself would also remove its live viewport lighting.
+    Blender exposes light/camera helper drawings through the VIEW_3D Extras
+    overlay rather than a per-Light-object visibility switch, so Minesport keeps
+    every light evaluated and changes only that visual overlay.
+    """
+    try:
+        windows = bpy.context.window_manager.windows
+    except Exception:
+        return
+    for window in windows:
+        screen = getattr(window, "screen", None)
+        if screen is None:
+            continue
+        for area in screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for space in area.spaces:
+                if space.type != "VIEW_3D":
+                    continue
+                overlay = getattr(space, "overlay", None)
+                if overlay is not None:
+                    overlay.show_extras = bool(visible)
+            area.tag_redraw()
+
+
 def _configure_light(obj, descriptor, helpers_visible=False, imported=True):
     level = max(1, min(15, int(descriptor.get("minecraftLevel", 15))))
     range_blocks = max(0.5, float(descriptor.get("rangeBlocks", level + 0.5)))
@@ -132,10 +160,15 @@ def _configure_light(obj, descriptor, helpers_visible=False, imported=True):
     obj["minesport_light_smooth_render"] = True
     obj.hide_render = False
     obj.hide_select = not helpers_visible
+
+    # 0.1.9 originally used hide_set() to hide the helper icon. That also hides
+    # the emitter from viewport evaluation. Force the object back into the view
+    # layer and hide only its Extras drawing instead.
     try:
-        obj.hide_set(not helpers_visible)
+        obj.hide_set(False)
     except Exception:
         pass
+
     if hasattr(obj, "minesport"):
         obj.minesport.translated = True
         obj.minesport.source_block = str(descriptor.get("source") or "minecraft:light")
@@ -200,6 +233,7 @@ def translate_lights(metadata, objects=None):
             pass
 
     collection["minesport_light_count"] = len(result)
+    _set_viewport_extras(helpers_visible)
     return result
 
 
@@ -217,10 +251,11 @@ def _set_helpers_visible(visible):
         for obj in _objects_in_light_collection(collection):
             obj.hide_select = not visible
             try:
-                obj.hide_set(not visible)
+                obj.hide_set(False)
             except Exception:
                 pass
             count += 1
+    _set_viewport_extras(visible)
     return count
 
 
@@ -270,10 +305,65 @@ def _descriptor_for_user_light(name, level, position):
     }
 
 
+def _place_flatter_light(parent, xyz, snap, level):
+    payload = flatter._load_payload(parent)
+    if payload is None:
+        return None
+
+    level = max(1, min(15, int(level)))
+    snap = str(snap or "TOP")
+    x, y, z = map(int, xyz)
+    if snap == "BOTTOM":
+        mc_point = (x + 0.5, y - 0.001, z + 0.5)
+    elif snap == "CENTER":
+        mc_point = (x + 0.5, y + 0.5, z + 0.5)
+    else:
+        snap = "TOP"
+        mc_point = (x + 0.5, y + 1.001, z + 0.5)
+
+    center = flatter._vec3f(payload.get("center"), (0.0, 0.0, 0.0))
+    local = Vector(flatter._mc_to_blender(mc_point, center))
+    world = parent.matrix_world @ local
+    name = f"Minesport_UserLight_{x}_{y}_{z}_{snap}_{level}"
+
+    collection = _light_collection({"exportName": "Minesport_User"})
+    data = bpy.data.lights.new(name + "_Data", type="POINT")
+    obj = bpy.data.objects.new(name, data)
+    collection.objects.link(obj)
+    obj.location = world
+    obj["minesport_flatter_parent"] = str(parent.get("minesport_flatter_id") or parent.name)
+    obj["minesport_flatter_anchor_xyz"] = json.dumps([x, y, z], separators=(",", ":"))
+    obj["minesport_light_snap_face"] = snap
+    _configure_light(
+        obj,
+        _descriptor_for_user_light(name, level, world),
+        helpers_visible=bool(collection.get(LIGHT_HELPERS_KEY, False)),
+        imported=False,
+    )
+    collection["minesport_light_count"] = len(_objects_in_light_collection(collection))
+    return obj
+
+
+def _snap_from_world_normal(parent, normal):
+    if normal is None:
+        return None
+    try:
+        local = parent.matrix_world.to_3x3().transposed() @ Vector(normal)
+        if local.length_squared > 1e-12:
+            local.normalize()
+    except Exception:
+        local = Vector(normal)
+    if local.z >= 0.55:
+        return "TOP"
+    if local.z <= -0.55:
+        return "BOTTOM"
+    return None
+
+
 class MINESPORT_OT_light_helpers_toggle(bpy.types.Operator):
     bl_idname = "minesport.light_helpers_toggle"
     bl_label = "Toggle Minesport Light Helpers"
-    bl_description = "Show or hide Minesport light objects in the viewport without disabling final-render lights"
+    bl_description = "Show or hide Blender light helper drawings while keeping Minesport lights active"
 
     def execute(self, context):
         visible = not _helpers_visible()
@@ -302,7 +392,7 @@ class MINESPORT_OT_light_apply_level(bpy.types.Operator):
             "invisibleSource": bool(obj.get(LIGHT_INVISIBLE_KEY, False)),
             "color": list(obj.data.color),
         }
-        visible = not obj.hide_get()
+        visible = _helpers_visible()
         _configure_light(
             obj,
             descriptor,
@@ -329,43 +419,89 @@ class MINESPORT_OT_flatter_add_light(bpy.types.Operator):
             self.report({"ERROR"}, "Pick a logical FLATTER block first")
             return {"CANCELLED"}
 
-        payload = flatter._load_payload(parent)
-        if payload is None:
+        level = max(1, min(15, int(parent.minesport.light_level)))
+        snap = str(parent.minesport.light_snap_face)
+        created = _place_flatter_light(parent, xyz, snap, level)
+        if created is None:
             self.report({"ERROR"}, "FLATTER logical data is unavailable")
             return {"CANCELLED"}
-
-        props = parent.minesport
-        level = max(1, min(15, int(props.light_level)))
-        snap = str(props.light_snap_face)
-        x, y, z = xyz
-        if snap == "BOTTOM":
-            mc_point = (x + 0.5, y - 0.001, z + 0.5)
-        elif snap == "CENTER":
-            mc_point = (x + 0.5, y + 0.5, z + 0.5)
-        else:
-            mc_point = (x + 0.5, y + 1.001, z + 0.5)
-
-        center = flatter._vec3f(payload.get("center"), (0.0, 0.0, 0.0))
-        local = Vector(flatter._mc_to_blender(mc_point, center))
-        world = parent.matrix_world @ local
-        name = f"Minesport_UserLight_{x}_{y}_{z}_{snap}_{level}"
-
-        collection = _light_collection({"exportName": "Minesport_User"})
-        data = bpy.data.lights.new(name + "_Data", type="POINT")
-        obj = bpy.data.objects.new(name, data)
-        collection.objects.link(obj)
-        obj.location = world
-        obj["minesport_flatter_parent"] = str(parent.get("minesport_flatter_id") or parent.name)
-        obj["minesport_flatter_anchor_xyz"] = json.dumps(list(xyz), separators=(",", ":"))
-        obj["minesport_light_snap_face"] = snap
-        _configure_light(
-            obj,
-            _descriptor_for_user_light(name, level, world),
-            helpers_visible=bool(collection.get(LIGHT_HELPERS_KEY, False)),
-            imported=False,
-        )
-        collection["minesport_light_count"] = int(collection.get("minesport_light_count", 0)) + 1
         self.report({"INFO"}, f"Placed light level {level} on {snap.lower()} face @ {xyz}")
+        return {"FINISHED"}
+
+
+class MINESPORT_OT_flatter_click_place_light(bpy.types.Operator):
+    bl_idname = "minesport.flatter_click_place_light"
+    bl_label = "Click Place Light"
+    bl_description = "Click a FLATTER top or bottom face to snap and place a Minecraft-style light immediately"
+    bl_options = {"REGISTER", "UNDO", "BLOCKING"}
+
+    def invoke(self, context, event):
+        parent = _active_flatter(context)
+        if parent is None:
+            self.report({"ERROR"}, "Select a FLATTER object first")
+            return {"CANCELLED"}
+        self._parent_name = parent.name
+        context.window_manager.modal_handler_add(self)
+        try:
+            context.workspace.status_text_set(
+                "Minesport Light: click a FLATTER top/bottom face · Esc to cancel"
+            )
+        except Exception:
+            pass
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type in {"ESC", "RIGHTMOUSE"}:
+            try:
+                context.workspace.status_text_set(None)
+            except Exception:
+                pass
+            return {"CANCELLED"}
+        if event.type != "LEFTMOUSE" or event.value != "PRESS":
+            return {"RUNNING_MODAL"}
+
+        parent = bpy.data.objects.get(getattr(self, "_parent_name", ""))
+        if parent is None:
+            return {"CANCELLED"}
+
+        # Lazy imports avoid making light registration depend on the optional
+        # viewport interaction module being registered first.
+        from . import liquid_merge
+        from . import viewport_interaction
+
+        hit = viewport_interaction._ray(context, event)
+        if hit is None:
+            self.report({"WARNING"}, "Click inside the 3D viewport on FLATTER geometry")
+            return {"RUNNING_MODAL"}
+        location, normal, _face, hit_obj, _matrix = hit
+        xyz = None
+        if hit_obj == parent:
+            xyz = flatter._pick_xyz(parent, location, normal)
+        elif hit_obj is not None and hit_obj.get("minesport_type") == liquid_merge.TYPE_LIQUID_BLOCK:
+            if str(hit_obj.get(liquid_merge.PROXY_PARENT_KEY, "")) == liquid_merge._parent_id(parent):
+                xyz = liquid_merge._proxy_xyz(hit_obj)
+        if xyz is None:
+            self.report({"WARNING"}, "That is not a logical block from the active FLATTER object")
+            return {"RUNNING_MODAL"}
+
+        snap = _snap_from_world_normal(parent, normal)
+        if snap is None:
+            self.report({"WARNING"}, "Click the top or bottom face of a block")
+            return {"RUNNING_MODAL"}
+
+        viewport_interaction._focus(parent, xyz)
+        parent.minesport.light_snap_face = snap
+        level = max(1, min(15, int(parent.minesport.light_level)))
+        created = _place_flatter_light(parent, xyz, snap, level)
+        if created is None:
+            self.report({"ERROR"}, "Could not read FLATTER logical data")
+            return {"CANCELLED"}
+
+        try:
+            context.workspace.status_text_set(None)
+        except Exception:
+            pass
+        self.report({"INFO"}, f"Placed level {level} light on {snap.lower()} face @ {tuple(xyz)}")
         return {"FINISHED"}
 
 
@@ -389,6 +525,7 @@ class MINESPORT_PT_lights(bpy.types.Panel):
             text="Hide Light Helpers" if visible else "Show Light Helpers",
             icon="HIDE_OFF" if visible else "HIDE_ON",
         )
+        box.label(text="Helpers are overlay-only; illumination stays active.", icon="INFO")
         box.label(text="Logical level falls by 1/block; Blender falloff stays smooth.", icon="INFO")
 
         light = _active_light(context)
@@ -404,10 +541,16 @@ class MINESPORT_PT_lights(bpy.types.Panel):
             place = layout.box()
             place.label(text="FLATTER Light Placement", icon="SNAP_ON")
             place.prop(parent.minesport, "light_level")
-            place.prop(parent.minesport, "light_snap_face", text="Snap")
+            place.operator(
+                MINESPORT_OT_flatter_click_place_light.bl_idname,
+                text="Click Top / Bottom Face",
+                icon="EYEDROPPER",
+            )
+            place.separator()
+            place.prop(parent.minesport, "light_snap_face", text="Manual Snap")
             focused = _focused_xyz(parent)
             if focused is None:
-                place.label(text="Pick a logical block first.", icon="EYEDROPPER")
+                place.label(text="Or pick a logical block for manual placement.", icon="INFO")
             else:
                 place.label(text=f"Anchor: {focused[0]}, {focused[1]}, {focused[2]}")
                 place.operator(MINESPORT_OT_flatter_add_light.bl_idname, icon="LIGHT_POINT")
@@ -417,6 +560,7 @@ _CLASSES = (
     MINESPORT_OT_light_helpers_toggle,
     MINESPORT_OT_light_apply_level,
     MINESPORT_OT_flatter_add_light,
+    MINESPORT_OT_flatter_click_place_light,
     MINESPORT_PT_lights,
 )
 
