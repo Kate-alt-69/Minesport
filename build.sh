@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION="0.2.0"
+BRIDGE_VERSION="0.2.0"
 BUILD_DEB=false
 BUILD_APPIMAGE=false
 
@@ -62,7 +64,7 @@ fi
 
 cd "$ROOT"
 echo "============================================"
-echo " Minesport Build Script"
+echo " Minesport $VERSION Build Script"
 echo "============================================"
 echo "Target: ${OS_NAME} / $(uname -m)"
 if ! $BUILD_DEB && ! $BUILD_APPIMAGE; then
@@ -85,8 +87,10 @@ if [[ -z "$BRIDGE_JAR" ]]; then
   exit 1
 fi
 mkdir -p "$ROOT/dist/bundled-bridge"
+cp "$BRIDGE_JAR" "$ROOT/dist/bundled-bridge/minesport-bridge-${BRIDGE_VERSION}.jar"
+# Compatibility alias for older local manifests; new manifests/package data use 0.2.0.
 cp "$BRIDGE_JAR" "$ROOT/dist/bundled-bridge/minesport-bridge-0.1.0.jar"
-echo "Bundled bridge staged: dist/bundled-bridge/minesport-bridge-0.1.0.jar"
+echo "Bundled bridge staged: dist/bundled-bridge/minesport-bridge-${BRIDGE_VERSION}.jar"
 echo
 
 echo "[2/3] Building Java engine..."
@@ -137,14 +141,14 @@ if $BUILD_DEB; then
   echo
   echo "Building Debian package..."
   chmod +x installer/linux/build-deb.sh
-  installer/linux/build-deb.sh
+  MINESPORT_VERSION="$VERSION" installer/linux/build-deb.sh
 fi
 
 if $BUILD_APPIMAGE; then
   echo
   echo "Building AppImage..."
   chmod +x installer/linux/build-appimage.sh
-  installer/linux/build-appimage.sh
+  MINESPORT_VERSION="$VERSION" installer/linux/build-appimage.sh
 fi
 
 echo
