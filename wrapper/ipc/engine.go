@@ -393,6 +393,9 @@ func (e *Engine) exportPrepared(p ExportParams) {
 			e.OnLog("Skipping Fabric compatibility bridge for " + loader + " world")
 		}
 	}
+	if attachBridgeRegistry(&p, version, loader) && e.OnLog != nil {
+		e.OnLog("Using runtime Bridge registry captured from the current Fabric mod set")
+	}
 
 	req := Request{Command: "export", WorldPath: p.WorldPath, ModsPath: p.ModsPath, ModLoader: p.ModLoader, OutputPath: p.OutputPath, Format: p.Format, MinX: p.MinX, MinY: p.MinY, MinZ: p.MinZ, MaxX: p.MaxX, MaxY: p.MaxY, MaxZ: p.MaxZ, ExportMode: p.ExportMode, Options: p.Options, CenterX: p.CenterX, CenterY: p.CenterY, CenterZ: p.CenterZ, RadiusX: p.RadiusX, RadiusY: p.RadiusY, RadiusZ: p.RadiusZ}
 	if err := e.Send(req); err != nil && e.OnError != nil {
