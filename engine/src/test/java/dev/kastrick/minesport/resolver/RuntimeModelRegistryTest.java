@@ -71,6 +71,8 @@ class RuntimeModelRegistryTest {
 
         assertTrue(registry.shouldOverride(vanilla));
         assertTrue(registry.shouldOverride(modded));
+        assertEquals(RuntimeModelRegistry.StateKind.BAKED, registry.stateKind(vanilla));
+        assertEquals(RuntimeModelRegistry.StateKind.BAKED, registry.stateKind(modded));
         assertFalse(registry.shouldOverride(new BlockData(
             0, 0, 0,
             "minecraft:grass_block",
@@ -87,6 +89,55 @@ class RuntimeModelRegistryTest {
         assertEquals(10f, vertices[0][0], 1e-6f);
         assertEquals(64f, vertices[0][1], 1e-6f);
         assertEquals(-3f, vertices[0][2], 1e-6f);
+    }
+
+    @Test
+    void knownEmptyRuntimeStateDoesNotBecomeStaticFallbackCube() throws Exception {
+        File snapshot = File.createTempFile("minesport-runtime-empty-", ".json");
+        snapshot.deleteOnExit();
+        Files.writeString(snapshot.toPath(), """
+            {
+              "schema": 3,
+              "minecraftVersion": "1.21.10",
+              "modsFingerprint": "test",
+              "blocks": {
+                "example:dynamic_block": {
+                  "loaderType": "fabric",
+                  "variants": [
+                    {"properties": {"powered": "false"}, "quads": []}
+                  ]
+                }
+              }
+            }
+            """);
+
+        RuntimeModelRegistry registry = RuntimeModelRegistry.load(snapshot, "1.21.10", null);
+        assertNotNull(registry);
+
+        BlockData knownEmpty = new BlockData(
+            0, 0, 0,
+            "example:dynamic_block",
+            Map.of("powered", "false")
+        );
+        assertEquals(RuntimeModelRegistry.StateKind.EMPTY_BAKED_MODEL, registry.stateKind(knownEmpty));
+        assertTrue(registry.shouldOverride(knownEmpty));
+        assertNotNull(registry.build(knownEmpty));
+        assertTrue(registry.build(knownEmpty).isEmpty());
+
+        knownEmpty.runtimeRegistryPath = snapshot.getAbsolutePath();
+        var geometry = new dev.kastrick.minesport.GeometryBuilder(new ResolverChain());
+        assertTrue(
+            geometry.buildBlock(knownEmpty).isEmpty(),
+            "known empty runtime state must not fall through to static/fallback geometry"
+        );
+
+        BlockData unknownState = new BlockData(
+            0, 0, 0,
+            "example:dynamic_block",
+            Map.of("powered", "true")
+        );
+        assertEquals(RuntimeModelRegistry.StateKind.UNKNOWN, registry.stateKind(unknownState));
+        assertFalse(registry.shouldOverride(unknownState));
     }
 
     @Test
