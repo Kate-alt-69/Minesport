@@ -11,7 +11,7 @@ case "$ARCH_RAW" in
   *) echo "ERROR: unsupported Debian architecture: $ARCH_RAW" >&2; exit 1 ;;
 esac
 
-BIN="$ROOT/wrapper/dist/minesport"
+BIN="$ROOT/desktop/dist/minesport"
 MANIFEST="$ROOT/bridge-versions/manifest.json"
 BRIDGE="$ROOT/dist/bundled-bridge/minesport-bridge-${BRIDGE_VERSION}.jar"
 OUT="$ROOT/dist/installer"
@@ -57,7 +57,7 @@ Architecture: $DEB_ARCH
 Maintainer: Kastrick
 Depends: libgl1, libx11-6, libxcursor1, libxrandr2, libxinerama1, libxi6
 Description: Minesport Minecraft world exporter
- Exports Minecraft worlds and modded block geometry for DCC applications.
+ Rust + Slint desktop for exporting Minecraft worlds and modded block geometry for DCC applications.
 EOF
 chmod 0644 "$PKGROOT/DEBIAN/control"
 
