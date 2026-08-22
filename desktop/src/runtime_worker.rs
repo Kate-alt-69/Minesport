@@ -98,9 +98,6 @@ where
 
     listen_rx.recv_timeout(Duration::from_secs(5)).context("wait for Rust runtime registry receiver")??;
 
-    // Once the listener exists, launch even when cancellation raced this point;
-    // doing so guarantees the accept/read thread receives a connection that can
-    // be closed cleanly instead of leaking a blocked receiver in the backend.
     progress(Progress { percent: 12, message: "Receiver ready · starting local Fabric/Loom client…".into() });
     let log_path = workspace.join("runtime-worker.log");
     let mut child = start_gradle_worker(&workspace, &log_path)?;
@@ -220,19 +217,54 @@ fn sanitize_java_environment(command: &mut Command) {
         }
     }
 
-    if let Some(java) = find_java_on_path() {
-        if let Some(home) = java.parent().and_then(Path::parent) {
-            command.env("JAVA_HOME", home);
-            let current = env::var_os("PATH").unwrap_or_default();
-            let mut paths = vec![home.join("bin")];
-            paths.extend(env::split_paths(&current));
-            if let Ok(joined) = env::join_paths(paths) { command.env("PATH", joined); }
-        }
+    // Never manufacture JAVA_HOME from Oracle's Windows javapath shim. Only
+    // publish JAVA_HOME after proving the candidate contains a real JDK.
+    if let Some(home) = resolve_jdk_home() {
+        command.env("JAVA_HOME", &home);
+        command.env("GRADLE_JAVA_HOME", &home);
+        let current = env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![home.join("bin")];
+        paths.extend(env::split_paths(&current));
+        if let Ok(joined) = env::join_paths(paths) { command.env("PATH", joined); }
     }
 }
 
-fn find_java_on_path() -> Option<PathBuf> {
-    let executable = if cfg!(windows) { "java.exe" } else { "java" };
+fn resolve_jdk_home() -> Option<PathBuf> {
+    for key in ["JAVA_HOME", "JDK_HOME", "GRADLE_JAVA_HOME"] {
+        if let Some(home) = env::var_os(key).map(PathBuf::from) {
+            if valid_jdk_home(&home) { return Some(home); }
+        }
+    }
+
+    if let Some(javac) = find_on_path(if cfg!(windows) { "javac.exe" } else { "javac" }) {
+        if let Some(home) = javac.parent().and_then(Path::parent).map(Path::to_path_buf) {
+            if valid_jdk_home(&home) { return Some(home); }
+        }
+    }
+
+    // `java.home` resolves through launch shims to the actual runtime location,
+    // unlike simply taking parent-of-parent of a PATH entry. Accept it only if
+    // the resolved home also contains javac.
+    if let Some(java) = find_on_path(if cfg!(windows) { "java.exe" } else { "java" }) {
+        let output = Command::new(java).args(["-XshowSettings:properties", "-version"]).output().ok()?;
+        let text = String::from_utf8_lossy(&output.stderr);
+        for line in text.lines() {
+            let trimmed = line.trim();
+            let Some(value) = trimmed.strip_prefix("java.home =") else { continue; };
+            let home = PathBuf::from(value.trim());
+            if valid_jdk_home(&home) { return Some(home); }
+        }
+    }
+    None
+}
+
+fn valid_jdk_home(home: &Path) -> bool {
+    let bin = home.join("bin");
+    bin.join(if cfg!(windows) { "java.exe" } else { "java" }).is_file()
+        && bin.join(if cfg!(windows) { "javac.exe" } else { "javac" }).is_file()
+}
+
+fn find_on_path(executable: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path).map(|entry| entry.join(executable)).find(|candidate| candidate.is_file())
 }
@@ -355,5 +387,11 @@ mod tests {
     fn workspace_uses_embedded_gradle_wrapper() {
         assert!(!GRADLEW_BAT.is_empty());
         assert!(!GRADLE_WRAPPER_JAR.is_empty());
+    }
+
+    #[test]
+    fn fake_oracle_javapath_parent_is_not_a_jdk() {
+        let fake = Path::new(r"C:\Program Files\Common Files\Oracle\Java");
+        assert!(!valid_jdk_home(fake));
     }
 }
