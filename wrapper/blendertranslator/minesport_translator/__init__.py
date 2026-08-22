@@ -80,6 +80,7 @@ def register():
     _register_optional("edit_mode")
     _register_optional("flatter_overlay")
     _register_optional("flatter_map")
+    _register_optional("flatter_map_live")
     _register_optional("obj_import")
     _register_optional("gltf_import")
     _register_optional("roundtrip")
@@ -92,6 +93,7 @@ def unregister():
         "roundtrip",
         "gltf_import",
         "obj_import",
+        "flatter_map_live",
         "flatter_map",
         "flatter_overlay",
         "edit_mode",
