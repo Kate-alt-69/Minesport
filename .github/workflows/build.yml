@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   fabric-bridge-bundled:
-    name: Bundled bridge · 1.21.9–1.21.10 · Java 21
+    name: Bundled Bridge · 1.21.9–1.21.10 · Java 21
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -37,10 +37,10 @@ jobs:
             -Pminecraft_version=1.21.9 \
             -Ploader_version=0.18.5 \
             '-Pfabric_version=0.134.1+1.21.9'
-      - name: Build canonical bundled 1.21.10 bridge
+      - name: Build canonical bundled 1.21.10 Bridge
         working-directory: bridge
         run: ./gradlew --no-daemon --stacktrace clean build
-      - name: Stage canonical bundled bridge
+      - name: Stage canonical bundled Bridge
         run: |
           mkdir -p dist/bundled-bridge
           jar="$(find bridge/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' -print -quit)"
@@ -51,76 +51,6 @@ jobs:
         with:
           name: fabric-bridge-1.21.10
           path: dist/bundled-bridge/
-          if-no-files-found: error
-          retention-days: 7
-
-  bridge-recipe-tests:
-    name: Bridge recipe engine · headless Go tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: wrapper/go.mod
-          cache-dependency-path: wrapper/go.sum
-      - name: Test compatibility backend only
-        working-directory: wrapper
-        env:
-          MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
-        run: go test ./bridgecompat ./bridgecapture ./cacheclean ./ipc ./launcher ./processutil
-
-  fabric-bridge-recipes:
-    name: Dynamic bridge · ${{ matrix.minecraft }} · Java ${{ matrix.java }}
-    needs: bridge-recipe-tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        include:
-          - { minecraft: '1.21', java: '21' }
-          - { minecraft: '1.21.1', java: '21' }
-          - { minecraft: '1.21.2', java: '21' }
-          - { minecraft: '1.21.3', java: '21' }
-          - { minecraft: '1.21.4', java: '21' }
-          - { minecraft: '1.21.5', java: '21' }
-          - { minecraft: '1.21.6', java: '21' }
-          - { minecraft: '1.21.7', java: '21' }
-          - { minecraft: '1.21.8', java: '21' }
-          - { minecraft: '1.21.11', java: '21' }
-          - { minecraft: '26.1', java: '25' }
-          - { minecraft: '26.1.2', java: '25' }
-          - { minecraft: '26.2', java: '25' }
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.java }}
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: wrapper/go.mod
-          cache-dependency-path: wrapper/go.sum
-      - uses: gradle/actions/setup-gradle@v6
-      - name: Generate and compile compatibility bridge
-        working-directory: wrapper
-        env:
-          MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
-          MINESPORT_BRIDGE_DATA: ${{ runner.temp }}/minesport-bridge-data
-        run: |
-          go run ./cmd/bridge-prepare \
-            -version '${{ matrix.minecraft }}' \
-            -output ../dist/recipe-bridges
-      - uses: actions/upload-artifact@v7
-        with:
-          name: fabric-bridge-recipe-${{ matrix.minecraft }}
-          path: dist/recipe-bridges/*.jar
           if-no-files-found: error
           retention-days: 7
 
@@ -149,6 +79,103 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  rust-core:
+    name: Rust core + Slint contract
+    needs: [fabric-bridge-bundled, java-engine]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+      - uses: actions/download-artifact@v7
+        with:
+          name: fabric-bridge-1.21.10
+          path: dist/bundled-bridge
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+      - name: Install Linux Slint dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+      - name: Test Rust core and compile Slint UI
+        run: cargo test --manifest-path desktop/Cargo.toml --all-targets
+      - name: Check release build
+        run: cargo check --release --manifest-path desktop/Cargo.toml --all-targets
+
+  fabric-bridge-recipes:
+    name: Rust recipe · ${{ matrix.minecraft }} · Java ${{ matrix.java }}
+    needs: [fabric-bridge-bundled, java-engine, rust-core]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - { minecraft: '1.19', java: '17' }
+          - { minecraft: '1.19.4', java: '17' }
+          - { minecraft: '1.20.1', java: '17' }
+          - { minecraft: '1.20.4', java: '17' }
+          - { minecraft: '1.21', java: '21' }
+          - { minecraft: '1.21.1', java: '21' }
+          - { minecraft: '1.21.2', java: '21' }
+          - { minecraft: '1.21.3', java: '21' }
+          - { minecraft: '1.21.4', java: '21' }
+          - { minecraft: '1.21.5', java: '21' }
+          - { minecraft: '1.21.6', java: '21' }
+          - { minecraft: '1.21.7', java: '21' }
+          - { minecraft: '1.21.8', java: '21' }
+          - { minecraft: '1.21.11', java: '21' }
+          - { minecraft: '26.1', java: '25' }
+          - { minecraft: '26.1.2', java: '25' }
+          - { minecraft: '26.2', java: '25' }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+      - uses: actions/download-artifact@v7
+        with:
+          name: fabric-bridge-1.21.10
+          path: dist/bundled-bridge
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install Rust/Slint build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+      - name: Generate and compile compatibility Bridge with Rust
+        run: |
+          cargo run --manifest-path desktop/Cargo.toml --bin bridge-prepare -- \
+            --version '${{ matrix.minecraft }}' \
+            --output dist/recipe-bridges
+          test -s "dist/recipe-bridges/minesport-bridge-${{ matrix.minecraft }}.jar"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fabric-bridge-recipe-${{ matrix.minecraft }}
+          path: dist/recipe-bridges/*.jar
+          if-no-files-found: error
+          retention-days: 7
+
   blender-translator:
     name: Blender translator · Python 3.13
     runs-on: ubuntu-latest
@@ -167,16 +194,16 @@ jobs:
 
   desktop:
     name: Rust + Slint desktop · ${{ matrix.name }}
-    needs: java-engine
+    needs: [fabric-bridge-bundled, java-engine, rust-core]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: 'Linux amd64', os: ubuntu-latest, binary: minesport }
-          - { name: 'Windows amd64', os: windows-latest, binary: minesport.exe }
-          - { name: 'macOS', os: macos-latest, binary: minesport }
+          - { name: 'Linux amd64', os: ubuntu-latest, binary: minesport, artifact: 'minesport-desktop-Linux-X64' }
+          - { name: 'Windows amd64', os: windows-latest, binary: minesport.exe, artifact: 'minesport-desktop-Windows-X64' }
+          - { name: 'macOS', os: macos-latest, binary: minesport, artifact: 'minesport-desktop-macOS-X64' }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -185,6 +212,10 @@ jobs:
         with:
           name: minesport-engine-ci
           path: engine/build/libs
+      - uses: actions/download-artifact@v7
+        with:
+          name: fabric-bridge-1.21.10
+          path: dist/bundled-bridge
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92.0
@@ -195,23 +226,26 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
-      - name: Test Rust desktop and compile Slint UI
+      - name: Test Rust desktop and Slint UI
         shell: bash
         run: cargo test --manifest-path desktop/Cargo.toml
       - name: Build Rust desktop release
         shell: bash
-        run: cargo build --release --manifest-path desktop/Cargo.toml
-      - name: Smoke test headless CLI
+        run: cargo build --release --manifest-path desktop/Cargo.toml --bin minesport
+      - name: Smoke test CLI and stage artifact
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
             ./desktop/target/release/minesport.exe --version
             ./desktop/target/release/minesport.exe --help
-            mkdir -p dist/source
+            mkdir -p desktop/dist dist/source
+            cp desktop/target/release/minesport.exe desktop/dist/minesport.exe
             cp desktop/target/release/minesport.exe dist/source/Minesport.exe
           else
             ./desktop/target/release/minesport --version
             ./desktop/target/release/minesport --help
+            mkdir -p desktop/dist
+            cp desktop/target/release/minesport desktop/dist/minesport
           fi
       - name: Validate Bash packaging scripts
         if: runner.os == 'Linux'
@@ -242,8 +276,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'build.bat --help failed.' }
       - uses: actions/upload-artifact@v7
         with:
-          name: minesport-desktop-${{ runner.os }}-${{ runner.arch }}
-          path: desktop/target/release/${{ matrix.binary }}
+          name: ${{ matrix.artifact }}
+          path: desktop/dist/${{ matrix.binary }}
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v7
@@ -379,9 +413,9 @@ jobs:
     if: always()
     needs:
       - fabric-bridge-bundled
-      - bridge-recipe-tests
-      - fabric-bridge-recipes
       - java-engine
+      - rust-core
+      - fabric-bridge-recipes
       - blender-translator
       - desktop
       - windows-installer
@@ -390,9 +424,9 @@ jobs:
     timeout-minutes: 5
     env:
       BUNDLED_BRIDGE_RESULT: ${{ needs.fabric-bridge-bundled.result }}
-      RECIPE_TEST_RESULT: ${{ needs.bridge-recipe-tests.result }}
-      RECIPE_BRIDGE_RESULT: ${{ needs.fabric-bridge-recipes.result }}
       ENGINE_RESULT: ${{ needs.java-engine.result }}
+      RUST_CORE_RESULT: ${{ needs.rust-core.result }}
+      RECIPE_BRIDGE_RESULT: ${{ needs.fabric-bridge-recipes.result }}
       TRANSLATOR_RESULT: ${{ needs.blender-translator.result }}
       DESKTOP_RESULT: ${{ needs.desktop.result }}
       WIN_INSTALLER_RESULT: ${{ needs.windows-installer.result }}
@@ -403,14 +437,14 @@ jobs:
         continue-on-error: true
         run: |
           {
-            echo "## Minesport compile report"
+            echo "## Minesport 0.2.0 compile report"
             echo
             echo "| Component | Result |"
             echo "|---|---|"
-            echo "| Bundled bridge · 1.21.9–1.21.10 | $BUNDLED_BRIDGE_RESULT |"
-            echo "| Compatibility backend tests | $RECIPE_TEST_RESULT |"
-            echo "| Dynamic bridge matrix | $RECIPE_BRIDGE_RESULT |"
+            echo "| Bundled Bridge · 1.21.9–1.21.10 | $BUNDLED_BRIDGE_RESULT |"
             echo "| Java engine | $ENGINE_RESULT |"
+            echo "| Rust core + Slint contract | $RUST_CORE_RESULT |"
+            echo "| Rust compatibility Bridge matrix | $RECIPE_BRIDGE_RESULT |"
             echo "| Blender translator | $TRANSLATOR_RESULT |"
             echo "| Rust + Slint desktop | $DESKTOP_RESULT |"
             echo "| Windows installers | $WIN_INSTALLER_RESULT |"
@@ -418,15 +452,15 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$BUNDLED_BRIDGE_RESULT" = success ] && \
-             [ "$RECIPE_TEST_RESULT" = success ] && \
-             [ "$RECIPE_BRIDGE_RESULT" = success ] && \
              [ "$ENGINE_RESULT" = success ] && \
+             [ "$RUST_CORE_RESULT" = success ] && \
+             [ "$RECIPE_BRIDGE_RESULT" = success ] && \
              [ "$TRANSLATOR_RESULT" = success ] && \
              [ "$DESKTOP_RESULT" = success ] && \
              [ "$WIN_INSTALLER_RESULT" = success ] && \
              [ "$LINUX_INSTALLER_RESULT" = success ]; then
             echo 'result=success' >> "$GITHUB_OUTPUT"
-            echo '✅ Supported Minesport 0.2.0 components compiled, tested, and packaged cleanly.' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '✅ Rust/Slint Minesport 0.2.0 compiled, tested, and packaged cleanly.' | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo 'result=failure' >> "$GITHUB_OUTPUT"
             echo '❌ One or more required compile/package jobs failed.' | tee -a "$GITHUB_STEP_SUMMARY"
@@ -440,7 +474,7 @@ jobs:
         run: |
           state="$VERDICT"
           if [ "$state" != success ]; then state=failure; fi
-          description='Supported Rust/Slint Minesport builds and packages passed'
+          description='Rust/Slint Minesport builds and packages passed'
           if [ "$state" != success ]; then description='One or more required CI jobs failed'; fi
           payload="$(printf '{\"state\":\"%s\",\"context\":\"Minesport/full-ci\",\"description\":\"%s\",\"target_url\":\"https://github.com/%s/actions/runs/%s\"}' "$state" "$description" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
           curl --fail-with-body --silent --show-error \
