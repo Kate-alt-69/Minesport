@@ -3,7 +3,7 @@
   "id": "minesport_bridge",
   "version": "${version}",
   "name": "Minesport Bridge",
-  "description": "Headless bridge mod — dumps block geometry and textures to Minesport engine via local socket. Auto-exits after dump. Not intended for normal gameplay.",
+  "description": "Minesport runtime-registry bridge — captures registered block states, baked geometry, texture identifiers and light metadata through an isolated client worker, then exits. Not intended for normal gameplay.",
   "authors": ["Kastrick"],
   "environment": "client",
   "entrypoints": {
