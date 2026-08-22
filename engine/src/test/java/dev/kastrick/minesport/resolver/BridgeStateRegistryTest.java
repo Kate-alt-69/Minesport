@@ -76,12 +76,12 @@ class BridgeStateRegistryTest {
     }
 
     @Test
-    void tagsVanillaAndModdedBlocksWithSchema2RuntimeGeometry() throws Exception {
+    void tagsVanillaAndModdedBlocksWithSchema3RuntimeGeometry() throws Exception {
         File snapshot = File.createTempFile("minesport-runtime-registry-", ".json");
         snapshot.deleteOnExit();
         Files.writeString(snapshot.toPath(), """
             {
-              "schema": 2,
+              "schema": 3,
               "minecraftVersion": "1.21.10",
               "modsFingerprint": "test",
               "blocks": {
