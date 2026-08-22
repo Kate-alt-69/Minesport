@@ -8,15 +8,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Per-export spatial context shared by geometry builders created later in the
- * same IPC request (including FLATTER's runtime-aware builder).
+ * Per-export spatial context handed from multipart resolution to the primary
+ * export GeometryBuilder.
  *
  * The engine processes one export command on one request thread. Multipart
- * resolution already receives the complete selected block list before geometry
- * construction, so it is the natural place to seed this context. Keeping the
- * map thread-local avoids global cross-export state while making liquid slopes,
- * waterlogging and transparent-neighbour rules independent of optimization
- * toggles such as face culling.
+ * resolution receives the complete selected block list before geometry
+ * construction, so it is the natural place to seed neighbour-aware geometry.
+ * The primary builder consumes this map once and keeps the strong reference for
+ * the duration of the export; the ThreadLocal is removed immediately so a large
+ * completed world cannot remain pinned between IPC commands.
  */
 public final class ExportWorldContext {
     private static final ThreadLocal<Map<Long, BlockData>> CURRENT =
@@ -38,8 +38,19 @@ public final class ExportWorldContext {
         CURRENT.set(Collections.unmodifiableMap(index));
     }
 
+    /** Read without consuming; retained for focused tests/tools. */
     public static Map<Long, BlockData> currentIndex() {
         return CURRENT.get();
+    }
+
+    /**
+     * Transfer ownership of the current map to the primary export builder and
+     * immediately clear the ThreadLocal reference.
+     */
+    public static Map<Long, BlockData> takeIndex() {
+        Map<Long, BlockData> index = CURRENT.get();
+        CURRENT.remove();
+        return index;
     }
 
     public static void clear() {
