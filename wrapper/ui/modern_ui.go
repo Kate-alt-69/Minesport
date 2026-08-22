@@ -54,7 +54,8 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	// Engine resolvers can emit hundreds of lines in a burst. Repainting the
 	// entire debug label for every line can starve Fyne's UI/layout locks and
 	// make the workbench appear completely frozen even while the engine is idle.
-	// Preserve every line, but coalesce visual updates to ~8 Hz.
+	// Preserve every line, coalesce visual updates to ~8 Hz, and always perform
+	// the actual widget mutation on Fyne's ordered window event queue.
 	engineLogQueue := make(chan string, 4096)
 	go func() {
 		ticker := time.NewTicker(125 * time.Millisecond)
@@ -64,8 +65,9 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 			if len(pending) == 0 {
 				return
 			}
-			ms.appendLog(strings.Join(pending, "\n"))
+			batch := strings.Join(pending, "\n")
 			pending = pending[:0]
+			ms.dispatchUI(func() { ms.appendLog(batch) })
 		}
 		for {
 			select {
@@ -84,22 +86,26 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 		engineLogQueue <- msg
 	}
 	ms.engine.OnProgress = func(pct int, msg string) {
-		ms.updateModernExportProgress(pct, msg)
+		ms.dispatchUI(func() { ms.updateModernExportProgress(pct, msg) })
 	}
 	ms.engine.OnDone = func(resp ipc.Response) {
-		ms.finishModernExport(resp, true, "")
+		ms.dispatchUI(func() { ms.finishModernExport(resp, true, "") })
 	}
 	ms.engine.OnError = func(msg string) {
-		ms.appendLog("Engine operation failed: " + msg)
-		if ms.workbenchExportActive() {
-			ms.finishModernExport(ipc.Response{}, false, msg)
-			return
-		}
-		ms.showOperationFailure("Core engine operation failed", msg)
+		ms.dispatchUI(func() {
+			ms.appendLog("Engine operation failed: " + msg)
+			if ms.workbenchExportActive() {
+				ms.finishModernExport(ipc.Response{}, false, msg)
+				return
+			}
+			ms.showOperationFailure("Core engine operation failed", msg)
+		})
 	}
 	ms.engine.OnExit = func(msg string) {
-		ms.appendLog("Core engine stopped: " + msg)
-		ms.handleCoreEngineFailure(msg)
+		ms.dispatchUI(func() {
+			ms.appendLog("Core engine stopped: " + msg)
+			ms.handleCoreEngineFailure(msg)
+		})
 	}
 	if diagnosticsLogPath != "" {
 		ms.appendLog("Persistent diagnostics log: " + diagnosticsLogPath)
@@ -113,12 +119,16 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	} else {
 		go func() {
 			if err := ms.engine.Ping(15 * time.Second); err != nil {
-				ms.handleCoreEngineFailure("The Java process started but IPC did not become ready: " + err.Error())
+				ms.dispatchUI(func() {
+					ms.handleCoreEngineFailure("The Java process started but IPC did not become ready: " + err.Error())
+				})
 				return
 			}
-			ms.setEngineAvailable(true)
-			ms.appendLog("Core engine readiness check passed")
-			maybePromptBlenderTranslator(ms)
+			ms.dispatchUI(func() {
+				ms.setEngineAvailable(true)
+				ms.appendLog("Core engine readiness check passed")
+				maybePromptBlenderTranslator(ms)
+			})
 		}()
 	}
 
@@ -323,18 +333,6 @@ func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg strin
 		return
 	}
 
-	ms.updateMetaHUD(fmt.Sprintf(
-		"%s blocks · %s faces · %s verts",
-		formatCount(resp.BlockCount),
-		formatCount(resp.QuadCount),
-		formatCount(resp.VertexCount),
-	))
-	ms.finishWorkbenchTaskV3(
-		true,
-		"Export complete",
-		fmt.Sprintf("%s blocks · %s faces · %s vertices", formatCount(resp.BlockCount), formatCount(resp.QuadCount), formatCount(resp.VertexCount)),
-	)
-
 	exportedPath := resp.Output
 	if exportedPath == "" {
 		name := sanitizeExportName(ms.exportNameEntry.Text)
@@ -348,7 +346,29 @@ func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg strin
 		exportedPath = filepath.Join(ms.outputPath, name+ext)
 	}
 
-	ms.showModernExportComplete(exportedPath, resp)
+	ms.updateMetaHUD(fmt.Sprintf(
+		"%s blocks · %s faces · %s verts",
+		formatCount(resp.BlockCount),
+		formatCount(resp.QuadCount),
+		formatCount(resp.VertexCount),
+	))
+	ms.finishWorkbenchTaskV3(
+		true,
+		"Export complete",
+		fmt.Sprintf(
+			"%s · %s blocks · %s faces · %s vertices",
+			filepath.Base(exportedPath),
+			formatCount(resp.BlockCount),
+			formatCount(resp.QuadCount),
+			formatCount(resp.VertexCount),
+		),
+	)
+	ms.appendLog("Export complete: " + exportedPath)
+
+	// Do not automatically open a modal completion dialog. The workbench task
+	// shelf already reports success and the old background-created modal could
+	// retain an invisible input grab after export, making the whole app appear
+	// frozen. Completion is now non-blocking.
 }
 
 func (ms *MinesportApp) showModernExportComplete(exportedPath string, resp ipc.Response) {
