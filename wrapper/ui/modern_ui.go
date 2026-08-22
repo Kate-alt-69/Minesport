@@ -30,8 +30,10 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	ms.settings = LoadSettings()
 	ms.engine = ipc.NewEngine(jarPath)
 	w.SetContent(ms.buildModernUI())
+	ms.installWorkbenchEnhancements()
 	ms.installViewportShortcuts()
 	w.SetCloseIntercept(func() {
+		cleanupWorkbenchEnhancements(ms)
 		cleanupWorkbenchRuntimeV3(ms)
 		workbenchStates.Delete(ms)
 		if ms.embeddedViewer != nil {
