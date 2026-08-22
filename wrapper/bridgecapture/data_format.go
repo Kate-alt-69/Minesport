@@ -11,19 +11,22 @@ import (
 )
 
 const (
-	registryDataMagic        = "MSREGD01"
-	maxRegistryStringBytes   = 4 << 20
-	maxRegistryBlocks        = 1_000_000
-	maxRegistryVariants      = 1_000_000
-	maxRegistryQuads         = 20_000_000
-	maxRegistryProperties    = 4096
-	maxRegistryLoadedMods    = 100_000
+	registryDataMagic      = "MSREGD01"
+	maxRegistryStringBytes = 4 << 20
+	maxRegistryBlocks      = 1_000_000
+	maxRegistryVariants    = 1_000_000
+	maxRegistryQuads       = 20_000_000
+	maxRegistryProperties  = 4096
+	maxRegistryLoadedMods  = 100_000
 )
 
 // writeSnapshotData stores runtime geometry in a compact deterministic binary
 // representation. The Bridge wire protocol remains newline JSON for easy
 // compatibility debugging; this format is only the persistent hot-path cache.
 func writeSnapshotData(writer io.Writer, snapshot Snapshot) error {
+	if snapshot.Schema != SnapshotSchema {
+		return fmt.Errorf("unsupported runtime registry schema %d; expected %d", snapshot.Schema, SnapshotSchema)
+	}
 	w := bufio.NewWriterSize(writer, 256*1024)
 	if _, err := w.WriteString(registryDataMagic); err != nil {
 		return err
@@ -114,6 +117,9 @@ func writeSnapshotData(writer io.Writer, snapshot Snapshot) error {
 			return err
 		}
 		for _, light := range block.Lights {
+			if light.LightLevel < 0 || light.LightLevel > 15 {
+				return fmt.Errorf("runtime light level %d for %s is outside 0..15", light.LightLevel, blockID)
+			}
 			if err := writeStringMap(w, light.Properties); err != nil {
 				return err
 			}
@@ -137,6 +143,9 @@ func readSnapshotData(reader io.Reader) (Snapshot, error) {
 	var schema int32
 	if err := binary.Read(r, binary.BigEndian, &schema); err != nil {
 		return Snapshot{}, err
+	}
+	if int(schema) != SnapshotSchema {
+		return Snapshot{}, fmt.Errorf("unsupported runtime registry schema %d; expected %d", schema, SnapshotSchema)
 	}
 	minecraftVersion, err := readDataString(r)
 	if err != nil {
@@ -230,10 +239,10 @@ func readSnapshotData(reader io.Reader) (Snapshot, error) {
 					return Snapshot{}, err
 				}
 				quads[quadIndex] = BakedQuad{
-					Vertices: vertices,
+					Vertices:  vertices,
 					TextureID: textureID,
-					Face: int(face),
-					Shade: shade == 1,
+					Face:      int(face),
+					Shade:     shade == 1,
 					TintIndex: int(tintIndex),
 				}
 			}
@@ -254,24 +263,27 @@ func readSnapshotData(reader io.Reader) (Snapshot, error) {
 			if err := binary.Read(r, binary.BigEndian, &level); err != nil {
 				return Snapshot{}, err
 			}
+			if level < 0 || level > 15 {
+				return Snapshot{}, fmt.Errorf("runtime registry contains invalid light level %d", level)
+			}
 			lights[lightIndex] = LightState{Properties: properties, LightLevel: int(level)}
 		}
 		blocks[blockID] = RuntimeBlock{
 			VanillaMapping: vanillaMapping,
-			LoaderType: loaderType,
-			Variants: variants,
-			Lights: lights,
+			LoaderType:     loaderType,
+			Variants:       variants,
+			Lights:         lights,
 		}
 	}
 
 	return Snapshot{
-		Schema: int(schema),
+		Schema:           int(schema),
 		MinecraftVersion: minecraftVersion,
-		LoaderVersion: loaderVersion,
-		LoadedMods: loadedMods,
-		ModsFingerprint: fingerprint,
-		Blocks: blocks,
-		CapturedAt: capturedAt,
+		LoaderVersion:    loaderVersion,
+		LoadedMods:       loadedMods,
+		ModsFingerprint:  fingerprint,
+		Blocks:           blocks,
+		CapturedAt:       capturedAt,
 	}, nil
 }
 
