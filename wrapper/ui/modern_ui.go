@@ -54,8 +54,37 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 		ms.openDebugConsole()
 	}
 
+	// Engine resolvers can emit hundreds of lines in a burst. Repainting the
+	// entire debug label for every line can starve Fyne's UI/layout locks and
+	// make the workbench appear completely frozen even while the engine is idle.
+	// Preserve every line, but coalesce visual updates to ~8 Hz.
+	engineLogQueue := make(chan string, 4096)
+	go func() {
+		ticker := time.NewTicker(125 * time.Millisecond)
+		defer ticker.Stop()
+		pending := make([]string, 0, 128)
+		flush := func() {
+			if len(pending) == 0 {
+				return
+			}
+			ms.appendLog(strings.Join(pending, "\n"))
+			pending = pending[:0]
+		}
+		for {
+			select {
+			case msg := <-engineLogQueue:
+				pending = append(pending, msg)
+				if len(pending) >= 128 {
+					flush()
+				}
+			case <-ticker.C:
+				flush()
+			}
+		}
+	}()
+
 	ms.engine.OnLog = func(msg string) {
-		ms.appendLog(msg)
+		engineLogQueue <- msg
 	}
 	ms.engine.OnProgress = func(pct int, msg string) {
 		ms.updateModernExportProgress(pct, msg)
