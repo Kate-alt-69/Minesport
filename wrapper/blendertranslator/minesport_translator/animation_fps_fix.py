@@ -3,9 +3,12 @@
 The exported schedule contains one entry per Minecraft tick. Blender scene FPS
 is presentation timing and may change after import, so the driver sampler must
 convert 20 Minecraft ticks/second using the scene's CURRENT FPS rather than a
-value baked when the material was translated.
+value baked when the material was translated. Timeline markers are refreshed by
+Blender's RNA message bus only when FPS/FPS-base actually changes; there is no
+per-frame or depsgraph polling cost.
 """
 
+import json
 import math
 
 import bpy
@@ -14,6 +17,7 @@ from . import animation_core
 
 
 _ORIGINAL_REGISTER = None
+_MSGBUS_OWNER = object()
 
 
 def _register_live_fps_drivers(material):
@@ -27,7 +31,9 @@ def _register_live_fps_drivers(material):
     base = animation_core._driver_base(material.name)
     x_name = base + "_x"
     y_name = base + "_y"
-    scene = bpy.context.scene
+    scene = getattr(bpy.context, "scene", None)
+    if scene is None:
+        return None, None
 
     def sprite(frame, speed):
         try:
@@ -64,6 +70,40 @@ def _register_live_fps_drivers(material):
     return x_name, y_name
 
 
+def _refresh_texture_markers_for_fps_change():
+    for scene in bpy.data.scenes:
+        raw = scene.get("minesport_texture_timeline_json", "")
+        if not raw:
+            continue
+        try:
+            descriptors = json.loads(str(raw))
+        except Exception:
+            continue
+        if not isinstance(descriptors, list):
+            continue
+        try:
+            animation_core.install_texture_markers({"animations": descriptors}, scene)
+        except Exception as exc:
+            print(f"[Minesport Animation] FPS marker refresh failed for {scene.name}: {exc}")
+
+
+def _subscribe_fps_changes():
+    try:
+        bpy.msgbus.clear_by_owner(_MSGBUS_OWNER)
+        for prop in ("fps", "fps_base"):
+            bpy.msgbus.subscribe_rna(
+                key=(bpy.types.RenderSettings, prop),
+                owner=_MSGBUS_OWNER,
+                args=(),
+                notify=_refresh_texture_markers_for_fps_change,
+                options={"PERSISTENT"},
+            )
+    except Exception as exc:
+        # Animation remains live-FPS even if a particular Blender build rejects
+        # an RNA message-bus key; only automatic marker relayout is lost.
+        print(f"[Minesport Animation] FPS marker subscription unavailable: {exc}")
+
+
 def register():
     global _ORIGINAL_REGISTER
     if _ORIGINAL_REGISTER is None:
@@ -76,10 +116,15 @@ def register():
     for material in bpy.data.materials:
         if material is not None and animation_core.SCHEDULE_KEY in material:
             _register_live_fps_drivers(material)
+    _subscribe_fps_changes()
 
 
 def unregister():
     global _ORIGINAL_REGISTER
+    try:
+        bpy.msgbus.clear_by_owner(_MSGBUS_OWNER)
+    except Exception:
+        pass
     if _ORIGINAL_REGISTER is not None:
         animation_core._register_material_drivers = _ORIGINAL_REGISTER
         _ORIGINAL_REGISTER = None
