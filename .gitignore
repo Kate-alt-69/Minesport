@@ -9,3 +9,6 @@
 /**/go.sum
 /dist/**
 /wrapper/dist/**
+**/target/**
+/desktop/target/
+/desktop/dist/
