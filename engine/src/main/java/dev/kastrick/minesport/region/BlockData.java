@@ -23,6 +23,13 @@ public class BlockData {
 
     public boolean isMultipart  = false;   // flagged in Pass 1
 
+    /**
+     * Internal, export-only hint pointing at a verified runtime model registry.
+     * This is deliberately not a Minecraft state property, so local cache paths
+     * never leak into exported block metadata or affect block-state matching.
+     */
+    public transient String runtimeRegistryPath = "";
+
     public BlockData(int x, int y, int z, String blockId, Map<String, String> properties) {
         this.x = x;
         this.y = y;
