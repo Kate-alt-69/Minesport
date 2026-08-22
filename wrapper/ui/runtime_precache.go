@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/kastrick/minesport/bridgecapture"
+	"github.com/kastrick/minesport/bridgecompat"
 )
 
 // precacheRuntimeModelsForSelectedWorld prepares the complete Minecraft baked
@@ -58,6 +59,10 @@ func (ms *MinesportApp) precacheRuntimeModelsForSelectedWorld() {
 		return
 	}
 
+	// generateRuntimeModelCache flips the shared job state synchronously before
+	// launching its worker goroutine. Rebuild Settings now so an already-open
+	// Advanced pane immediately changes from NOT CACHED to PREPARING.
+	ms.refreshWorkbenchSettingsActivity()
 	ms.appendLog("Preparing full registered Minecraft block/model registry for " + version + " · selection bounds are not used")
 }
 
@@ -71,5 +76,5 @@ func (ms *MinesportApp) runtimeCacheIsPreparingForCurrentWorld() bool {
 	if !state.running {
 		return false
 	}
-	return state.version == strings.TrimSpace(ms.mcVersion) && strings.EqualFold(state.modsPath, ms.modsPath)
+	return state.version == bridgecompat.NormalizeVersion(ms.mcVersion) && strings.EqualFold(state.modsPath, ms.modsPath)
 }
