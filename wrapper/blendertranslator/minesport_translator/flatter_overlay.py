@@ -1,8 +1,8 @@
 """GPU-only 3D logical-block overview for selected FLATTER cells.
 
 The overlay never adds Blender mesh geometry. It reconstructs the complete
-logical voxel grid from the embedded palette/RLE payload and draws it as green
-viewport lines, so a heavily greedy FLATTER mesh still feels block-addressable
+logical voxel grid from the embedded palette/RLE payload and draws it as a
+viewport aid, so a heavily greedy FLATTER mesh still feels block-addressable
 in width, height and depth.
 """
 
@@ -21,8 +21,8 @@ _VIEW_HANDLE = None
 _TEXT_HANDLE = None
 _CACHE = {}
 
-_GREEN = (0.18, 1.0, 0.24, 0.58)
-_SELECTED_GREEN = (0.55, 1.0, 0.60, 1.0)
+_GREEN_RGB = (0.18, 1.0, 0.24)
+_SELECTED_GREEN_RGB = (0.55, 1.0, 0.60)
 
 _CUBE_EDGES = (
     (0, 1), (1, 2), (2, 3), (3, 0),
@@ -40,6 +40,16 @@ def _active_flatter():
     if not obj.select_get():
         return None
     return obj
+
+
+def _overlay_settings(obj):
+    props = getattr(obj, "minesport", None)
+    if props is None:
+        return "FULL", 0.58, False
+    mode = str(getattr(props, "flatter_overlay_mode", "FULL") or "FULL")
+    opacity = max(0.05, min(1.0, float(getattr(props, "flatter_overlay_opacity", 0.58))))
+    xray = bool(getattr(props, "flatter_overlay_xray", False))
+    return mode, opacity, xray
 
 
 def _payload_stamp(obj):
@@ -83,9 +93,6 @@ def _logical_edges(obj):
     center = flatter._vec3f(payload.get("center"), (0.0, 0.0, 0.0))
     edges = set()
 
-    # Deliberately draw every occupied voxel's cube edges, including edges on
-    # internal block boundaries. They are GPU overlay lines only; the actual
-    # Blender render mesh remains the aggressively greedy FLATTER mesh.
     for x, y, z in grid:
         corners = _cube_corners(x, y, z)
         for a, b in _CUBE_EDGES:
@@ -126,13 +133,13 @@ def _world_vertices(obj, local_vertices):
     return [tuple(matrix @ Vector(vertex)) for vertex in local_vertices]
 
 
-def _draw_lines(vertices, color, width):
+def _draw_lines(vertices, color, width, xray=False):
     if not vertices:
         return
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     batch = batch_for_shader(shader, "LINES", {"pos": vertices})
     gpu.state.blend_set("ALPHA")
-    gpu.state.depth_test_set("LESS_EQUAL")
+    gpu.state.depth_test_set("NONE" if xray else "LESS_EQUAL")
     gpu.state.line_width_set(width)
     shader.bind()
     shader.uniform_float("color", color)
@@ -146,10 +153,26 @@ def _draw_view():
     obj = _active_flatter()
     if obj is None:
         return
-    _draw_lines(_world_vertices(obj, _logical_edges(obj)), _GREEN, 1.25)
+    mode, opacity, xray = _overlay_settings(obj)
+    if mode == "OFF":
+        return
+
+    if mode == "FULL":
+        _draw_lines(
+            _world_vertices(obj, _logical_edges(obj)),
+            (*_GREEN_RGB, opacity),
+            1.25,
+            xray=xray,
+        )
+
     selected = _selected_edges(obj)
     if selected:
-        _draw_lines(_world_vertices(obj, selected), _SELECTED_GREEN, 2.5)
+        _draw_lines(
+            _world_vertices(obj, selected),
+            (*_SELECTED_GREEN_RGB, min(1.0, opacity + 0.35)),
+            2.5,
+            xray=xray,
+        )
 
 
 def _dimensions(payload):
@@ -169,6 +192,9 @@ def _dimensions(payload):
 def _draw_text():
     obj = _active_flatter()
     if obj is None:
+        return
+    mode_overlay, _opacity, _xray = _overlay_settings(obj)
+    if mode_overlay == "OFF":
         return
     count = int(obj.get("minesport_flatter_block_count", 0))
     mode = str(obj.get("minesport_object_mode") or "LOGICAL")

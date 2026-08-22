@@ -27,7 +27,8 @@ class glTF2ImportUserExtension:
 
     Normal Minesport metadata is translated one-shot into Blender-native data.
     FLATTER keeps lightweight Blender helper layers for logical block picking,
-    Liquid Merge animation, materialization, and GPU-only voxel overviews.
+    Liquid Merge animation, materialization, selection sets, and GPU-only voxel
+    overviews.
     """
 
     def __init__(self):
@@ -63,10 +64,12 @@ def register():
     flatter.register()
 
     # Keep experimental pieces independent. Registration order matters here:
-    # schema/runtime upgrades wrap the core first, Liquid Merge wraps that
-    # result, then UI/overlay/OBJ helpers consume the enriched objects.
+    # schema/runtime upgrades wrap the core first, Liquid Merge supplies the
+    # logical selection/proxy runtime, selection sets add safety and persistent
+    # named groups, then UI/overlay/OBJ helpers consume the enriched objects.
     _register_optional("flatter_runtime")
     _register_optional("liquid_merge")
+    _register_optional("selection_sets")
     _register_optional("liquid_ui")
     _register_optional("flatter_overlay")
     _register_optional("obj_import")
@@ -77,6 +80,7 @@ def unregister():
         "obj_import",
         "flatter_overlay",
         "liquid_ui",
+        "selection_sets",
         "liquid_merge",
         "flatter_runtime",
     ):

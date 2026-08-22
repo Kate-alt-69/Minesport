@@ -1,17 +1,10 @@
 import bpy
-from bpy.props import BoolProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 
 
 class MinesportProperties(bpy.types.PropertyGroup):
-    translated: BoolProperty(
-        name="Translated",
-        default=False,
-        options={"HIDDEN"},
-    )
-    source_block: StringProperty(
-        name="Minecraft block",
-        default="",
-    )
+    translated: BoolProperty(name="Translated", default=False, options={"HIDDEN"})
+    source_block: StringProperty(name="Minecraft block", default="")
     continuous_animation: BoolProperty(
         name="Continuous Animation",
         description="Play continuously animated Minecraft textures/effects prepared by the Minesport translator",
@@ -24,35 +17,57 @@ class MinesportProperties(bpy.types.PropertyGroup):
         min=0.0,
         soft_max=4.0,
     )
-    is_flatter: BoolProperty(
-        name="FLATTER",
-        default=False,
-        options={"HIDDEN"},
-    )
-    flatter_id: StringProperty(
-        name="FLATTER ID",
-        default="",
-        options={"HIDDEN"},
-    )
-    flatter_version: StringProperty(
-        name="FLATTER version",
-        default="",
-        options={"HIDDEN"},
-    )
-    flatter_block_count: IntProperty(
-        name="Logical blocks",
-        default=0,
-        min=0,
-        options={"HIDDEN"},
-    )
+    is_flatter: BoolProperty(name="FLATTER", default=False, options={"HIDDEN"})
+    flatter_id: StringProperty(name="FLATTER ID", default="", options={"HIDDEN"})
+    flatter_version: StringProperty(name="FLATTER version", default="", options={"HIDDEN"})
+    flatter_block_count: IntProperty(name="Logical blocks", default=0, min=0, options={"HIDDEN"})
     flatter_width: IntProperty(name="Width", default=0, min=0, options={"HIDDEN"})
     flatter_height: IntProperty(name="Height", default=0, min=0, options={"HIDDEN"})
     flatter_depth: IntProperty(name="Depth", default=0, min=0, options={"HIDDEN"})
-    flatter_selected: StringProperty(
-        name="Selected logical block",
-        default="",
-        options={"HIDDEN"},
+    flatter_selected: StringProperty(name="Selected logical block", default="", options={"HIDDEN"})
+
+    flatter_interaction_mode: EnumProperty(
+        name="Interaction",
+        description="How Minesport interprets logical FLATTER interaction in the viewport",
+        items=(
+            ("INSPECT", "Inspect", "Inspect logical blocks without changing the liquid selection"),
+            ("SELECT", "Select", "Select individual logical blocks"),
+            ("BOX", "Box Select", "Select occupied logical blocks between two picked corners"),
+            ("MATERIALIZE", "Materialize", "Turn the clicked logical block into a Blender mesh object"),
+        ),
+        default="SELECT",
     )
+    flatter_overlay_mode: EnumProperty(
+        name="Logical overlay",
+        description="How much of the virtual FLATTER voxel grid is drawn in the 3D viewport",
+        items=(
+            ("OFF", "Off", "Do not draw logical voxel wireframes"),
+            ("SELECTED", "Selected only", "Draw only the currently inspected logical block"),
+            ("FULL", "Full cell", "Draw the complete logical voxel grid for the active FLATTER cell"),
+        ),
+        default="FULL",
+    )
+    flatter_overlay_opacity: FloatProperty(
+        name="Overlay opacity",
+        description="Opacity of the logical voxel wireframe overlay",
+        default=0.58,
+        min=0.05,
+        max=1.0,
+        subtype="FACTOR",
+    )
+    flatter_overlay_xray: BoolProperty(
+        name="X-Ray logical blocks",
+        description="Draw logical voxel lines through the greedy render mesh",
+        default=False,
+    )
+    flatter_materialization_limit: IntProperty(
+        name="Materialization limit",
+        description="Maximum logical blocks a single bulk materialization request may create",
+        default=1024,
+        min=1,
+        max=1000000,
+    )
+    flatter_active_set: StringProperty(name="Active selection set", default="", options={"HIDDEN"})
 
 
 class MINESPORT_PT_properties(bpy.types.Panel):
@@ -83,8 +98,16 @@ class MINESPORT_PT_properties(bpy.types.Panel):
             box.label(text=f"3D dimensions: {props.flatter_width} × {props.flatter_height} × {props.flatter_depth}")
             if props.flatter_selected:
                 box.label(text="Selected: " + props.flatter_selected)
-            box.label(text="Render geometry is greedy; green overlay is logical-only.", icon="INFO")
-            box.label(text="Use the Minesport tab in the 3D View to pick/materialize blocks.", icon="INFO")
+            box.label(text="Render geometry is greedy; logical voxels remain addressable.", icon="INFO")
+
+            controls = layout.box()
+            controls.label(text="FLATTER Interaction", icon="RESTRICT_SELECT_OFF")
+            controls.prop(props, "flatter_interaction_mode", text="")
+            controls.prop(props, "flatter_overlay_mode")
+            if props.flatter_overlay_mode != "OFF":
+                controls.prop(props, "flatter_overlay_opacity")
+                controls.prop(props, "flatter_overlay_xray")
+            controls.prop(props, "flatter_materialization_limit")
 
         box = layout.box()
         box.label(text="Animation")
@@ -93,10 +116,7 @@ class MINESPORT_PT_properties(bpy.types.Panel):
         box.label(text="Generated animation is Blender-native; Minesport does not tick per frame.", icon="INFO")
 
 
-_CLASSES = (
-    MinesportProperties,
-    MINESPORT_PT_properties,
-)
+_CLASSES = (MinesportProperties, MINESPORT_PT_properties)
 
 
 def register():
