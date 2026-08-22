@@ -9,6 +9,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.*;
 
@@ -18,11 +19,25 @@ public class MinesportBridge implements ClientModInitializer {
     public void onInitializeClient() {
         System.out.println("[MinesportBridge] Initializing runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
+            hideWorkerWindow(client);
             System.out.println("[MinesportBridge] Client resources ready — starting registry/model dump");
             Thread t = new Thread(() -> runDump(client), "MinesportBridge-Dump");
             t.setDaemon(false);
             t.start();
         });
+    }
+
+    private void hideWorkerWindow(Minecraft client) {
+        if (!"1".equals(System.getenv("MINESPORT_BRIDGE_WORKER"))) return;
+        try {
+            long handle = client.getWindow().getWindow();
+            if (handle != 0L) {
+                GLFW.glfwHideWindow(handle);
+            }
+        } catch (Throwable ignored) {
+            // Window hiding is an optimization only. Registry capture must still
+            // work on compatibility targets where GLFW/window APIs differ.
+        }
     }
 
     private void runDump(Minecraft client) {
