@@ -1,10 +1,10 @@
 bl_info = {
     "name": "Minesport Dynamic Translator",
     "author": "Kastrick / Minesport",
-    "version": (0, 1, 8),
+    "version": (0, 1, 9),
     "blender": (4, 3, 0),
     "location": "File > Import / Object Properties / Node Editor / 3D View > Minesport",
-    "description": "Imports/translates Minesport exports and FLATTER logical block geometry into Blender-native data.",
+    "description": "Imports/translates Minesport exports, FLATTER logical geometry and Minecraft lights into Blender-native data.",
     "category": "Import-Export",
 }
 
@@ -66,6 +66,9 @@ def register():
     properties.register()
     flatter.register()
 
+    # Lights patches translate.translate_scene before the dedicated OBJ/glTF
+    # importers load, so both formats share exactly the same sidecar semantics.
+    _register_optional("lights")
     _register_optional("flatter_runtime")
     _register_optional("incremental_refresh")
     _register_optional("liquid_merge")
@@ -96,6 +99,7 @@ def unregister():
         "liquid_merge",
         "incremental_refresh",
         "flatter_runtime",
+        "lights",
     ):
         module = _OPTIONAL_MODULES.pop(name, None)
         if module is None:
