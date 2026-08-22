@@ -80,11 +80,13 @@ def register():
     _register_optional("edit_mode")
 
     # Performance is intentionally installed after the logical editing systems
-    # exist but before the overlay registers its draw handlers. It replaces only
+    # exist but before the generic FLATTER overlay registers. It replaces only
     # repeated bookkeeping paths (metadata/RLE decode, depsgraph polling,
     # selection redraw/rebuild work) and leaves FLATTER's lossless data model
-    # unchanged. This makes 0.2.0 substantially friendlier to older hardware.
+    # unchanged. The draw handoff replaces Liquid Merge's already-registered GPU
+    # callback with the optimized callback as well.
     _register_optional("performance")
+    _register_optional("performance_draw")
 
     _register_optional("flatter_overlay")
     _register_optional("flatter_020_ui")
@@ -106,6 +108,7 @@ def unregister():
         "flatter_map",
         "flatter_020_ui",
         "flatter_overlay",
+        "performance_draw",
         "performance",
         "edit_mode",
         "viewport_interaction",
