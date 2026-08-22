@@ -1,8 +1,10 @@
 package dev.kastrick.minesport.bridge;
 
 import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockEntry;
+import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockLightEntry;
 import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockVariant;
 import dev.kastrick.minesport.bridge.model.BridgeProtocol.Hello;
+import dev.kastrick.minesport.bridge.model.BridgeProtocol.LightState;
 import dev.kastrick.minesport.bridge.model.BridgeProtocol.TextureEntry;
 import dev.kastrick.minesport.bridge.registry.BlockGeometryExtractor;
 import dev.kastrick.minesport.bridge.registry.TextureExtractor;
@@ -24,6 +26,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -104,6 +107,11 @@ public final class MinesportBridge implements ClientModInitializer {
                     vanillaMapping == null ? "fabric" : "polymer",
                     variants
                 ));
+
+                List<LightState> lightStates = extractLightStates(block);
+                if (!lightStates.isEmpty()) {
+                    sender.send("block_light", new BlockLightEntry(id.toString(), lightStates));
+                }
             }
 
             for (String textureId : textureIds) {
@@ -141,6 +149,33 @@ public final class MinesportBridge implements ClientModInitializer {
         } catch (Exception exception) {
             return List.of();
         }
+    }
+
+    private List<LightState> extractLightStates(Block block) {
+        var result = new ArrayList<LightState>();
+        for (BlockState state : block.getStateDefinition().getPossibleStates()) {
+            int level;
+            try {
+                level = Math.max(0, Math.min(15, state.getLightEmission()));
+            } catch (Exception ignored) {
+                continue;
+            }
+            if (level <= 0) {
+                continue;
+            }
+
+            Map<String, String> properties = new LinkedHashMap<>();
+            for (Property<?> property : state.getProperties()) {
+                properties.put(property.getName(), propertyValueUnchecked(state, property));
+            }
+            result.add(new LightState(properties, level));
+        }
+        return result;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static String propertyValueUnchecked(BlockState state, Property<?> property) {
+        return String.valueOf(state.getValue((Property) property));
     }
 
     /**
