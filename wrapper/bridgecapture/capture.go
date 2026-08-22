@@ -16,11 +16,11 @@ import (
 )
 
 const (
-	DefaultAddress       = "127.0.0.1:25590"
-	SnapshotSchema       = 1
-	maxMessageSize       = 64 << 20
-	captureBridgePrefix  = "minesport-capture-bridge-"
-	captureBridgeSuffix  = ".jar"
+	DefaultAddress      = "127.0.0.1:25590"
+	SnapshotSchema      = 1
+	maxMessageSize      = 64 << 20
+	captureBridgePrefix = "minesport-capture-bridge-"
+	captureBridgeSuffix = ".jar"
 )
 
 type LightState struct {
@@ -248,11 +248,15 @@ func (s *Server) log(message string) {
 // user mods. The file is removed after a successful dump or CleanupStaged.
 func StageBridge(bridgeJar, modsPath, version string) (string, error) {
 	bridgeJar = filepath.Clean(strings.TrimSpace(bridgeJar))
-	modsPath = filepath.Clean(strings.TrimSpace(modsPath))
+	rawModsPath := strings.TrimSpace(modsPath)
 	version = strings.TrimSpace(version)
 	if bridgeJar == "" || bridgeJar == "." {
 		return "", fmt.Errorf("bridge jar path is required")
 	}
+	if rawModsPath == "" {
+		return "", fmt.Errorf("mods folder path is required")
+	}
+	modsPath = filepath.Clean(rawModsPath)
 	if version == "" {
 		return "", fmt.Errorf("minecraft version is required")
 	}
@@ -281,10 +285,10 @@ func StageBridge(bridgeJar, modsPath, version string) (string, error) {
 
 	captureSessions.Lock()
 	captureSessions.byVersion[version] = captureSession{
-		Version:          version,
-		ModsPath:         modsPath,
-		ModsFingerprint:  fingerprint,
-		StagedPath:       staged,
+		Version:         version,
+		ModsPath:        modsPath,
+		ModsFingerprint: fingerprint,
+		StagedPath:      staged,
 	}
 	captureSessions.Unlock()
 	return staged, nil
