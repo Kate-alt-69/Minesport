@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const defaultFlatterCellSize = 16
+
 // Settings holds global settings that persist across sessions.
 type Settings struct {
 	DebugMode     bool `json:"debugMode"`
@@ -23,9 +25,14 @@ type Settings struct {
 	HiddenBlockCullingEnabled bool `json:"hiddenBlockCullingEnabled"`
 
 	// FlatterOptimizationEnabled enables the lossless FLATTER geometry compiler.
-	// Safe full cubes are stored as logical blocks but exported as chunk-local
-	// greedy surfaces that Minesport Translator 0.1.5 can materialize on demand.
+	// Minecraft blocks remain logical voxels while safe repeated geometry is
+	// compiled into rebuildable FLATTER objects for rendering and Blender edits.
 	FlatterOptimizationEnabled bool `json:"flatterOptimizationEnabled"`
+
+	// FlatterCellSize controls the maximum spatial cell used to build one
+	// FLATTER object. Smaller cells rebuild more locally; larger cells normally
+	// compress more aggressively and create fewer Blender objects.
+	FlatterCellSize int `json:"flatterCellSize"`
 
 	// BlenderExportEnabled exposes Blender translation metadata controls in the
 	// Workbench. The translator itself is one-shot: it creates Blender-native
@@ -48,6 +55,7 @@ func DefaultSettings() Settings {
 		OptimizeOutputEnabled:      false,
 		HiddenBlockCullingEnabled:  false,
 		FlatterOptimizationEnabled: false,
+		FlatterCellSize:            defaultFlatterCellSize,
 		BlenderExportEnabled:       false,
 		BlenderTranslatorPrompted:  false,
 		ResourcePackPaths:          nil,
@@ -76,10 +84,21 @@ func LoadSettings() Settings {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return DefaultSettings()
 	}
+	settings.FlatterCellSize = normalizeFlatterCellSize(settings.FlatterCellSize)
 	return settings
 }
 
+func normalizeFlatterCellSize(size int) int {
+	switch size {
+	case 8, 16, 32, 64:
+		return size
+	default:
+		return defaultFlatterCellSize
+	}
+}
+
 func (settings Settings) Save() error {
+	settings.FlatterCellSize = normalizeFlatterCellSize(settings.FlatterCellSize)
 	path, err := settingsPath()
 	if err != nil {
 		return err
