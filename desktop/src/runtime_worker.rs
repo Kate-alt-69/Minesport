@@ -1,6 +1,5 @@
-use crate::{bridge_compat, registry, runtime};
+use crate::{bridge_compat, registry, runtime, toolchain};
 use anyhow::{Context, Result, anyhow, bail};
-use regex::Regex;
 use std::{
     env,
     fs::{self, File},
@@ -87,6 +86,12 @@ where
     let cleanup = WorkspaceCleanup(workspace.clone());
     if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
 
+    progress(Progress { percent: 40, message: format!("Preparing JDK {} for Minecraft {version}…", plan.java) });
+    let java_home = toolchain::ensure_jdk(plan.java, |update| {
+        progress(Progress { percent: update.percent.clamp(40, 54), message: update.message });
+    })?;
+    if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
+
     let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);
     let (capture_tx, capture_rx) = mpsc::sync_channel::<Result<PathBuf>>(1);
     let capture_root = cache_root.clone();
@@ -112,10 +117,10 @@ where
 
     listen_rx.recv_timeout(Duration::from_secs(5)).context("wait for Rust runtime registry receiver")??;
 
-    progress(Progress { percent: 40, message: format!("Receiver ready · resolving JDK {}", plan.java) });
+    progress(Progress { percent: 55, message: format!("Receiver ready · starting Minecraft {version} with JDK {}", plan.java) });
     let log_path = workspace.join("runtime-worker.log");
-    let mut child = start_gradle_worker(&workspace, &log_path, plan.java)?;
-    progress(Progress { percent: 55, message: format!("Minecraft {version} worker started · loading full registered model registry") });
+    let mut child = start_gradle_worker(&workspace, &log_path, &java_home)?;
+    progress(Progress { percent: 62, message: format!("Minecraft {version} worker started · loading full registered model registry") });
 
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
     loop {
@@ -230,7 +235,7 @@ fn create_fast_bundled_workspace(workspace: &Path, version: &str) -> Result<()> 
     Ok(())
 }
 
-fn start_gradle_worker(workspace: &Path, log_path: &Path, required_java: u32) -> Result<Child> {
+fn start_gradle_worker(workspace: &Path, log_path: &Path, java_home: &Path) -> Result<Child> {
     let stdout = File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
     let stderr = stdout.try_clone()?;
     let mut command = if cfg!(windows) {
@@ -243,16 +248,13 @@ fn start_gradle_worker(workspace: &Path, log_path: &Path, required_java: u32) ->
         command
     };
     command.current_dir(workspace).stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
-    let java_home = resolve_jdk_home(required_java).ok_or_else(|| anyhow!(
-        "JDK {required_java}+ is required for Minecraft runtime registry preparation. Install a JDK with javac or use Minesport's upcoming automatic toolchain downloader."
-    ))?;
-    sanitize_java_environment(&mut command, &java_home);
+    sanitize_java_environment(&mut command, java_home);
     command.env("MINESPORT_BRIDGE_PORT", "25590");
     command.env("MINESPORT_BRIDGE_MODE", "all");
     command.env("MINESPORT_BRIDGE_WORKER", "1");
     command.env("GRADLE_USER_HOME", runtime::cache_root().join("gradle"));
     hide_console_window(&mut command);
-    command.spawn().with_context(|| format!("start isolated Fabric/Loom runtime worker with JDK {} at {}", required_java, java_home.display()))
+    command.spawn().with_context(|| format!("start isolated Fabric/Loom runtime worker with {}", java_home.display()))
 }
 
 fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
@@ -262,76 +264,12 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
             command.env_remove(key);
         }
     }
-
     command.env("JAVA_HOME", java_home);
     command.env("GRADLE_JAVA_HOME", java_home);
     let current = env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![java_home.join("bin")];
     paths.extend(env::split_paths(&current));
     if let Ok(joined) = env::join_paths(paths) { command.env("PATH", joined); }
-}
-
-fn resolve_jdk_home(required: u32) -> Option<PathBuf> {
-    for key in ["JAVA_HOME", "JDK_HOME", "GRADLE_JAVA_HOME"] {
-        if let Some(home) = env::var_os(key).map(PathBuf::from) {
-            if valid_jdk_home(&home, required) { return Some(home); }
-        }
-    }
-
-    if let Some(javac) = find_on_path(if cfg!(windows) { "javac.exe" } else { "javac" }) {
-        if javac_major(&javac) >= required {
-            if let Some(home) = javac.parent().and_then(Path::parent).map(Path::to_path_buf) {
-                if valid_jdk_home(&home, required) { return Some(home); }
-            }
-        }
-    }
-
-    if let Some(java) = find_on_path(if cfg!(windows) { "java.exe" } else { "java" }) {
-        let output = Command::new(java).args(["-XshowSettings:properties", "-version"]).output().ok()?;
-        let text = String::from_utf8_lossy(&output.stderr);
-        for line in text.lines() {
-            let trimmed = line.trim();
-            let Some(value) = trimmed.strip_prefix("java.home =") else { continue; };
-            let home = PathBuf::from(value.trim());
-            if valid_jdk_home(&home, required) { return Some(home); }
-        }
-    }
-
-    let toolchains = runtime::cache_root().join("toolchains");
-    if let Ok(entries) = fs::read_dir(&toolchains) {
-        for entry in entries.flatten() {
-            let home = entry.path();
-            if valid_jdk_home(&home, required) { return Some(home); }
-            if let Ok(children) = fs::read_dir(&home) {
-                for child in children.flatten() {
-                    if valid_jdk_home(&child.path(), required) { return Some(child.path()); }
-                }
-            }
-        }
-    }
-    None
-}
-
-fn valid_jdk_home(home: &Path, required: u32) -> bool {
-    let bin = home.join("bin");
-    let java = bin.join(if cfg!(windows) { "java.exe" } else { "java" });
-    let javac = bin.join(if cfg!(windows) { "javac.exe" } else { "javac" });
-    java.is_file() && javac.is_file() && javac_major(&javac) >= required
-}
-
-fn javac_major(javac: &Path) -> u32 {
-    let output = match Command::new(javac).arg("-version").output() {
-        Ok(output) => output,
-        Err(_) => return 0,
-    };
-    let text = format!("{} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-    let rx = Regex::new(r"(?i)javac\s+([0-9]+)").expect("javac version regex");
-    rx.captures(&text).and_then(|capture| capture.get(1)).and_then(|value| value.as_str().parse().ok()).unwrap_or(0)
-}
-
-fn find_on_path(executable: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH")?;
-    env::split_paths(&path).map(|entry| entry.join(executable)).find(|candidate| candidate.is_file())
 }
 
 fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
@@ -457,7 +395,7 @@ mod tests {
     #[test]
     fn fake_oracle_javapath_parent_is_not_a_jdk() {
         let fake = Path::new(r"C:\Program Files\Common Files\Oracle\Java");
-        assert!(!valid_jdk_home(fake, 21));
+        assert!(!toolchain::valid_jdk_home(fake, 21));
     }
 
     #[test]
