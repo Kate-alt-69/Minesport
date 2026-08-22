@@ -1,10 +1,10 @@
-"""Region-safe FLATTER picking for Blender's 3D viewport.
+"""Region-safe, direct FLATTER picking for Blender's 3D viewport.
 
-Blender operators launched from the N-panel or Object Properties do not
-necessarily receive the VIEW_3D WINDOW region as context.region. Minesport's
-old ray picker used that region directly, so sidebar-launched picking could
-cast rays using sidebar coordinates. This module patches the shared hit helper
-and the legacy picker to always target the actual 3D window region.
+A FLATTER object is render-cache geometry backed by an addressable Minecraft
+voxel grid. In 0.2.0 the user no longer has to discover/start a separate modal
+mode before normal left-clicks can address those logical voxels: the addon adds
+a 3D View keymap that consumes a click only when the ray actually hits FLATTER
+geometry. All other clicks pass straight back to Blender.
 """
 
 import json
@@ -21,6 +21,7 @@ _ORIGINAL_HIT_XYZ = None
 _ORIGINAL_PICK_INVOKE = None
 _ORIGINAL_PICK_MODAL = None
 _ORIGINAL_INTERACT_INVOKE = None
+_ADDON_KEYMAPS = []
 
 
 def _view3d_area(context):
@@ -90,8 +91,6 @@ def _safe_hit_xyz(context, parent, event):
 def _remember_face(parent, normal):
     if normal is None or parent is None or not hasattr(parent, "minesport"):
         return None
-    # Import lazily so the viewport module remains independently loadable if the
-    # optional light subsystem is ever disabled.
     try:
         from . import lights
         snap = lights._snap_from_world_normal(parent, normal)
@@ -103,6 +102,22 @@ def _remember_face(parent, normal):
         return snap
     parent["minesport_flatter_selected_face"] = "SIDE"
     return "SIDE"
+
+
+def _redraw_logical_overlay():
+    try:
+        from . import flatter_overlay
+        flatter_overlay.tag_redraw()
+    except Exception:
+        # Keep the selection functional even if an optional GPU overlay is
+        # unavailable on a particular Blender build.
+        for window in getattr(bpy.context.window_manager, "windows", []):
+            screen = getattr(window, "screen", None)
+            if screen is None:
+                continue
+            for area in screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
 
 
 def _focus(parent, xyz, normal=None):
@@ -129,7 +144,85 @@ def _focus(parent, xyz, normal=None):
         bpy.context.workspace.status_text_set("Minecraft block: " + label + suffix)
     except Exception:
         pass
+    _redraw_logical_overlay()
     return block_id
+
+
+def _parent_and_xyz_from_hit(location, normal, hit_obj):
+    if hit_obj is None:
+        return None, None
+    if hit_obj.get("minesport_type") == flatter._TYPE_FLATTER:
+        return hit_obj, flatter._pick_xyz(hit_obj, location, normal)
+    if hit_obj.get("minesport_type") == liquid_merge.TYPE_LIQUID_BLOCK:
+        identifier = str(hit_obj.get(liquid_merge.PROXY_PARENT_KEY, ""))
+        parent = flatter._find_flatter_parent(identifier)
+        return parent, liquid_merge._proxy_xyz(hit_obj)
+    return None, None
+
+
+def _apply_direct_interaction(context, event, parent, xyz, normal=None):
+    if parent is None or xyz is None:
+        return False
+
+    bpy.ops.object.select_all(action="DESELECT")
+    parent.select_set(True)
+    context.view_layer.objects.active = parent
+    _focus(parent, xyz, normal=normal)
+
+    props = getattr(parent, "minesport", None)
+    mode = str(getattr(props, "flatter_interaction_mode", "SELECT") or "SELECT")
+    if mode == "INSPECT":
+        return True
+    if mode == "SELECT":
+        liquid_merge._apply_click_selection(parent, xyz, event)
+        return True
+    if mode == "BOX":
+        first = liquid_merge._box_anchor(parent)
+        if first is None:
+            liquid_merge._set_box_anchor(parent, xyz)
+            try:
+                context.workspace.status_text_set(
+                    f"FLATTER Box Select · first corner {xyz} · click second corner"
+                )
+            except Exception:
+                pass
+            return True
+        liquid_merge._apply_box_selection(parent, first, xyz, event)
+        liquid_merge._set_box_anchor(parent, None)
+        return True
+    if mode == "MATERIALIZE":
+        payload = flatter._load_payload(parent)
+        grid = flatter._decode_grid(payload) if payload else {}
+        created = flatter._materialize_many(parent, payload, grid, [xyz])
+        if created:
+            bpy.ops.object.select_all(action="DESELECT")
+            created[0].select_set(True)
+            context.view_layer.objects.active = created[0]
+        return bool(created)
+    return True
+
+
+class MINESPORT_OT_flatter_direct_click(bpy.types.Operator):
+    bl_idname = "minesport.flatter_direct_click"
+    bl_label = "FLATTER Direct Logical Click"
+    bl_description = "Address a logical Minecraft voxel when clicking FLATTER; otherwise preserve Blender's normal click"
+    bl_options = {"INTERNAL", "UNDO"}
+
+    def invoke(self, context, event):
+        if getattr(context, "mode", "OBJECT") != "OBJECT":
+            return {"PASS_THROUGH"}
+        if event.alt:
+            return {"PASS_THROUGH"}
+        result = _ray(context, event)
+        if result is None:
+            return {"PASS_THROUGH"}
+        location, normal, _face, hit_obj, _matrix = result
+        parent, xyz = _parent_and_xyz_from_hit(location, normal, hit_obj)
+        if parent is None or xyz is None:
+            return {"PASS_THROUGH"}
+        if _apply_direct_interaction(context, event, parent, xyz, normal=normal):
+            return {"FINISHED"}
+        return {"PASS_THROUGH"}
 
 
 def _safe_pick_invoke(self, context, event):
@@ -183,11 +276,29 @@ def _safe_interact_invoke(self, context, event):
     return _ORIGINAL_INTERACT_INVOKE(self, context, event)
 
 
+def _register_direct_click_keymap():
+    wm = getattr(bpy.context, "window_manager", None)
+    keyconfigs = getattr(wm, "keyconfigs", None) if wm is not None else None
+    addon = getattr(keyconfigs, "addon", None) if keyconfigs is not None else None
+    if addon is None:
+        return
+    km = addon.keymaps.new(name="3D View", space_type="VIEW_3D")
+    kmi = km.keymap_items.new(
+        MINESPORT_OT_flatter_direct_click.bl_idname,
+        type="LEFTMOUSE",
+        value="PRESS",
+    )
+    _ADDON_KEYMAPS.append((km, kmi))
+
+
 def register():
     global _ORIGINAL_HIT_XYZ, _ORIGINAL_PICK_INVOKE, _ORIGINAL_PICK_MODAL
     global _ORIGINAL_INTERACT_INVOKE
     if _ORIGINAL_HIT_XYZ is not None:
         return
+
+    bpy.utils.register_class(MINESPORT_OT_flatter_direct_click)
+    _register_direct_click_keymap()
 
     _ORIGINAL_HIT_XYZ = liquid_merge._hit_xyz
     _ORIGINAL_PICK_INVOKE = flatter.MINESPORT_OT_flatter_pick.invoke
@@ -203,6 +314,18 @@ def register():
 def unregister():
     global _ORIGINAL_HIT_XYZ, _ORIGINAL_PICK_INVOKE, _ORIGINAL_PICK_MODAL
     global _ORIGINAL_INTERACT_INVOKE
+
+    while _ADDON_KEYMAPS:
+        km, kmi = _ADDON_KEYMAPS.pop()
+        try:
+            km.keymap_items.remove(kmi)
+        except Exception:
+            pass
+    try:
+        bpy.utils.unregister_class(MINESPORT_OT_flatter_direct_click)
+    except Exception:
+        pass
+
     if _ORIGINAL_HIT_XYZ is not None:
         liquid_merge._hit_xyz = _ORIGINAL_HIT_XYZ
         _ORIGINAL_HIT_XYZ = None
