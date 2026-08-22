@@ -125,14 +125,15 @@ public final class RuntimeModelRegistry {
     }
 
     /**
-     * Runtime geometry is authoritative for registered modded/custom blocks.
-     * Vanilla remains on Minesport's mature deterministic resolver by default,
-     * while still being present in this cache for inspection/future fallback.
+     * Minecraft's baked registry is authoritative whenever the captured
+     * Minecraft version/mod fingerprint matches and it contains the exact block
+     * state. This applies to vanilla and registered modded/custom blocks alike:
+     * the whole point of runtime capture is that the game's own model manager
+     * has already resolved resource-pack/model inheritance and loader-specific
+     * registration for that running instance.
      */
     public boolean shouldOverride(BlockData block) {
-        if (block == null || block.blockId == null || block.blockId.startsWith("minecraft:")) {
-            return false;
-        }
+        if (block == null || block.blockId == null) return false;
         RuntimeBlock runtime = blocks.get(block.blockId);
         return runtime != null && bestVariant(block, runtime.variants()) != null;
     }
@@ -207,7 +208,12 @@ public final class RuntimeModelRegistry {
             texture = "minecraft:block/missingno";
         }
         String cullface = faceName(quad.face());
-        String partName = "runtime:" + (runtime.loaderType().isBlank() ? "registered" : runtime.loaderType());
+
+        // A runtime registry quad is still part of the block's ordinary baked
+        // model. Marking every quad as a synthetic "runtime:*" model part made
+        // exporters split normal blocks into artificial part objects and made
+        // FLATTER reject otherwise-safe geometry. Keep partName null; genuine
+        // movable/compound parts are handled by Minesport's structure layer.
         return new Quad(
             vertices,
             uv,
@@ -215,7 +221,7 @@ public final class RuntimeModelRegistry {
             new float[3],
             cullface,
             quad.tintIndex(),
-            partName
+            null
         );
     }
 
