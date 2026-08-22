@@ -31,6 +31,9 @@ func TestAnalyzePreviewBlockFile(t *testing.T) {
 	if result.UnresolvedTextures != 1 {
 		t.Fatalf("unresolved textures = %d, want 1", result.UnresolvedTextures)
 	}
+	if result.TypeCounts["minecraft:stone"] != 2 || result.TypeCounts["minecraft:dirt"] != 1 {
+		t.Fatalf("unexpected type counts: %#v", result.TypeCounts)
+	}
 	if len(result.TopTypes) != 2 {
 		t.Fatalf("top types = %v, want 2 entries", result.TopTypes)
 	}
@@ -39,5 +42,26 @@ func TestAnalyzePreviewBlockFile(t *testing.T) {
 	}
 	if result.TopTypes[1] != "minecraft:dirt × 1" {
 		t.Fatalf("second top type = %q, want dirt × 1", result.TopTypes[1])
+	}
+}
+
+func TestBucketOptimizationPressureSeparatesRiskyGeometry(t *testing.T) {
+	buckets := bucketOptimizationPressure(map[string]int{
+		"minecraft:stone":       100,
+		"minecraft:oak_leaves": 20,
+		"minecraft:oak_stairs": 10,
+		"modded:machine":        5,
+	})
+	if buckets.TerrainLike != 100 {
+		t.Fatalf("terrain = %d, want 100", buckets.TerrainLike)
+	}
+	if buckets.TransparentLike != 20 {
+		t.Fatalf("transparent = %d, want 20", buckets.TransparentLike)
+	}
+	if buckets.ShapeHeavy != 10 {
+		t.Fatalf("shape-heavy = %d, want 10", buckets.ShapeHeavy)
+	}
+	if buckets.Other != 5 {
+		t.Fatalf("other = %d, want 5", buckets.Other)
 	}
 }

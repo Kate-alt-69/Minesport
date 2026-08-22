@@ -18,10 +18,12 @@ import (
 )
 
 type exportPreflightState struct {
-	result     *widget.Label
-	run        *widget.Button
-	preset     *widget.Select
-	lastPreset string
+	result       *widget.Label
+	run          *widget.Button
+	preset       *widget.Select
+	lastPreset   string
+	optimizer    *widget.Label
+	lastAnalysis *previewBlockAnalysis
 }
 
 var exportPreflightStates sync.Map
@@ -61,6 +63,9 @@ func (ms *MinesportApp) installWorkbenchEnhancements() {
 		}
 		ms.applyBuiltInExportPreset(choice)
 		state.lastPreset = choice
+		if state.lastAnalysis != nil && state.optimizer != nil {
+			state.optimizer.SetText(ms.optimizationAnalysisText(*state.lastAnalysis))
+		}
 	})
 	state.preset.SetSelected("Custom")
 
@@ -69,14 +74,42 @@ func (ms *MinesportApp) installWorkbenchEnhancements() {
 	})
 	state.result = widget.NewLabel("Preflight has not been run for this selection.")
 	state.result.Wrapping = fyne.TextWrapWord
+	state.optimizer = widget.NewLabel("Run Quick Preflight to populate the optimization analyzer.")
+	state.optimizer.Wrapping = fyne.TextWrapWord
 
 	presetHint := widget.NewLabel("Presets configure the current export controls; Advanced settings remain available underneath.")
 	presetHint.Wrapping = fyne.TextWrapWord
 	presetCard := widget.NewCard("PRESET", "", container.NewVBox(state.preset, presetHint))
 	preflightCard := widget.NewCard("QUICK PREFLIGHT", "", container.NewVBox(state.run, state.result))
 
+	optimizeMore := widget.NewButton("Apply safe optimization", func() {
+		ms.settings.OptimizeOutputEnabled = true
+		ms.settings.FlatterOptimizationEnabled = true
+		ms.settings.HiddenBlockCullingEnabled = false
+		if ms.optimizeCheck != nil {
+			ms.optimizeCheck.SetChecked(true)
+		}
+		ms.applySettings(ms.settings)
+		ms.refreshWorkbenchSettingsActivity()
+		if state.lastAnalysis != nil {
+			state.optimizer.SetText(ms.optimizationAnalysisText(*state.lastAnalysis))
+		}
+		ms.appendLog("Optimization analyzer applied safe optimization: face culling + FLATTER")
+	})
+	optimizerCard := widget.NewCard(
+		"OPTIMIZATION ANALYZER",
+		"Logical pressure before final geometry compilation",
+		container.NewVBox(state.optimizer, optimizeMore),
+	)
+
 	holder.RemoveAll()
-	holder.Add(container.NewBorder(presetCard, preflightCard, nil, nil, base))
+	holder.Add(container.NewBorder(
+		presetCard,
+		container.NewVBox(preflightCard, optimizerCard),
+		nil,
+		nil,
+		base,
+	))
 	exportPreflightStates.Store(ms, state)
 }
 
@@ -143,6 +176,9 @@ func (ms *MinesportApp) refreshWorkbenchSettingsActivity() {
 	}
 	holder.RemoveAll()
 	holder.Add(ms.buildWorkbenchSettingsPane())
+	// Reattach workbench decorators that live above the base Settings pane.
+	workbenchAssetCenterStates.Delete(ms)
+	installWorkbenchAssetCenter(ms)
 }
 
 func (ms *MinesportApp) setPreflightBusy(state *exportPreflightState, busy bool) {
@@ -219,8 +255,12 @@ func (ms *MinesportApp) runQuickPreflight() {
 			analysis.Blocks = count
 		}
 
+		state.lastAnalysis = &analysis
 		ms.setPreflightBusy(state, false)
 		state.result.SetText(ms.quickPreflightText(analysis))
+		if state.optimizer != nil {
+			state.optimizer.SetText(ms.optimizationAnalysisText(analysis))
+		}
 		ms.finishWorkbenchTaskV3(true, "Preflight ready", fmt.Sprintf("%s solid blocks · %s block types", formatCount(analysis.Blocks), formatCount(analysis.UniqueTypes)))
 	}()
 }
@@ -230,6 +270,7 @@ type previewBlockAnalysis struct {
 	UniqueTypes        int
 	UnresolvedTextures int
 	TopTypes           []string
+	TypeCounts         map[string]int
 }
 
 type previewBlockRecord struct {
@@ -256,7 +297,7 @@ func analyzePreviewBlockFile(path string) (previewBlockAnalysis, error) {
 	}
 
 	counts := map[string]int{}
-	result := previewBlockAnalysis{}
+	result := previewBlockAnalysis{TypeCounts: counts}
 	for decoder.More() {
 		var record previewBlockRecord
 		if err := decoder.Decode(&record); err != nil {
@@ -318,7 +359,79 @@ func (ms *MinesportApp) quickPreflightText(result previewBlockAnalysis) string {
 		lines = append(lines, "Note: exact custom-selection filtering happens during export; this quick scan reports the enclosing selected region.")
 	}
 	if len(ms.settings.ResourcePackPaths) > 0 {
-		lines = append(lines, fmt.Sprintf("Note: %d configured resource pack(s) are applied during export; quick preview texture diagnostics currently use vanilla/mod resolvers.", len(ms.settings.ResourcePackPaths)))
+		lines = append(lines, fmt.Sprintf("Warning: %d resource pack(s) are configured, but the current preview resolver does not yet apply them. Export does.", len(ms.settings.ResourcePackPaths)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+type optimizationBuckets struct {
+	TerrainLike     int
+	TransparentLike int
+	ShapeHeavy      int
+	Other           int
+}
+
+func bucketOptimizationPressure(counts map[string]int) optimizationBuckets {
+	var result optimizationBuckets
+	for id, count := range counts {
+		name := id
+		if colon := strings.IndexByte(name, ':'); colon >= 0 {
+			name = name[colon+1:]
+		}
+		switch {
+		case containsAny(name, "leaves", "glass", "water", "lava", "ice", "vine", "flower", "sapling", "grass", "mushroom"):
+			result.TransparentLike += count
+		case containsAny(name, "stairs", "slab", "fence", "wall", "door", "trapdoor", "rail", "chest", "piston", "torch", "lantern", "sign", "pane"):
+			result.ShapeHeavy += count
+		case containsAny(name, "stone", "dirt", "sand", "gravel", "deepslate", "netherrack", "ore", "planks", "log", "terracotta", "concrete", "wool", "brick"):
+			result.TerrainLike += count
+		default:
+			result.Other += count
+		}
+	}
+	return result
+}
+
+func containsAny(value string, parts ...string) bool {
+	for _, part := range parts {
+		if strings.Contains(value, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func percentage(part, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return (float64(part) / float64(total)) * 100.0
+}
+
+func (ms *MinesportApp) optimizationAnalysisText(result previewBlockAnalysis) string {
+	buckets := bucketOptimizationPressure(result.TypeCounts)
+	upperFaces := result.Blocks * 6
+	lines := []string{
+		fmt.Sprintf("Pre-geometry pressure: ~%s block faces maximum", formatCount(upperFaces)),
+		fmt.Sprintf("Terrain/cube-like IDs: %s (%.1f%%)", formatCount(buckets.TerrainLike), percentage(buckets.TerrainLike, result.Blocks)),
+		fmt.Sprintf("Transparent/cutout-like IDs: %s (%.1f%%)", formatCount(buckets.TransparentLike), percentage(buckets.TransparentLike, result.Blocks)),
+		fmt.Sprintf("Shape-heavy IDs: %s (%.1f%%)", formatCount(buckets.ShapeHeavy), percentage(buckets.ShapeHeavy, result.Blocks)),
+		fmt.Sprintf("Other IDs: %s (%.1f%%)", formatCount(buckets.Other), percentage(buckets.Other, result.Blocks)),
+		"",
+		fmt.Sprintf("Face culling: %s", enabledText(ms.settings.OptimizeOutputEnabled || (ms.optimizeCheck != nil && ms.optimizeCheck.Checked))),
+		fmt.Sprintf("FLATTER: %s", enabledText(ms.settings.FlatterOptimizationEnabled)),
+		fmt.Sprintf("Hidden-block culling: %s", enabledText(ms.settings.HiddenBlockCullingEnabled)),
+	}
+	if buckets.TransparentLike > 0 {
+		lines = append(lines, "Transparent/cutout blocks use conservative occlusion rules, so they intentionally trade some geometry savings for visual correctness.")
+	}
+	lines = append(lines, "Exact faces saved are reported only after Java geometry compilation; these categories are workload indicators, not fabricated savings estimates.")
+	return strings.Join(lines, "\n")
+}
+
+func enabledText(value bool) string {
+	if value {
+		return "ON"
+	}
+	return "OFF"
 }
