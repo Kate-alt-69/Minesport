@@ -1,0 +1,112 @@
+package dev.kastrick.minesport.resolver;
+
+import dev.kastrick.minesport.region.BlockData;
+import org.junit.jupiter.api.Test;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class RuntimeModelRegistryTest {
+    private static final String QUAD = """
+        {
+          "vertices": [
+            0,0,0, 0,0,-1, 0,0,
+            1,0,0, 0,0,-1, 1,0,
+            1,1,0, 0,0,-1, 1,1,
+            0,1,0, 0,0,-1, 0,1
+          ],
+          "textureId": "minecraft:block/grass_block_side",
+          "face": 2,
+          "shade": true,
+          "tintIndex": -1
+        }
+        """;
+
+    @Test
+    void runtimeRegistryCanDriveVanillaAndModdedBlocks() throws Exception {
+        File snapshot = File.createTempFile("minesport-runtime-models-", ".json");
+        snapshot.deleteOnExit();
+        Files.writeString(snapshot.toPath(), """
+            {
+              "schema": 2,
+              "minecraftVersion": "1.21.10",
+              "modsFingerprint": "test",
+              "blocks": {
+                "minecraft:grass_block": {
+                  "loaderType": "vanilla",
+                  "variants": [
+                    {"properties": {"snowy": "false"}, "quads": [%s]}
+                  ]
+                },
+                "example:block": {
+                  "loaderType": "fabric",
+                  "variants": [
+                    {"properties": {}, "quads": [%s]}
+                  ]
+                }
+              }
+            }
+            """.formatted(QUAD, QUAD));
+
+        RuntimeModelRegistry registry = RuntimeModelRegistry.load(
+            snapshot,
+            "1.21.10",
+            null
+        );
+        assertNotNull(registry);
+
+        BlockData vanilla = new BlockData(
+            10, 64, -3,
+            "minecraft:grass_block",
+            Map.of("snowy", "false")
+        );
+        BlockData modded = new BlockData(
+            0, 0, 0,
+            "example:block",
+            Map.of()
+        );
+
+        assertTrue(registry.shouldOverride(vanilla));
+        assertTrue(registry.shouldOverride(modded));
+        assertFalse(registry.shouldOverride(new BlockData(
+            0, 0, 0,
+            "minecraft:grass_block",
+            Map.of("snowy", "true")
+        )));
+
+        var quads = registry.build(vanilla);
+        assertNotNull(quads);
+        assertEquals(1, quads.size());
+        assertNull(quads.get(0).partName(), "runtime provenance must not create fake model-part objects");
+        assertEquals("minecraft:block/grass_block_side", quads.get(0).texturePath());
+
+        float[][] vertices = quads.get(0).verts();
+        assertEquals(10f, vertices[0][0], 1e-6f);
+        assertEquals(64f, vertices[0][1], 1e-6f);
+        assertEquals(-3f, vertices[0][2], 1e-6f);
+    }
+
+    @Test
+    void rejectsRuntimeSnapshotFromWrongMinecraftVersion() throws Exception {
+        File snapshot = File.createTempFile("minesport-runtime-models-", ".json");
+        snapshot.deleteOnExit();
+        Files.writeString(snapshot.toPath(), """
+            {
+              "schema": 2,
+              "minecraftVersion": "1.21.11",
+              "modsFingerprint": "test",
+              "blocks": {
+                "minecraft:stone": {
+                  "loaderType": "vanilla",
+                  "variants": [{"properties": {}, "quads": [%s]}]
+                }
+              }
+            }
+            """.formatted(QUAD));
+
+        assertNull(RuntimeModelRegistry.load(snapshot, "1.21.10", null));
+    }
+}
