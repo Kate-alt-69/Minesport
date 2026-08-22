@@ -140,6 +140,8 @@ func (ms *MinesportApp) buildWorkbenchAssetCenter(state *workbenchAssetCenterSta
 		workbenchSection("RESOLUTION CHAIN"),
 		chain,
 		policyWarning,
+		workbenchSection("RUNTIME DATA"),
+		ms.buildBridgeRuntimeCaptureCard(),
 		workbenchSection("RECOVERY"),
 		piston,
 		advanced,
