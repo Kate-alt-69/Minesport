@@ -30,3 +30,12 @@ func init() {
 	}
 	desktopBridgeCapture = server
 }
+
+func shutdownDesktopBridgeCapture() {
+	if desktopBridgeCapture != nil {
+		_ = desktopBridgeCapture.Close()
+		desktopBridgeCapture = nil
+		return
+	}
+	bridgecapture.CleanupStaged()
+}
