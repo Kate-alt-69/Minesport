@@ -221,26 +221,7 @@ public class IpcMode {
                 }
             }
 
-            if (modsFolder != null) {
-                FabricResolver fabric = FabricResolver.load(modsFolder, IpcMode::log);
-                if (!fabric.getNamespaces().isEmpty()) {
-                    chain.addResolver(fabric);
-                    log("Fabric mod namespaces: " + fabric.getNamespaces());
-                    chain.addResolver(new PolymerResolver(fabric));
-                }
-
-                QuiltResolver quilt = QuiltResolver.load(modsFolder, IpcMode::log);
-                if (!quilt.getNamespaces().isEmpty()) {
-                    chain.addResolver(quilt);
-                    log("Quilt mod namespaces: " + quilt.getNamespaces());
-                }
-
-                ForgeResolver forge = ForgeResolver.load(modsFolder, IpcMode::log);
-                if (!forge.getNamespaces().isEmpty()) {
-                    chain.addResolver(forge);
-                    log("Forge/NeoForge mod namespaces: " + forge.getNamespaces());
-                }
-            }
+            addModResolvers(chain, modsFolder, requestedLoader);
 
             List<File> dataPackPaths = getPathList(request, "dataPacks");
             if (dataPackPaths.isEmpty()) {
@@ -688,99 +669,147 @@ public class IpcMode {
         }
     }
 
-	private static ResolverChain buildPreviewResolverChain(JsonObject request, File worldFolder, File copiedWorld) throws IOException {
-		var chain = new ResolverChain();
-		String mcVersion = readMcVersion(copiedWorld);
-		File mcJar = VanillaResolver.findMinecraftJar(mcVersion);
-		if (mcJar != null && mcJar.exists()) chain.addResolver(new VanillaResolver(mcJar));
+    private static ResolverChain buildPreviewResolverChain(JsonObject request, File worldFolder, File copiedWorld) throws IOException {
+        var chain = new ResolverChain();
+        String mcVersion = readMcVersion(copiedWorld);
+        File mcJar = VanillaResolver.findMinecraftJar(mcVersion);
+        if (mcJar != null && mcJar.exists()) chain.addResolver(new VanillaResolver(mcJar));
 
-		String requestedModsPath = getString(request, "modsPath", "").trim();
-		File modsFolder = requestedModsPath.isEmpty() ? null : new File(requestedModsPath);
-		if (modsFolder == null || !modsFolder.isDirectory()) {
-			ModsLocator.LocatedMods located = ModsLocator.locate(worldFolder);
-			modsFolder = located == null ? null : located.modsFolder();
-		}
-		if (modsFolder != null && modsFolder.isDirectory()) {
-			FabricResolver fabric = FabricResolver.load(modsFolder, IpcMode::log);
-			if (!fabric.getNamespaces().isEmpty()) {
-				chain.addResolver(fabric);
-				chain.addResolver(new PolymerResolver(fabric));
-			}
-			QuiltResolver quilt = QuiltResolver.load(modsFolder, IpcMode::log);
-			if (!quilt.getNamespaces().isEmpty()) chain.addResolver(quilt);
-			ForgeResolver forge = ForgeResolver.load(modsFolder, IpcMode::log);
-			if (!forge.getNamespaces().isEmpty()) chain.addResolver(forge);
-		}
-		return chain;
-	}
+        String requestedModsPath = getString(request, "modsPath", "").trim();
+        String requestedLoader = getString(request, "modLoader", "").trim();
+        File modsFolder = requestedModsPath.isEmpty() ? null : new File(requestedModsPath);
+        if (modsFolder == null || !modsFolder.isDirectory()) {
+            ModsLocator.LocatedMods located = ModsLocator.locate(worldFolder);
+            modsFolder = located == null ? null : located.modsFolder();
+        }
+        addModResolvers(chain, modsFolder, requestedLoader);
+        return chain;
+    }
 
-	private record PreviewTexture(String path, int tintIndex) {}
-	private record PreviewTextures(String top, String side, String bottom) {}
+    private static void addModResolvers(ResolverChain chain, File modsFolder, String requestedLoader) throws IOException {
+        if (modsFolder == null || !modsFolder.isDirectory()) return;
 
-	private static Map<String, PreviewTextures> writePreviewTextures(List<BlockData> blocks, ResolverChain chain, File outputDir) {
-		Map<String, PreviewTextures> paths = new HashMap<>();
-		Map<MaterialKey, String> written = new HashMap<>();
-		for (BlockData block : blocks) {
-			String key = blockTextureKey(block);
-			if (paths.containsKey(key)) continue;
-			try {
-				var state = chain.resolveBlockState(block.blockId);
-				if (state == null) continue;
-				var applications = state.resolve(block.properties, block.x, block.y, block.z);
-				if (applications.isEmpty()) continue;
-				var model = chain.resolveModel(applications.getFirst().modelPath);
-				if (model == null) continue;
-				PreviewTexture top = representativeTexture(model, "up");
-				PreviewTexture side = representativeTexture(model, "north", "south", "east", "west");
-				PreviewTexture bottom = representativeTexture(model, "down");
-				if (top == null) top = side != null ? side : bottom;
-				if (side == null) side = top != null ? top : bottom;
-				if (bottom == null) bottom = side != null ? side : top;
-				String topPath = writePreviewTexture(top, chain, outputDir, written);
-				String sidePath = writePreviewTexture(side, chain, outputDir, written);
-				String bottomPath = writePreviewTexture(bottom, chain, outputDir, written);
-				if (topPath != null || sidePath != null || bottomPath != null) {
-					paths.put(key, new PreviewTextures(topPath, sidePath, bottomPath));
-				}
-			} catch (Exception exception) {
-				log("[WARN] Preview texture failed for " + block.blockId + ": " + exception.getMessage());
-			}
-		}
-		return paths;
-	}
+        String loader = requestedLoader == null
+            ? ""
+            : requestedLoader.trim().toLowerCase(Locale.ROOT).replace('_', '-');
 
-	private static PreviewTexture representativeTexture(dev.kastrick.minesport.model.BlockModel model, String... directions) {
-		for (var element : model.elements) {
-			for (String direction : directions) {
-				var face = element.faces.get(direction);
-				if (face == null) continue;
-				String path = face.resolveTexture(model.textures);
-				if (path != null && !path.startsWith("#")) return new PreviewTexture(path, face.tintindex);
-			}
-		}
-		for (String key : List.of("all", "top", "side", "bottom", "particle")) {
-			String value = model.textures.get(key);
-			if (value != null && !value.startsWith("#")) return new PreviewTexture(value, -1);
-		}
-		return null;
-	}
+        switch (loader) {
+            case "fabric" -> {
+                log("Resolver loader filter: Fabric");
+                addFabricResolvers(chain, modsFolder);
+            }
+            case "quilt" -> {
+                log("Resolver loader filter: Quilt");
+                addQuiltResolver(chain, modsFolder);
+            }
+            case "forge" -> {
+                log("Resolver loader filter: Forge");
+                addForgeResolver(chain, modsFolder);
+            }
+            case "neoforge", "neo-forge", "neo forge" -> {
+                log("Resolver loader filter: NeoForge");
+                addForgeResolver(chain, modsFolder);
+            }
+            default -> {
+                // Older callers and manually supplied worlds may not know the
+                // loader. Preserve broad compatibility only for that unknown case.
+                log("Resolver loader is unknown; probing Fabric, Quilt and Forge/NeoForge");
+                addFabricResolvers(chain, modsFolder);
+                addQuiltResolver(chain, modsFolder);
+                addForgeResolver(chain, modsFolder);
+            }
+        }
+    }
 
-	private static String writePreviewTexture(PreviewTexture texture, ResolverChain chain, File outputDir, Map<MaterialKey, String> written) throws IOException {
-		if (texture == null) return null;
-		MaterialKey material = new MaterialKey(texture.path(), MaterialKey.tintFor(texture.path(), texture.tintIndex()));
-		String existing = written.get(material);
-		if (existing != null) return existing;
-		var image = material.apply(chain.resolveTexture(texture.path()));
-		if (image == null) return null;
-		String name = Integer.toUnsignedString(material.hashCode(), 16) + ".png";
-		File file = new File(outputDir, name);
-		if (!ImageIO.write(image, "png", file)) return null;
-		file.deleteOnExit();
-		written.put(material, file.getAbsolutePath());
-		return file.getAbsolutePath();
-	}
+    private static void addFabricResolvers(ResolverChain chain, File modsFolder) throws IOException {
+        FabricResolver fabric = FabricResolver.load(modsFolder, IpcMode::log);
+        if (fabric.getNamespaces().isEmpty()) return;
+        chain.addResolver(fabric);
+        log("Fabric mod namespaces: " + fabric.getNamespaces());
+        chain.addResolver(new PolymerResolver(fabric));
+    }
 
-	private static String blockTextureKey(BlockData block) {
-		return block.blockId + "[" + BlockGrouper.stateKey(block.properties) + "]";
-	}
+    private static void addQuiltResolver(ResolverChain chain, File modsFolder) throws IOException {
+        QuiltResolver quilt = QuiltResolver.load(modsFolder, IpcMode::log);
+        if (quilt.getNamespaces().isEmpty()) return;
+        chain.addResolver(quilt);
+        log("Quilt mod namespaces: " + quilt.getNamespaces());
+    }
+
+    private static void addForgeResolver(ResolverChain chain, File modsFolder) throws IOException {
+        ForgeResolver forge = ForgeResolver.load(modsFolder, IpcMode::log);
+        if (forge.getNamespaces().isEmpty()) return;
+        chain.addResolver(forge);
+        log("Forge/NeoForge mod namespaces: " + forge.getNamespaces());
+    }
+
+    private record PreviewTexture(String path, int tintIndex) {}
+    private record PreviewTextures(String top, String side, String bottom) {}
+
+    private static Map<String, PreviewTextures> writePreviewTextures(List<BlockData> blocks, ResolverChain chain, File outputDir) {
+        Map<String, PreviewTextures> paths = new HashMap<>();
+        Map<MaterialKey, String> written = new HashMap<>();
+        for (BlockData block : blocks) {
+            String key = blockTextureKey(block);
+            if (paths.containsKey(key)) continue;
+            try {
+                var state = chain.resolveBlockState(block.blockId);
+                if (state == null) continue;
+                var applications = state.resolve(block.properties, block.x, block.y, block.z);
+                if (applications.isEmpty()) continue;
+                var model = chain.resolveModel(applications.getFirst().modelPath);
+                if (model == null) continue;
+                PreviewTexture top = representativeTexture(model, "up");
+                PreviewTexture side = representativeTexture(model, "north", "south", "east", "west");
+                PreviewTexture bottom = representativeTexture(model, "down");
+                if (top == null) top = side != null ? side : bottom;
+                if (side == null) side = top != null ? top : bottom;
+                if (bottom == null) bottom = side != null ? side : top;
+                String topPath = writePreviewTexture(top, chain, outputDir, written);
+                String sidePath = writePreviewTexture(side, chain, outputDir, written);
+                String bottomPath = writePreviewTexture(bottom, chain, outputDir, written);
+                if (topPath != null || sidePath != null || bottomPath != null) {
+                    paths.put(key, new PreviewTextures(topPath, sidePath, bottomPath));
+                }
+            } catch (Exception exception) {
+                log("[WARN] Preview texture failed for " + block.blockId + ": " + exception.getMessage());
+            }
+        }
+        return paths;
+    }
+
+    private static PreviewTexture representativeTexture(dev.kastrick.minesport.model.BlockModel model, String... directions) {
+        for (var element : model.elements) {
+            for (String direction : directions) {
+                var face = element.faces.get(direction);
+                if (face == null) continue;
+                String path = face.resolveTexture(model.textures);
+                if (path != null && !path.startsWith("#")) return new PreviewTexture(path, face.tintindex);
+            }
+        }
+        for (String key : List.of("all", "top", "side", "bottom", "particle")) {
+            String value = model.textures.get(key);
+            if (value != null && !value.startsWith("#")) return new PreviewTexture(value, -1);
+        }
+        return null;
+    }
+
+    private static String writePreviewTexture(PreviewTexture texture, ResolverChain chain, File outputDir, Map<MaterialKey, String> written) throws IOException {
+        if (texture == null) return null;
+        MaterialKey material = new MaterialKey(texture.path(), MaterialKey.tintFor(texture.path(), texture.tintIndex()));
+        String existing = written.get(material);
+        if (existing != null) return existing;
+        var image = material.apply(chain.resolveTexture(texture.path()));
+        if (image == null) return null;
+        String name = Integer.toUnsignedString(material.hashCode(), 16) + ".png";
+        File file = new File(outputDir, name);
+        if (!ImageIO.write(image, "png", file)) return null;
+        file.deleteOnExit();
+        written.put(material, file.getAbsolutePath());
+        return file.getAbsolutePath();
+    }
+
+    private static String blockTextureKey(BlockData block) {
+        return block.blockId + "[" + BlockGrouper.stateKey(block.properties) + "]";
+    }
 }
