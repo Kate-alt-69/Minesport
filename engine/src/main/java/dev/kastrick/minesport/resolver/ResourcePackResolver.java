@@ -5,6 +5,7 @@ import dev.kastrick.minesport.model.*;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,34 +14,16 @@ import java.util.zip.*;
 /**
  * Resolves block assets from one or more user-supplied resource packs
  * (a.k.a. "texture packs") — either a loose folder or a .zip, in the exact
- * layout Minecraft itself uses:
+ * layout Minecraft itself uses.
  *
- *   assets/<namespace>/blockstates/<n>.json
- *   assets/<namespace>/models/block/<n>.json
- *   assets/<namespace>/textures/block/<n>.png
- *
- * This is NOT the same thing as a data pack — data packs are server-side
- * (recipes, loot tables, tags, worldgen) and contain no geometry or texture
- * data at all. Custom block *appearance* — the thing "extract from a data
- * pack/texture pack" usually means in practice — lives in a resource pack,
- * whether that's a texture pack a player applied, or the bundled resources
- * inside a mod jar (already handled by FabricResolver/QuiltResolver/ForgeResolver).
- *
- * Resource packs are meant to OVERRIDE everything below them — vanilla assets,
- * mod-provided assets, all of it. So this resolver should be added to the
- * ResolverChain FIRST, ahead of Vanilla/Fabric/Quilt/Forge.
- *
- * Multiple packs can be layered, matching how Minecraft's own resource pack
- * list works: pack[0] is the highest priority (checked first), later packs
- * are progressively lower priority, and each individual asset lookup falls
- * through the stack independently — a pack can override just a texture and
- * still inherit the blockstate/model from a lower pack.
+ * Resource packs are priority-ordered: pack[0] is highest priority. Texture
+ * animation metadata is intentionally read from the same PackSource that owns
+ * the winning PNG so an override cannot inherit stale timing from a lower pack.
  */
 public class ResourcePackResolver implements AssetResolver {
 
-    /** Abstracts reading entries from either a loose folder or a zip file. */
     private interface PackSource extends Closeable {
-        InputStream open(String path) throws IOException; // null if not present
+        InputStream open(String path) throws IOException;
         Set<String> namespaces();
     }
 
@@ -70,23 +53,19 @@ public class ResourcePackResolver implements AssetResolver {
             return found;
         }
 
-        @Override
-        public void close() {}
+        @Override public void close() {}
     }
 
     private static final class ZipPackSource implements PackSource {
         private final ZipFile zip;
         private Set<String> namespaces;
 
-        ZipPackSource(File zipFile) throws IOException {
-            this.zip = new ZipFile(zipFile);
-        }
+        ZipPackSource(File zipFile) throws IOException { this.zip = new ZipFile(zipFile); }
 
         @Override
         public InputStream open(String path) throws IOException {
             ZipEntry entry = zip.getEntry(path);
-            if (entry == null) return null;
-            return zip.getInputStream(entry);
+            return entry == null ? null : zip.getInputStream(entry);
         }
 
         @Override
@@ -106,17 +85,14 @@ public class ResourcePackResolver implements AssetResolver {
             return found;
         }
 
-        @Override
-        public void close() throws IOException { zip.close(); }
+        @Override public void close() throws IOException { zip.close(); }
     }
 
-    // Priority-ordered: index 0 = highest priority
     private final List<PackSource> sources = new ArrayList<>();
     private final Set<String> allNamespaces = new LinkedHashSet<>();
-
-    private final Map<String, BlockState>    stateCache = new ConcurrentHashMap<>();
-    private final Map<String, BlockModel>    modelCache = new ConcurrentHashMap<>();
-    private final Map<String, BufferedImage> texCache   = new ConcurrentHashMap<>();
+    private final Map<String, BlockState> stateCache = new ConcurrentHashMap<>();
+    private final Map<String, BlockModel> modelCache = new ConcurrentHashMap<>();
+    private final Map<String, BufferedImage> texCache = new ConcurrentHashMap<>();
 
     private static final Set<String> VIRTUAL_PARENTS = Set.of(
         "minecraft:block/block",
@@ -126,11 +102,6 @@ public class ResourcePackResolver implements AssetResolver {
 
     private ResourcePackResolver() {}
 
-    /**
-     * Load one or more resource packs, highest priority first.
-     * Each path may be a directory (loose resource pack) or a .zip file.
-     * Missing/invalid paths are skipped with a log message rather than failing.
-     */
     public static ResourcePackResolver load(List<File> packPaths, java.util.function.Consumer<String> log) {
         ResourcePackResolver resolver = new ResourcePackResolver();
         if (packPaths == null || packPaths.isEmpty()) return resolver;
@@ -138,11 +109,9 @@ public class ResourcePackResolver implements AssetResolver {
         for (File pack : packPaths) {
             try {
                 PackSource source;
-                if (pack.isDirectory()) {
-                    source = new FolderPackSource(pack);
-                } else if (pack.isFile() && pack.getName().toLowerCase(Locale.ROOT).endsWith(".zip")) {
-                    source = new ZipPackSource(pack);
-                } else {
+                if (pack.isDirectory()) source = new FolderPackSource(pack);
+                else if (pack.isFile() && pack.getName().toLowerCase(Locale.ROOT).endsWith(".zip")) source = new ZipPackSource(pack);
+                else {
                     if (log != null) log.accept("[ResourcePackResolver] Not a folder or .zip, skipping: " + pack);
                     continue;
                 }
@@ -154,30 +123,23 @@ public class ResourcePackResolver implements AssetResolver {
                 if (log != null) log.accept("[ResourcePackResolver] Failed to load " + pack + ": " + e.getMessage());
             }
         }
-
         return resolver;
     }
 
     public static ResourcePackResolver empty() { return new ResourcePackResolver(); }
-
     public boolean isEmpty() { return sources.isEmpty(); }
-
-    // ── AssetResolver impl ────────────────────────────────────────────────────
 
     @Override
     public boolean canResolve(String blockId) {
         if (!blockId.contains(":")) return false;
-        String ns = blockId.split(":")[0];
-        return allNamespaces.contains(ns);
+        return allNamespaces.contains(blockId.split(":")[0]);
     }
 
     @Override
     public BlockState resolveBlockState(String blockId) {
         return stateCache.computeIfAbsent(blockId, id -> {
             String[] parts = id.split(":", 2);
-            String ns = parts[0], name = parts[1];
-            String path = "assets/" + ns + "/blockstates/" + name + ".json";
-
+            String path = "assets/" + parts[0] + "/blockstates/" + parts[1] + ".json";
             for (PackSource src : sources) {
                 try (InputStream in = src.open(path)) {
                     if (in == null) continue;
@@ -208,12 +170,8 @@ public class ResourcePackResolver implements AssetResolver {
     @Override
     public BufferedImage resolveTexture(String texturePath) {
         return texCache.computeIfAbsent(texturePath, path -> {
-            String norm = normalizePath(path);
-            String[] parts = norm.split(":", 2);
-            if (parts.length < 2) return null;
-            String ns = parts[0], rest = parts[1];
-            String jarPath = "assets/" + ns + "/textures/" + rest + ".png";
-
+            String jarPath = textureAssetPath(path);
+            if (jarPath == null) return null;
             for (PackSource src : sources) {
                 try (InputStream in = src.open(jarPath)) {
                     if (in == null) continue;
@@ -227,9 +185,30 @@ public class ResourcePackResolver implements AssetResolver {
     }
 
     @Override
-    public String name() { return "ResourcePackResolver(" + sources.size() + " pack(s))"; }
+    public String resolveTextureMetadata(String texturePath) {
+        String jarPath = textureAssetPath(texturePath);
+        if (jarPath == null) return null;
+        for (PackSource src : sources) {
+            // First locate the winning PNG. If this source owns it, metadata is
+            // either its own .mcmeta or intentionally absent/static. Do not fall
+            // through to a lower-priority pack after that point.
+            try (InputStream image = src.open(jarPath)) {
+                if (image == null) continue;
+            } catch (Exception ignored) {
+                continue;
+            }
+            try (InputStream meta = src.open(jarPath + ".mcmeta")) {
+                if (meta == null) return null;
+                return new String(meta.readAllBytes(), StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                System.err.println("[ResourcePackResolver] Texture metadata load failed for " + texturePath + ": " + e.getMessage());
+                return null;
+            }
+        }
+        return null;
+    }
 
-    // ── Model inheritance ─────────────────────────────────────────────────────
+    @Override public String name() { return "ResourcePackResolver(" + sources.size() + " pack(s))"; }
 
     private BlockModel loadModelWithParents(String modelPath, Set<String> visited) throws IOException {
         if (VIRTUAL_PARENTS.contains(modelPath)) return new BlockModel();
@@ -237,8 +216,7 @@ public class ResourcePackResolver implements AssetResolver {
 
         String[] parts = modelPath.split(":", 2);
         if (parts.length < 2) return new BlockModel();
-        String ns = parts[0], rest = parts[1];
-        String jarPath = "assets/" + ns + "/models/" + rest + ".json";
+        String jarPath = "assets/" + parts[0] + "/models/" + parts[1] + ".json";
 
         BlockModel model = null;
         for (PackSource src : sources) {
@@ -264,11 +242,15 @@ public class ResourcePackResolver implements AssetResolver {
                 }
             }
         }
-
         return model;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static String textureAssetPath(String texturePath) {
+        String norm = normalizePath(texturePath);
+        String[] parts = norm.split(":", 2);
+        if (parts.length < 2) return null;
+        return "assets/" + parts[0] + "/textures/" + parts[1] + ".png";
+    }
 
     private static String normalizePath(String path) {
         if (path.contains(":")) return path;
