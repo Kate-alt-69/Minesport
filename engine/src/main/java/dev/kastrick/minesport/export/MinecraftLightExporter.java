@@ -150,11 +150,15 @@ public final class MinecraftLightExporter {
         if ("minecraft:soul_campfire".equals(id)) {
             return isFalse(block.prop("lit")) ? 0 : 10;
         }
-        if (id.endsWith("_candle") || id.endsWith("_candle_cake")) {
+
+        boolean candle = "minecraft:candle".equals(id) || id.endsWith("_candle");
+        boolean candleCake = "minecraft:candle_cake".equals(id) || id.endsWith("_candle_cake");
+        if (candle || candleCake) {
             if (!isTrue(block.prop("lit"))) return 0;
-            int candles = id.endsWith("_candle_cake") ? 1 : Math.max(1, parseInt(block.prop("candles"), 1));
+            int candles = candleCake ? 1 : Math.max(1, parseInt(block.prop("candles"), 1));
             return clampLevel(candles * 3);
         }
+
         if ("minecraft:glow_lichen".equals(id)) return 7;
         if ("minecraft:cave_vines".equals(id) || "minecraft:cave_vines_plant".equals(id)) {
             return isTrue(block.prop("berries")) ? 14 : 0;
