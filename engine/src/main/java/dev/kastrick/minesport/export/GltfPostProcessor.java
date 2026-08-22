@@ -26,13 +26,7 @@ public final class GltfPostProcessor {
 
     private GltfPostProcessor() {}
 
-    /**
-     * Makes standalone Minecraft textures use ordinary repeat wrapping and
-     * gives atlas textures their own clamp-to-edge sampler. A single shared
-     * MIRRORED_REPEAT sampler is incorrect for both cases: repeated model UVs
-     * must repeat rather than mirror, while atlas borders must never wrap into
-     * neighboring tiles.
-     */
+    /** Normalize Minecraft texture samplers and preserve transparent material semantics. */
     public static void fixSamplers(File gltfFile) throws IOException {
         if (gltfFile == null || !gltfFile.isFile()) return;
 
@@ -40,11 +34,9 @@ public final class GltfPostProcessor {
         JsonArray samplers = root.has("samplers") && root.get("samplers").isJsonArray()
                 ? root.getAsJsonArray("samplers") : new JsonArray();
         if (samplers.isEmpty()) {
-            JsonObject repeat = sampler(REPEAT);
-            samplers.add(repeat);
+            samplers.add(sampler(REPEAT));
             root.add("samplers", samplers);
         } else {
-            // Existing exporter sampler is slot 0. Normalize it to ordinary repeat.
             JsonObject repeat = samplers.get(0).getAsJsonObject();
             repeat.addProperty("magFilter", NEAREST);
             repeat.addProperty("minFilter", NEAREST);
@@ -53,7 +45,6 @@ public final class GltfPostProcessor {
         }
 
         int clampSamplerIndex = findOrCreateClampSampler(samplers);
-
         JsonArray images = root.has("images") && root.get("images").isJsonArray()
                 ? root.getAsJsonArray("images") : new JsonArray();
         JsonArray textures = root.has("textures") && root.get("textures").isJsonArray()
@@ -66,31 +57,39 @@ public final class GltfPostProcessor {
             if (source < 0 || source >= images.size()) continue;
             JsonObject image = images.get(source).getAsJsonObject();
             String name = image.has("name") ? image.get("name").getAsString() : "";
-            if (name.endsWith("_atlas")) {
-                texture.addProperty("sampler", clampSamplerIndex);
-            } else {
-                texture.addProperty("sampler", 0);
-            }
+            texture.addProperty("sampler", name.endsWith("_atlas") ? clampSamplerIndex : 0);
         }
 
+        markTransparentMaterials(root);
         writeRoot(gltfFile, root);
     }
 
     /**
-     * Adds real glTF KHR_lights_punctual point lights for Minecraft emitters.
-     * The same source list is also written to the Minesport sidecar for OBJ and
-     * for Blender-specific editing semantics.
+     * Adds real KHR_lights_punctual lights and also performs format-level
+     * material semantic repair. Material repair runs even when the scene has no
+     * light emitters, because every GltfExporter invocation calls this method.
      */
     public static void addMinecraftLights(File gltfFile, List<BlockData> blocks) throws IOException {
-        if (gltfFile == null || !gltfFile.isFile() || blocks == null || blocks.isEmpty()) return;
-        List<MinecraftLightExporter.LightSource> sources = MinecraftLightExporter.resolve(blocks);
-        if (sources.isEmpty()) return;
+        if (gltfFile == null || !gltfFile.isFile()) return;
 
         JsonObject root = readRoot(gltfFile);
+        markTransparentMaterials(root);
         markMinecraftEmissiveMaterials(root);
+
+        List<MinecraftLightExporter.LightSource> sources = blocks == null
+            ? List.of()
+            : MinecraftLightExporter.resolve(blocks);
+        if (sources.isEmpty()) {
+            writeRoot(gltfFile, root);
+            return;
+        }
+
         JsonArray nodes = array(root, "nodes");
         JsonArray scenes = array(root, "scenes");
-        if (scenes.isEmpty()) return;
+        if (scenes.isEmpty()) {
+            writeRoot(gltfFile, root);
+            return;
+        }
 
         int sceneIndex = root.has("scene") ? root.get("scene").getAsInt() : 0;
         if (sceneIndex < 0 || sceneIndex >= scenes.size()) sceneIndex = 0;
@@ -125,7 +124,6 @@ public final class GltfPostProcessor {
             JsonObject node = new JsonObject();
             node.addProperty("name", source.name());
             JsonArray translation = new JsonArray();
-            // glTF is Y-up, matching Minesport's Minecraft-space mesh export.
             translation.add(source.x() - center[0]);
             translation.add(source.y() - center[1]);
             translation.add(source.z() - center[2]);
@@ -151,18 +149,7 @@ public final class GltfPostProcessor {
             else sceneNodes.add(nodeIndex);
         }
 
-        JsonArray extensionsUsed = root.has("extensionsUsed") && root.get("extensionsUsed").isJsonArray()
-            ? root.getAsJsonArray("extensionsUsed") : new JsonArray();
-        boolean hasPunctual = false;
-        for (JsonElement element : extensionsUsed) {
-            if (element.isJsonPrimitive() && "KHR_lights_punctual".equals(element.getAsString())) {
-                hasPunctual = true;
-                break;
-            }
-        }
-        if (!hasPunctual) extensionsUsed.add("KHR_lights_punctual");
-        root.add("extensionsUsed", extensionsUsed);
-
+        ensureExtensionUsed(root, "KHR_lights_punctual");
         JsonObject extensions = root.has("extensions") && root.get("extensions").isJsonObject()
             ? root.getAsJsonObject("extensions") : new JsonObject();
         JsonObject punctual = new JsonObject();
@@ -172,6 +159,55 @@ public final class GltfPostProcessor {
         root.add("nodes", nodes);
 
         writeRoot(gltfFile, root);
+    }
+
+    /** Upgrade water/glass from generic alpha-mask materials to real translucent materials. */
+    private static void markTransparentMaterials(JsonObject root) {
+        JsonArray materials = root.has("materials") && root.get("materials").isJsonArray()
+            ? root.getAsJsonArray("materials") : null;
+        if (materials == null) return;
+
+        boolean usedTransmission = false;
+        for (JsonElement element : materials) {
+            if (!element.isJsonObject()) continue;
+            JsonObject material = element.getAsJsonObject();
+            String name = material.has("name") ? material.get("name").getAsString() : "";
+            MaterialSemantics.Kind kind = MaterialSemantics.classify(name);
+            if (kind == MaterialSemantics.Kind.DEFAULT) continue;
+
+            material.addProperty("alphaMode", "BLEND");
+            material.remove("alphaCutoff");
+            material.addProperty("doubleSided", true);
+
+            JsonObject pbr = material.has("pbrMetallicRoughness") && material.get("pbrMetallicRoughness").isJsonObject()
+                ? material.getAsJsonObject("pbrMetallicRoughness") : new JsonObject();
+            pbr.addProperty("metallicFactor", 0.0);
+            pbr.addProperty("roughnessFactor", MaterialSemantics.roughness(name));
+
+            JsonArray baseFactor = new JsonArray();
+            baseFactor.add(1.0);
+            baseFactor.add(1.0);
+            baseFactor.add(1.0);
+            baseFactor.add(kind == MaterialSemantics.Kind.WATER ? 0.72 : 0.88);
+            pbr.add("baseColorFactor", baseFactor);
+            material.add("pbrMetallicRoughness", pbr);
+
+            JsonObject materialExtensions = material.has("extensions") && material.get("extensions").isJsonObject()
+                ? material.getAsJsonObject("extensions") : new JsonObject();
+            JsonObject transmission = new JsonObject();
+            transmission.addProperty("transmissionFactor", kind == MaterialSemantics.Kind.GLASS ? 0.92 : 0.35);
+            materialExtensions.add("KHR_materials_transmission", transmission);
+            material.add("extensions", materialExtensions);
+            usedTransmission = true;
+
+            JsonObject extras = material.has("extras") && material.get("extras").isJsonObject()
+                ? material.getAsJsonObject("extras") : new JsonObject();
+            extras.addProperty("minesportMaterialClass", kind.name());
+            extras.addProperty("minesportTranslucent", true);
+            material.add("extras", extras);
+        }
+
+        if (usedTransmission) ensureExtensionUsed(root, "KHR_materials_transmission");
     }
 
     /** Makes the source texture itself glow as well as creating a scene light. */
@@ -216,10 +252,21 @@ public final class GltfPostProcessor {
         if (name.contains("furnace_front") && !name.contains("furnace_front_on")) return false;
         if (name.contains("blast_furnace_front") && !name.contains("blast_furnace_front_on")) return false;
         if (name.contains("smoker_front") && !name.contains("smoker_front_on")) return false;
-        for (String token : EMISSIVE_TOKENS) {
-            if (name.contains(token)) return true;
-        }
+        for (String token : EMISSIVE_TOKENS) if (name.contains(token)) return true;
         return false;
+    }
+
+    private static void ensureExtensionUsed(JsonObject root, String name) {
+        JsonArray extensionsUsed = root.has("extensionsUsed") && root.get("extensionsUsed").isJsonArray()
+            ? root.getAsJsonArray("extensionsUsed") : new JsonArray();
+        for (JsonElement element : extensionsUsed) {
+            if (element.isJsonPrimitive() && name.equals(element.getAsString())) {
+                root.add("extensionsUsed", extensionsUsed);
+                return;
+            }
+        }
+        extensionsUsed.add(name);
+        root.add("extensionsUsed", extensionsUsed);
     }
 
     private static JsonObject readRoot(File file) throws IOException {
