@@ -87,7 +87,25 @@ def _safe_hit_xyz(context, parent, event):
     return None
 
 
-def _focus(parent, xyz):
+def _remember_face(parent, normal):
+    if normal is None or parent is None or not hasattr(parent, "minesport"):
+        return None
+    # Import lazily so the viewport module remains independently loadable if the
+    # optional light subsystem is ever disabled.
+    try:
+        from . import lights
+        snap = lights._snap_from_world_normal(parent, normal)
+    except Exception:
+        snap = None
+    if snap in {"TOP", "BOTTOM"}:
+        parent["minesport_flatter_selected_face"] = snap
+        parent.minesport.light_snap_face = snap
+        return snap
+    parent["minesport_flatter_selected_face"] = "SIDE"
+    return "SIDE"
+
+
+def _focus(parent, xyz, normal=None):
     xyz = tuple(map(int, xyz))
     parent[flatter._SELECTED_KEY] = json.dumps(list(xyz), separators=(",", ":"))
     payload = flatter._load_payload(parent)
@@ -103,10 +121,12 @@ def _focus(parent, xyz):
     parent["minesport_logical_selection_type"] = "Minecraft block"
     parent["minesport_logical_selection_label"] = "Minecraft block: " + label
     parent["minesport_logical_selection_xyz"] = list(xyz)
+    snap = _remember_face(parent, normal)
     if hasattr(parent, "minesport"):
         parent.minesport.flatter_selected = label
     try:
-        bpy.context.workspace.status_text_set("Minecraft block: " + label)
+        suffix = f" · {snap.lower()} face" if snap in {"TOP", "BOTTOM"} else ""
+        bpy.context.workspace.status_text_set("Minecraft block: " + label + suffix)
     except Exception:
         pass
     return block_id
@@ -142,12 +162,14 @@ def _safe_pick_modal(self, context, event):
         self.report({"WARNING"}, "No logical block exists at that point")
         return {"RUNNING_MODAL"}
 
-    block_id = _focus(obj, xyz)
+    block_id = _focus(obj, xyz, normal=normal)
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     context.view_layer.objects.active = obj
     context.workspace.status_text_set(None)
-    self.report({"INFO"}, f"Focused {block_id} @ {xyz}")
+    snap = str(obj.get("minesport_flatter_selected_face") or "")
+    suffix = f" · {snap.lower()} face" if snap in {"TOP", "BOTTOM"} else ""
+    self.report({"INFO"}, f"Focused {block_id} @ {xyz}{suffix}")
     return {"FINISHED"}
 
 
