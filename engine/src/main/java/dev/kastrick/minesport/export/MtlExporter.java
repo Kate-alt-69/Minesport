@@ -7,21 +7,8 @@ import java.awt.image.BufferedImage;
 import java.io.*;
 import java.util.*;
 
-/**
- * Writes a .mtl material file alongside the OBJ export.
- * Extracts textures from the resolver chain and saves them as PNGs
- * next to the OBJ file, then references them in the MTL.
- */
+/** Writes a .mtl file alongside OBJ exports and extracts referenced textures. */
 public class MtlExporter {
-
-    /**
-     * Write a .mtl file for all texture paths used in the export.
-     * Also extracts texture PNGs into a textures/ subfolder next to the OBJ.
-     *
-     * @param materials     all unique texture/tint combinations used
-     * @param mtlFile       output .mtl file
-     * @param resolvers     resolver chain to load textures from
-     */
     public static void export(
             Set<MaterialKey> materials,
             File mtlFile,
@@ -37,10 +24,9 @@ public class MtlExporter {
             for (MaterialKey material : materials) {
                 String texPath = material.texturePath();
                 if (texPath.startsWith("MISSING_")) {
-                    // Fallback material — no texture
                     String matName = texPath.replace(':', '_').replace('/', '_');
                     w.println("newmtl " + matName);
-                    w.println("Kd 0.5 0.0 0.5"); // purple = missing
+                    w.println("Kd 0.5 0.0 0.5");
                     w.println("Ka 0.1 0.0 0.1");
                     w.println("Ks 0.0 0.0 0.0");
                     w.println();
@@ -51,27 +37,37 @@ public class MtlExporter {
                 String pngName = matName + ".png";
                 File pngFile = new File(texturesDir, pngName);
 
-                // Always refresh generated assets. Re-exporting into the same
-                // folder must not silently retain an older pack/tint texture.
                 BufferedImage img = material.apply(resolvers.resolveTexture(texPath));
                 if (img == null) img = missingTexture();
                 ImageIO.write(img, "PNG", pngFile);
 
                 w.println("newmtl " + matName);
                 if (pngFile.exists()) {
-                    // Relative path from MTL to texture
                     w.println("map_Kd textures/" + pngName);
-                    if (img != null && hasTransparency(img)) {
+                    if (hasTransparency(img)) {
                         String alphaName = matName + "__alpha.png";
                         writeAlphaMap(img, new File(texturesDir, alphaName));
                         w.println("map_d textures/" + alphaName);
                     }
                 }
+
+                MaterialSemantics.Kind kind = MaterialSemantics.classify(texPath);
                 w.println("Kd 1.0 1.0 1.0");
                 w.println("Ka 0.1 0.1 0.1");
-                w.println("Ks 0.0 0.0 0.0");
-                w.println("d 1.0");
-                w.println("illum 1");
+                if (kind == MaterialSemantics.Kind.WATER || kind == MaterialSemantics.Kind.GLASS) {
+                    // MTL has no modern transmission model. Dissolve + specular
+                    // gives OBJ importers a useful transparent fallback while
+                    // Minesport's Blender translator upgrades it to Principled
+                    // transmission after import.
+                    w.println("Ks 0.35 0.35 0.35");
+                    w.printf(Locale.ROOT, "Ns %.1f%n", kind == MaterialSemantics.Kind.GLASS ? 220.0 : 120.0);
+                    w.printf(Locale.ROOT, "d %.3f%n", MaterialSemantics.dissolve(texPath));
+                    w.println("illum 4");
+                } else {
+                    w.println("Ks 0.0 0.0 0.0");
+                    w.println("d 1.0");
+                    w.println("illum 1");
+                }
                 w.println();
             }
         }
