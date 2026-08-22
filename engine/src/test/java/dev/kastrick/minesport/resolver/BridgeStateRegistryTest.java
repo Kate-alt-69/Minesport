@@ -76,6 +76,39 @@ class BridgeStateRegistryTest {
     }
 
     @Test
+    void tagsVanillaAndModdedBlocksWithSchema2RuntimeGeometry() throws Exception {
+        File snapshot = File.createTempFile("minesport-runtime-registry-", ".json");
+        snapshot.deleteOnExit();
+        Files.writeString(snapshot.toPath(), """
+            {
+              "schema": 2,
+              "minecraftVersion": "1.21.10",
+              "modsFingerprint": "test",
+              "blocks": {
+                "minecraft:grass_block": {
+                  "loaderType": "vanilla",
+                  "variants": [{"properties": {"snowy": "false"}, "quads": [{}]}],
+                  "lights": []
+                },
+                "example:machine": {
+                  "loaderType": "fabric",
+                  "variants": [{"properties": {}, "quads": [{}]}],
+                  "lights": []
+                }
+              }
+            }
+            """);
+
+        var blocks = new ArrayList<BlockData>();
+        blocks.add(new BlockData(0, 64, 0, "minecraft:grass_block", Map.of("snowy", "false")));
+        blocks.add(new BlockData(1, 64, 0, "example:machine", Map.of()));
+
+        assertEquals(0, BridgeStateRegistry.apply(snapshot, "1.21.10", blocks, null));
+        assertEquals(snapshot.getAbsolutePath(), blocks.get(0).runtimeRegistryPath);
+        assertEquals(snapshot.getAbsolutePath(), blocks.get(1).runtimeRegistryPath);
+    }
+
+    @Test
     void rejectsSnapshotFromAnotherMinecraftVersion() throws Exception {
         File snapshot = File.createTempFile("minesport-bridge-registry-", ".json");
         snapshot.deleteOnExit();
