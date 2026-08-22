@@ -70,6 +70,7 @@ def register():
     _register_optional("liquid_merge")
     _register_optional("selection_sets")
     _register_optional("liquid_ui")
+    _register_optional("viewport_interaction")
     _register_optional("flatter_overlay")
     _register_optional("flatter_map")
     _register_optional("obj_import")
@@ -82,6 +83,7 @@ def unregister():
         "obj_import",
         "flatter_map",
         "flatter_overlay",
+        "viewport_interaction",
         "liquid_ui",
         "selection_sets",
         "liquid_merge",
