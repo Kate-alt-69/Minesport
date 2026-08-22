@@ -3,7 +3,7 @@
 !endif
 
 !define APP_NAME "Minesport"
-!define APP_VERSION "0.1.1"
+!define APP_VERSION "0.2.0"
 !define APP_PUBLISHER "Kastrick"
 !define APP_EXE "minesport.exe"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Minesport"
@@ -18,7 +18,7 @@ SetCompressor /SOLID lzma
 CRCCheck force
 BrandingText "${APP_PUBLISHER}"
 
-VIProductVersion "0.1.1.0"
+VIProductVersion "0.2.0.0"
 VIAddVersionKey /LANG=1033 "ProductName" "${APP_NAME}"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=1033 "CompanyName" "${APP_PUBLISHER}"
@@ -52,7 +52,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright ${APP_PUBLISHER}"
 
 Function .onInit
   ${IfNot} ${RunningX64}
-	MessageBox MB_ICONSTOP|MB_OK "Minesport requires 64-bit Windows."
+    MessageBox MB_ICONSTOP|MB_OK "Minesport requires 64-bit Windows."
     Abort
   ${EndIf}
 FunctionEnd
@@ -63,7 +63,7 @@ Section "!Minesport core (required)" SEC_CORE
   SetRegView 64
 
   SetOutPath "$INSTDIR"
-	File /oname=minesport.exe "${SourceDir}\dist\source\Minesport.exe"
+  File /oname=minesport.exe "${SourceDir}\dist\source\Minesport.exe"
 
   SetOutPath "$INSTDIR\tools"
   File "${SourceDir}\installer\windows\install-blender.ps1"
@@ -72,7 +72,7 @@ Section "!Minesport core (required)" SEC_CORE
   File "${SourceDir}\bridge-versions\manifest.json"
 
   SetOutPath "$INSTDIR\bridge-data\bundled\1.21.10"
-  File "${SourceDir}\dist\bundled-bridge\minesport-bridge-0.1.0.jar"
+  File "${SourceDir}\dist\bundled-bridge\minesport-bridge-0.2.0.jar"
 
   CreateDirectory "$INSTDIR\bridge-data\compiled"
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR\bridge-data\compiled" /grant *S-1-5-32-545:(OI)(CI)M /T /C'
@@ -117,24 +117,22 @@ Section /o "Install Minesport Blender translator" SEC_TRANSLATOR
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install the Minesport application, bundled Minecraft 1.21.10 bridge, compatibility manifest, and bridge cache."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "Create a Minesport shortcut on the shared desktop."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_BLENDER} "Download and install Blender 5.2 LTS using Minesport's verified PowerShell installer."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_TRANSLATOR} "Install or repair the bundled Minesport translator in detected Blender 4.3+ profiles."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install Minesport 0.2.0, the bundled Minecraft 1.21.10 bridge, compatibility manifest, and bridge cache."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "Create a Minesport shortcut on the desktop."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_BLENDER} "Download and install Blender 5.2 LTS from the official Blender Foundation mirror."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_TRANSLATOR} "Install the Minesport 0.2.0 Blender translator into detected Blender 4.3+ profiles."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
   SetShellVarContext all
   SetRegView 64
-
   Delete "$DESKTOP\Minesport.lnk"
   Delete "$SMPROGRAMS\Minesport.lnk"
-
   Delete "$INSTDIR\${APP_EXE}"
+  Delete "$INSTDIR\tools\install-blender.ps1"
   Delete "$INSTDIR\Uninstall.exe"
-  RMDir /r "$INSTDIR\tools"
   RMDir /r "$INSTDIR\bridge-data"
+  RMDir "$INSTDIR\tools"
   RMDir "$INSTDIR"
-
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
 SectionEnd
