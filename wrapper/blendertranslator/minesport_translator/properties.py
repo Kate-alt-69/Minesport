@@ -69,6 +69,24 @@ class MinesportProperties(bpy.types.PropertyGroup):
     )
     flatter_active_set: StringProperty(name="Active selection set", default="", options={"HIDDEN"})
 
+    light_level: IntProperty(
+        name="Light Level",
+        description="Minecraft block-light level. A level N source has N logical one-block decay steps",
+        default=15,
+        min=1,
+        max=15,
+    )
+    light_snap_face: EnumProperty(
+        name="Light Snap",
+        description="Where a user-created Minesport light snaps relative to the focused logical block",
+        items=(
+            ("TOP", "Top face", "Snap to the top face of the focused Minecraft block"),
+            ("BOTTOM", "Bottom face", "Snap to the bottom face of the focused Minecraft block"),
+            ("CENTER", "Block center", "Place the light in the center of the focused Minecraft block"),
+        ),
+        default="TOP",
+    )
+
 
 class MINESPORT_PT_properties(bpy.types.Panel):
     bl_label = "Minesport"
