@@ -13,6 +13,8 @@ import net.minecraft.world.level.block.Block;
 
 import java.util.*;
 
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGHT;
+
 public class MinesportBridge implements ClientModInitializer {
 
     @Override
