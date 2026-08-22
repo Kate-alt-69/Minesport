@@ -22,14 +22,16 @@ class MINESPORT_OT_import_gltf(bpy.types.Operator, ImportHelper):
     )
     bl_options = {"REGISTER", "UNDO"}
 
-    filename_ext = ".gltf"
-    filter_glob: StringProperty(
-        default="*.gltf;*.glb",
-        options={"HIDDEN"},
-    )
+    # Keep this empty because the same operator accepts both .gltf and .glb.
+    # ImportHelper otherwise tries to force one extension when a filename is typed.
+    filename_ext = ""
+    filter_glob: StringProperty(default="*.gltf;*.glb", options={"HIDDEN"})
 
     def execute(self, context):
         path = str(Path(self.filepath))
+        if Path(path).suffix.lower() not in {".gltf", ".glb"}:
+            self.report({"ERROR"}, "Choose a .gltf or .glb Minesport export")
+            return {"CANCELLED"}
         if not hasattr(bpy.ops.import_scene, "gltf"):
             self.report({"ERROR"}, "Blender's glTF importer is unavailable")
             return {"CANCELLED"}
@@ -52,12 +54,8 @@ class MINESPORT_OT_import_gltf(bpy.types.Operator, ImportHelper):
         if "FINISHED" not in result:
             return result
 
-        imported = [
-            obj for obj in bpy.data.objects
-            if obj.as_pointer() not in before
-        ]
+        imported = [obj for obj in bpy.data.objects if obj.as_pointer() not in before]
         _prepare_scene(imported)
-
         metadata = load_sidecar(path)
         translate_scene(metadata, imported, asset_path=path)
         attach_flatter_metadata(metadata, imported, asset_path=path)
@@ -70,10 +68,7 @@ class MINESPORT_OT_import_gltf(bpy.types.Operator, ImportHelper):
         if selectable:
             context.view_layer.objects.active = selectable[0]
 
-        flatter_count = sum(
-            1 for obj in imported
-            if obj.get("minesport_type") == "FLATTER"
-        )
+        flatter_count = sum(1 for obj in imported if obj.get("minesport_type") == "FLATTER")
         self.report(
             {"INFO"},
             f"Minesport import complete · {len(imported)} object(s) · {flatter_count} FLATTER cell(s)",
@@ -86,7 +81,6 @@ def _prepare_scene(imported):
     units.system = "METRIC"
     units.length_unit = "METERS"
     units.scale_length = 1.0
-
     for obj in imported:
         if hasattr(obj, "minesport"):
             obj.minesport.translated = True
