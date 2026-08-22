@@ -62,4 +62,35 @@ func TestValidateCacheRootRejectsDangerousDirectories(t *testing.T) {
 			t.Fatal("user home must never be accepted as a cache root")
 		}
 	}
+
+	volume := filepath.VolumeName(os.TempDir())
+	shallow := filepath.Join(volume+string(filepath.Separator), "minesport-cache")
+	if err := validateCacheRoot(shallow); err == nil {
+		t.Fatalf("top-level cache path %s must be rejected", shallow)
+	}
+}
+
+func TestRemoveAllFailsClosedBeforeBridgeCleanup(t *testing.T) {
+	root := t.TempDir()
+	bridgeData := filepath.Join(root, "bridge-data")
+	compiled := filepath.Join(bridgeData, "compiled", "1.21.11", "minesport-bridge-1.21.11.jar")
+	if err := os.MkdirAll(filepath.Dir(compiled), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(compiled, []byte("bridge"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	volume := filepath.VolumeName(os.TempDir())
+	unsafeCache := filepath.Join(volume+string(filepath.Separator), "minesport-cache")
+	t.Setenv("MINESPORT_CACHE_DIR", unsafeCache)
+	t.Setenv("MINESPORT_DATA_DIR", filepath.Join(root, "data"))
+	t.Setenv("MINESPORT_BRIDGE_DATA", bridgeData)
+
+	if _, err := RemoveAll(); err == nil {
+		t.Fatal("unsafe cache root should abort cleanup")
+	}
+	if _, err := os.Stat(compiled); err != nil {
+		t.Fatalf("Bridge cache was touched before root validation: %v", err)
+	}
 }
