@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Minesport Dynamic Translator",
     "author": "Kastrick / Minesport",
-    "version": (0, 1, 6),
+    "version": (0, 1, 7),
     "blender": (4, 3, 0),
     "location": "File > Import / Object Properties / Node Editor / 3D View > Minesport",
     "description": "Imports/translates Minesport exports and FLATTER logical block geometry into Blender-native data.",
@@ -75,10 +75,12 @@ def register():
     _register_optional("flatter_map")
     _register_optional("obj_import")
     _register_optional("gltf_import")
+    _register_optional("roundtrip")
 
 
 def unregister():
     for name in (
+        "roundtrip",
         "gltf_import",
         "obj_import",
         "flatter_map",
