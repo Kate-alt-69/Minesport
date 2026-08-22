@@ -24,6 +24,7 @@ const (
 	captureBridgePrefix  = "minesport-capture-bridge-"
 	captureBridgeSuffix  = ".jar"
 	registryFileName     = "registry.data"
+	legacyRegistryName   = "registry.json"
 	modHashCacheFileName = "mod-hash-cache-v1.json"
 	modHashCacheSchema   = 1
 )
@@ -459,8 +460,20 @@ func SnapshotPathForMods(version, modsPath string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	return SnapshotPathForFingerprint(version, fingerprint)
+}
+
+// SnapshotPathForFingerprint checks a registry using an already-computed exact
+// mod fingerprint. Runtime workers use this while polling so a 250 ms readiness
+// loop never re-hashes the entire mod directory.
+func SnapshotPathForFingerprint(version, fingerprint string) (string, bool) {
+	version = strings.TrimSpace(version)
+	fingerprint = strings.TrimSpace(fingerprint)
+	if version == "" || fingerprint == "" {
+		return "", false
+	}
 	path := snapshotPathAt(cacheDir(), version, fingerprint)
-	if !validSnapshot(path, strings.TrimSpace(version), fingerprint) {
+	if !validSnapshot(path, version, fingerprint) {
 		return "", false
 	}
 	return path, true
@@ -522,6 +535,9 @@ func writeSnapshotAt(dir string, snapshot Snapshot) (string, error) {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return "", err
 	}
+	// Schema 4 is authoritative. Remove a legacy JSON snapshot from the same
+	// fingerprint folder so diagnostics/cache cleanup do not leave zombie copies.
+	_ = os.Remove(filepath.Join(folder, legacyRegistryName))
 	_ = pruneSiblingFingerprints(dir, snapshot.MinecraftVersion, snapshot.ModsFingerprint)
 	return path, nil
 }
@@ -589,24 +605,30 @@ func modsFingerprintAt(modsPath, hashCachePath string) (string, error) {
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
 
+	// Correctness wins here: size + mtime are not a content identity. On Windows
+	// a JAR can be rewritten to same-size bytes quickly enough that metadata looks
+	// unchanged. Hash every current JAR once per fingerprint request; callers that
+	// poll readiness retain the resulting fingerprint and never call this loop.
 	modHashCacheMu.Lock()
 	cache := readJarHashCache(hashCachePath)
 	dirty := false
 	for index := range items {
-		key := jarHashCacheKey(items[index].path)
-		cached, ok := cache.Entries[key]
-		if ok && cached.Size == items[index].size && cached.ModTime == items[index].mod && len(cached.SHA256) == 64 {
-			items[index].hash = cached.SHA256
-			continue
-		}
 		digest, hashErr := hashFileSHA256(items[index].path)
 		if hashErr != nil {
 			modHashCacheMu.Unlock()
 			return "", fmt.Errorf("hash mod JAR %s: %w", items[index].path, hashErr)
 		}
 		items[index].hash = digest
-		cache.Entries[key] = jarHashCacheEntry{Size: items[index].size, ModTime: items[index].mod, SHA256: digest}
-		dirty = true
+		key := jarHashCacheKey(items[index].path)
+		current := jarHashCacheEntry{
+			Size:    items[index].size,
+			ModTime: items[index].mod,
+			SHA256:  digest,
+		}
+		if cached, ok := cache.Entries[key]; !ok || cached != current {
+			cache.Entries[key] = current
+			dirty = true
+		}
 	}
 	if dirty {
 		_ = writeJarHashCache(hashCachePath, cache)
