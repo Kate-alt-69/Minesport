@@ -108,13 +108,13 @@ func openWithApp(appName, filePath string) error {
 		}
 		pathLiteral := strconv.Quote(filepath.Clean(filePath))
 		extension := strings.ToLower(filepath.Ext(filePath))
-		operator := "bpy.ops.import_scene.gltf(filepath=" + pathLiteral + ")"
+		operator := "bpy.ops.import_scene.minesport_gltf(filepath=" + pathLiteral + ")"
 		if extension == ".obj" {
 			operator = "bpy.ops.import_scene.minesport_obj(filepath=" + pathLiteral + ")"
 		}
-		// Enable the bundled one-shot translator before importing. This makes
-		// the completion dialog's Blender action reliable even when the add-on
-		// files were installed but Blender had not enabled them yet.
+		// Enable the bundled translator first, then always route Minesport model
+		// exports through its dedicated importer so glTF and OBJ get identical
+		// metadata/FLATTER activation semantics.
 		expression := "import addon_utils,bpy; addon_utils.enable('minesport_translator', default_set=True, persistent=True); " + operator
 		return exec.Command(exe, "--python-expr", expression).Start()
 	}
