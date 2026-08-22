@@ -83,14 +83,10 @@ public final class BlenderMetadataExporter {
         }
         root.add("animations", animations);
 
-        // OBJ has no scene-light primitive, so its lights live in this sidecar and
-        // become native Blender lights during translation. glTF can carry them
-        // natively as KHR_lights_punctual as well; the sidecar still preserves the
-        // Minecraft level/falloff semantics for Blender editing and round trips.
-        if ("gltf".equalsIgnoreCase(format) && !lights.isEmpty()) {
-            GltfPostProcessor.addMinecraftLights(exportFile, blocks);
-        }
-
+        // OBJ relies on this sidecar because the format has no scene-light
+        // primitive. glTF carries its native KHR_lights_punctual data directly
+        // from GltfExporter; the sidecar adds Minecraft level/falloff semantics
+        // for Blender editing and round-trip updates without modifying glTF twice.
         try (Writer writer = new BufferedWriter(new FileWriter(sidecar))) {
             GSON.toJson(root, writer);
         }
