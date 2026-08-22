@@ -5,21 +5,28 @@ import com.google.gson.JsonParser;
 import dev.kastrick.minesport.export.BlockGeometryClassifier;
 import dev.kastrick.minesport.export.BlockGeometryKind;
 import dev.kastrick.minesport.export.BlockGrouper;
+import dev.kastrick.minesport.export.Quad;
 import dev.kastrick.minesport.export.SpatialKey;
 import dev.kastrick.minesport.region.BlockData;
 import dev.kastrick.minesport.resolver.ResolverChain;
+import dev.kastrick.minesport.resolver.RuntimeModelRegistry;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Export-mode GeometryBuilder wrapper used by IPC mode. */
 public final class GeometryBuilder extends dev.kastrick.minesport.export.GeometryBuilder {
     private static final int[][] NEIGHBORS={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
     private Map<Long,BlockData> worldIndex=Map.of();
     private final Map<String,BlockGeometryKind> kindCache=new HashMap<>();
+    private final Map<String,RuntimeModelRegistry> runtimeRegistries=new ConcurrentHashMap<>();
+    private final Set<String> failedRuntimeRegistries=ConcurrentHashMap.newKeySet();
     private final BlockGeometryClassifier classifier;
     private boolean hiddenBlockCullingEnabled;
 
@@ -36,9 +43,28 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
         worldIndex=index;kindCache.clear();
     }
 
-    @Override public List<dev.kastrick.minesport.export.Quad> buildBlock(BlockData block){
+    @Override public List<Quad> buildBlock(BlockData block){
         if(hiddenBlockCullingEnabled&&!block.isAir()&&isFullyEnclosed(block))return List.of();
+
+        // For registered modded/custom blocks, prefer the exact baked quads that
+        // Minecraft produced during runtime-registry capture. Texture pixels are
+        // still resolved later by the normal ResolverChain using quad.texturePath().
+        RuntimeModelRegistry runtime=runtimeRegistry(block.runtimeRegistryPath);
+        if(runtime!=null&&runtime.shouldOverride(block)){
+            List<Quad> baked=runtime.build(block);
+            if(baked!=null&&!baked.isEmpty())return baked;
+        }
         return super.buildBlock(block);
+    }
+
+    private RuntimeModelRegistry runtimeRegistry(String path){
+        if(path==null||path.isBlank()||failedRuntimeRegistries.contains(path))return null;
+        RuntimeModelRegistry cached=runtimeRegistries.get(path);
+        if(cached!=null)return cached;
+        RuntimeModelRegistry loaded=RuntimeModelRegistry.load(new File(path),"",null);
+        if(loaded==null){failedRuntimeRegistries.add(path);return null;}
+        RuntimeModelRegistry previous=runtimeRegistries.putIfAbsent(path,loaded);
+        return previous!=null?previous:loaded;
     }
 
     private boolean isFullyEnclosed(BlockData block){
