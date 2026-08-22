@@ -11,31 +11,27 @@ import java.io.Reader;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
 
-/**
- * Applies runtime metadata captured by the Fabric bridge to decoded world
- * blocks. The first consumer is Minecraft light emission, but the snapshot is
- * intentionally a separate resolver layer so future bridge-only state metadata
- * does not have to be hardcoded into the region decoder.
- */
+/** Applies semantic metadata captured by the Minecraft/Fabric runtime worker. */
 public final class BridgeStateRegistry {
-    public static final int SNAPSHOT_SCHEMA = 1;
+    public static final int SNAPSHOT_SCHEMA = 2;
 
     private BridgeStateRegistry() {}
 
     private record LightState(Map<String, String> properties, int lightLevel) {}
 
+    /**
+     * Legacy compatibility entrypoint. Runtime registries are fingerprint-scoped,
+     * so production exports should pass an explicit verified snapshot path.
+     */
     public static int applyDefault(
         String minecraftVersion,
         List<BlockData> blocks,
         Consumer<String> log
     ) {
-        File snapshot = defaultSnapshotFile(minecraftVersion);
-        if (snapshot == null || !snapshot.isFile()) return 0;
-        return apply(snapshot, minecraftVersion, blocks, log);
+        return 0;
     }
 
     public static int apply(
@@ -52,13 +48,13 @@ public final class BridgeStateRegistry {
         try (Reader reader = new FileReader(snapshot)) {
             root = JsonParser.parseReader(reader).getAsJsonObject();
         } catch (Exception exception) {
-            warn(log, "Bridge registry could not be read: " + exception.getMessage());
+            warn(log, "Runtime registry could not be read: " + exception.getMessage());
             return 0;
         }
 
         int schema = root.has("schema") ? safeInt(root.get("schema"), -1) : -1;
-        if (schema != SNAPSHOT_SCHEMA) {
-            warn(log, "Ignoring bridge registry schema " + schema + " (expected " + SNAPSHOT_SCHEMA + ")");
+        if (schema != 1 && schema != SNAPSHOT_SCHEMA) {
+            warn(log, "Ignoring runtime registry schema " + schema + " (expected 1 or " + SNAPSHOT_SCHEMA + ")");
             return 0;
         }
 
@@ -67,7 +63,7 @@ public final class BridgeStateRegistry {
             : "";
         String expected = expectedMinecraftVersion == null ? "" : expectedMinecraftVersion.trim();
         if (!expected.isEmpty() && !capturedVersion.equals(expected)) {
-            warn(log, "Ignoring bridge registry for Minecraft " + capturedVersion
+            warn(log, "Ignoring runtime registry for Minecraft " + capturedVersion
                 + " while exporting " + expected);
             return 0;
         }
@@ -79,9 +75,18 @@ public final class BridgeStateRegistry {
 
         Map<String, List<LightState>> registry = new LinkedHashMap<>();
         for (var blockEntry : blockObject.entrySet()) {
-            if (!blockEntry.getValue().isJsonArray()) continue;
+            JsonElement source = blockEntry.getValue();
+            // Schema 1 stored the light-state array directly under the block ID.
+            // Schema 2 stores a full runtime block object with a "lights" array.
+            JsonElement lights = source;
+            if (schema >= 2 && source.isJsonObject()) {
+                JsonObject block = source.getAsJsonObject();
+                lights = block.has("lights") ? block.get("lights") : null;
+            }
+            if (lights == null || !lights.isJsonArray()) continue;
+
             List<LightState> states = new ArrayList<>();
-            for (JsonElement element : blockEntry.getValue().getAsJsonArray()) {
+            for (JsonElement element : lights.getAsJsonArray()) {
                 if (!element.isJsonObject()) continue;
                 JsonObject state = element.getAsJsonObject();
                 int level = clampLevel(safeInt(state.get("lightLevel"), 0));
@@ -115,13 +120,12 @@ public final class BridgeStateRegistry {
 
             Map<String, String> properties = new LinkedHashMap<>(block.properties);
             properties.put("minesport_light_level", Integer.toString(match.lightLevel()));
-            BlockData enrichedBlock = copyWithProperties(block, properties);
-            blocks.set(index, enrichedBlock);
+            blocks.set(index, copyWithProperties(block, properties));
             enriched++;
         }
 
         if (enriched > 0 && log != null) {
-            log.accept("Bridge runtime metadata: applied light emission to " + enriched
+            log.accept("Runtime registry: applied Minecraft light emission to " + enriched
                 + " world block(s) from " + snapshot.getName());
         }
         return enriched;
@@ -157,47 +161,6 @@ public final class BridgeStateRegistry {
         copy.connectUp = source.connectUp;
         copy.isMultipart = source.isMultipart;
         return copy;
-    }
-
-    static File defaultSnapshotFile(String minecraftVersion) {
-        if (minecraftVersion == null || minecraftVersion.isBlank()) return null;
-        File base = cacheBase();
-        if (base == null) return null;
-        return new File(
-            new File(new File(new File(base, "kastrick_software"), "minesport"), "bridge-registry"),
-            safeVersion(minecraftVersion) + ".json"
-        );
-    }
-
-    private static File cacheBase() {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        String home = System.getProperty("user.home", "");
-        if (os.contains("win")) {
-            String localAppData = System.getenv("LOCALAPPDATA");
-            if (localAppData != null && !localAppData.isBlank()) return new File(localAppData);
-            return home.isBlank() ? null : new File(new File(home, "AppData"), "Local");
-        }
-        if (os.contains("mac")) {
-            return home.isBlank() ? null : new File(new File(home, "Library"), "Caches");
-        }
-        String xdg = System.getenv("XDG_CACHE_HOME");
-        if (xdg != null && !xdg.isBlank()) return new File(xdg);
-        return home.isBlank() ? null : new File(home, ".cache");
-    }
-
-    private static String safeVersion(String value) {
-        StringBuilder builder = new StringBuilder();
-        for (char character : value.trim().toCharArray()) {
-            if ((character >= 'a' && character <= 'z')
-                || (character >= 'A' && character <= 'Z')
-                || (character >= '0' && character <= '9')
-                || character == '.' || character == '-' || character == '_') {
-                builder.append(character);
-            } else {
-                builder.append('_');
-            }
-        }
-        return builder.length() == 0 ? "unknown" : builder.toString();
     }
 
     private static int safeInt(JsonElement value, int fallback) {
