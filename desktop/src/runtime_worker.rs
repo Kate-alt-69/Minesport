@@ -1,5 +1,6 @@
-use crate::{registry, runtime};
+use crate::{bridge_compat, registry, runtime};
 use anyhow::{Context, Result, anyhow, bail};
+use regex::Regex;
 use std::{
     env,
     fs::{self, File},
@@ -34,6 +35,11 @@ pub struct Progress {
     pub message: String,
 }
 
+struct WorkspacePlan {
+    workspace: PathBuf,
+    java: u32,
+}
+
 pub fn prepare_full_registry<F>(version: &str, mods_path: &Path, force: bool, progress: F) -> Result<CacheResult>
 where
     F: FnMut(Progress) + Send,
@@ -51,9 +57,10 @@ pub fn prepare_full_registry_cancellable<F>(
 where
     F: FnMut(Progress) + Send,
 {
-    let version = version.trim();
-    if version != MC_1_21_10 {
-        bail!("Rust fast runtime worker currently supports the canonical bundled Minecraft 1.21.10 path; compatibility-profile port for {version} is still in progress");
+    let version = bridge_compat::normalize_version(version)
+        .ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
+    if !bridge_compat::is_supported(&version) {
+        bail!("Minesport has no embedded Fabric compatibility recipe for Minecraft {version}");
     }
     if !mods_path.is_dir() { bail!("mods folder is unavailable: {}", mods_path.display()); }
     if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
@@ -63,20 +70,27 @@ where
     if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
 
     let cache_root = runtime::cache_root();
-    let existing = registry::snapshot_path(&cache_root, version, &fingerprint);
-    if !force && registry::snapshot_exists(&cache_root, version, &fingerprint) {
+    let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);
+    if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
         progress(Progress { percent: 100, message: "Full runtime registry already ready".into() });
         return Ok(CacheResult { fingerprint, registry_path: existing, reused: true });
     }
 
-    progress(Progress { percent: 5, message: "Preparing local isolated Minecraft worker…".into() });
-    let workspace = create_workspace(version, mods_path)?;
+    progress(Progress { percent: 4, message: "Preparing local isolated Minecraft worker…".into() });
+    let plan = create_workspace(&version, mods_path, |update| {
+        progress(Progress {
+            percent: update.percent.clamp(4, 38),
+            message: if update.detail.is_empty() { update.stage } else { format!("{} · {}", update.stage, update.detail) },
+        });
+    })?;
+    let workspace = plan.workspace;
     let cleanup = WorkspaceCleanup(workspace.clone());
+    if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
 
     let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);
     let (capture_tx, capture_rx) = mpsc::sync_channel::<Result<PathBuf>>(1);
     let capture_root = cache_root.clone();
-    let capture_version = version.to_string();
+    let capture_version = version.clone();
     let capture_fingerprint = fingerprint.clone();
     thread::spawn(move || {
         let mut announced = false;
@@ -98,10 +112,10 @@ where
 
     listen_rx.recv_timeout(Duration::from_secs(5)).context("wait for Rust runtime registry receiver")??;
 
-    progress(Progress { percent: 12, message: "Receiver ready · starting local Fabric/Loom client…".into() });
+    progress(Progress { percent: 40, message: format!("Receiver ready · resolving JDK {}", plan.java) });
     let log_path = workspace.join("runtime-worker.log");
-    let mut child = start_gradle_worker(&workspace, &log_path)?;
-    progress(Progress { percent: 30, message: format!("Minecraft {version} worker started · loading full registered model registry") });
+    let mut child = start_gradle_worker(&workspace, &log_path, plan.java)?;
+    progress(Progress { percent: 55, message: format!("Minecraft {version} worker started · loading full registered model registry") });
 
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
     loop {
@@ -153,14 +167,53 @@ where
     }
 }
 
-fn create_workspace(version: &str, mods_path: &Path) -> Result<PathBuf> {
+fn create_workspace<F>(version: &str, mods_path: &Path, mut progress: F) -> Result<WorkspacePlan>
+where
+    F: FnMut(bridge_compat::CompatProgress),
+{
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-    let workspace = runtime::cache_root().join("bridge-build").join("runtime-workers").join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
-    let wrapper_dir = workspace.join("gradle").join("wrapper");
-    let run_mods = workspace.join("run").join("mods");
-    fs::create_dir_all(&wrapper_dir)?;
+    let workspace = runtime::cache_root()
+        .join("bridge-build")
+        .join("runtime-workers")
+        .join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
+
+    let java = if version == MC_1_21_10 {
+        create_fast_bundled_workspace(&workspace, version)?;
+        21
+    } else {
+        let prepared = bridge_compat::prepare_source(version, &workspace, &mut progress)?;
+        prepared.java
+    };
+
+    let run_dir = workspace.join("run");
+    let run_mods = run_dir.join("mods");
     fs::create_dir_all(&run_mods)?;
 
+    // The canonical 1.21.10 fast workspace intentionally has no Bridge source
+    // project. Its already-built Bridge is loaded as a local run mod instead.
+    if version == MC_1_21_10 {
+        let bridge = runtime::materialize_bundled_bridge()?;
+        fs::copy(&bridge, run_mods.join("minesport-bridge-0.2.0.jar"))
+            .with_context(|| format!("copy embedded Bridge {}", bridge.display()))?;
+    }
+
+    let count = copy_worker_mods(mods_path, &run_mods)?;
+    progress(bridge_compat::CompatProgress {
+        percent: 36,
+        stage: "Preparing worker".into(),
+        detail: format!("Copied {count} installed mod JAR(s) into disposable runtime"),
+    });
+
+    if let Some(instance) = mods_path.parent() {
+        let config = instance.join("config");
+        if config.is_dir() { copy_directory(&config, &run_dir.join("config"))?; }
+    }
+    Ok(WorkspacePlan { workspace, java })
+}
+
+fn create_fast_bundled_workspace(workspace: &Path, version: &str) -> Result<()> {
+    let wrapper_dir = workspace.join("gradle").join("wrapper");
+    fs::create_dir_all(&wrapper_dir)?;
     write_file(&workspace.join("gradlew"), GRADLEW_SH)?;
     write_file(&workspace.join("gradlew.bat"), GRADLEW_BAT)?;
     write_file(&wrapper_dir.join("gradle-wrapper.jar"), GRADLE_WRAPPER_JAR)?;
@@ -174,20 +227,10 @@ fn create_workspace(version: &str, mods_path: &Path) -> Result<PathBuf> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(workspace.join("gradlew"), fs::Permissions::from_mode(0o755))?;
     }
-
-    let bridge = runtime::materialize_bundled_bridge()?;
-    fs::copy(&bridge, run_mods.join("minesport-bridge-0.2.0.jar"))
-        .with_context(|| format!("copy embedded Bridge {}", bridge.display()))?;
-    copy_worker_mods(mods_path, &run_mods)?;
-
-    if let Some(instance) = mods_path.parent() {
-        let config = instance.join("config");
-        if config.is_dir() { copy_directory(&config, &workspace.join("run").join("config"))?; }
-    }
-    Ok(workspace)
+    Ok(())
 }
 
-fn start_gradle_worker(workspace: &Path, log_path: &Path) -> Result<Child> {
+fn start_gradle_worker(workspace: &Path, log_path: &Path, required_java: u32) -> Result<Child> {
     let stdout = File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
     let stderr = stdout.try_clone()?;
     let mut command = if cfg!(windows) {
@@ -200,16 +243,19 @@ fn start_gradle_worker(workspace: &Path, log_path: &Path) -> Result<Child> {
         command
     };
     command.current_dir(workspace).stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
-    sanitize_java_environment(&mut command);
+    let java_home = resolve_jdk_home(required_java).ok_or_else(|| anyhow!(
+        "JDK {required_java}+ is required for Minecraft runtime registry preparation. Install a JDK with javac or use Minesport's upcoming automatic toolchain downloader."
+    ))?;
+    sanitize_java_environment(&mut command, &java_home);
     command.env("MINESPORT_BRIDGE_PORT", "25590");
     command.env("MINESPORT_BRIDGE_MODE", "all");
     command.env("MINESPORT_BRIDGE_WORKER", "1");
     command.env("GRADLE_USER_HOME", runtime::cache_root().join("gradle"));
     hide_console_window(&mut command);
-    command.spawn().context("start isolated local Fabric/Loom runtime worker")
+    command.spawn().with_context(|| format!("start isolated Fabric/Loom runtime worker with JDK {} at {}", required_java, java_home.display()))
 }
 
-fn sanitize_java_environment(command: &mut Command) {
+fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
     for (key, _) in env::vars_os() {
         let name = key.to_string_lossy();
         if name.eq_ignore_ascii_case("JAVA_HOME") || name.eq_ignore_ascii_case("JDK_HOME") || name.eq_ignore_ascii_case("GRADLE_JAVA_HOME") {
@@ -217,34 +263,29 @@ fn sanitize_java_environment(command: &mut Command) {
         }
     }
 
-    // Never manufacture JAVA_HOME from Oracle's Windows javapath shim. Only
-    // publish JAVA_HOME after proving the candidate contains a real JDK.
-    if let Some(home) = resolve_jdk_home() {
-        command.env("JAVA_HOME", &home);
-        command.env("GRADLE_JAVA_HOME", &home);
-        let current = env::var_os("PATH").unwrap_or_default();
-        let mut paths = vec![home.join("bin")];
-        paths.extend(env::split_paths(&current));
-        if let Ok(joined) = env::join_paths(paths) { command.env("PATH", joined); }
-    }
+    command.env("JAVA_HOME", java_home);
+    command.env("GRADLE_JAVA_HOME", java_home);
+    let current = env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![java_home.join("bin")];
+    paths.extend(env::split_paths(&current));
+    if let Ok(joined) = env::join_paths(paths) { command.env("PATH", joined); }
 }
 
-fn resolve_jdk_home() -> Option<PathBuf> {
+fn resolve_jdk_home(required: u32) -> Option<PathBuf> {
     for key in ["JAVA_HOME", "JDK_HOME", "GRADLE_JAVA_HOME"] {
         if let Some(home) = env::var_os(key).map(PathBuf::from) {
-            if valid_jdk_home(&home) { return Some(home); }
+            if valid_jdk_home(&home, required) { return Some(home); }
         }
     }
 
     if let Some(javac) = find_on_path(if cfg!(windows) { "javac.exe" } else { "javac" }) {
-        if let Some(home) = javac.parent().and_then(Path::parent).map(Path::to_path_buf) {
-            if valid_jdk_home(&home) { return Some(home); }
+        if javac_major(&javac) >= required {
+            if let Some(home) = javac.parent().and_then(Path::parent).map(Path::to_path_buf) {
+                if valid_jdk_home(&home, required) { return Some(home); }
+            }
         }
     }
 
-    // `java.home` resolves through launch shims to the actual runtime location,
-    // unlike simply taking parent-of-parent of a PATH entry. Accept it only if
-    // the resolved home also contains javac.
     if let Some(java) = find_on_path(if cfg!(windows) { "java.exe" } else { "java" }) {
         let output = Command::new(java).args(["-XshowSettings:properties", "-version"]).output().ok()?;
         let text = String::from_utf8_lossy(&output.stderr);
@@ -252,16 +293,40 @@ fn resolve_jdk_home() -> Option<PathBuf> {
             let trimmed = line.trim();
             let Some(value) = trimmed.strip_prefix("java.home =") else { continue; };
             let home = PathBuf::from(value.trim());
-            if valid_jdk_home(&home) { return Some(home); }
+            if valid_jdk_home(&home, required) { return Some(home); }
+        }
+    }
+
+    let toolchains = runtime::cache_root().join("toolchains");
+    if let Ok(entries) = fs::read_dir(&toolchains) {
+        for entry in entries.flatten() {
+            let home = entry.path();
+            if valid_jdk_home(&home, required) { return Some(home); }
+            if let Ok(children) = fs::read_dir(&home) {
+                for child in children.flatten() {
+                    if valid_jdk_home(&child.path(), required) { return Some(child.path()); }
+                }
+            }
         }
     }
     None
 }
 
-fn valid_jdk_home(home: &Path) -> bool {
+fn valid_jdk_home(home: &Path, required: u32) -> bool {
     let bin = home.join("bin");
-    bin.join(if cfg!(windows) { "java.exe" } else { "java" }).is_file()
-        && bin.join(if cfg!(windows) { "javac.exe" } else { "javac" }).is_file()
+    let java = bin.join(if cfg!(windows) { "java.exe" } else { "java" });
+    let javac = bin.join(if cfg!(windows) { "javac.exe" } else { "javac" });
+    java.is_file() && javac.is_file() && javac_major(&javac) >= required
+}
+
+fn javac_major(javac: &Path) -> u32 {
+    let output = match Command::new(javac).arg("-version").output() {
+        Ok(output) => output,
+        Err(_) => return 0,
+    };
+    let text = format!("{} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let rx = Regex::new(r"(?i)javac\s+([0-9]+)").expect("javac version regex");
+    rx.captures(&text).and_then(|capture| capture.get(1)).and_then(|value| value.as_str().parse().ok()).unwrap_or(0)
 }
 
 fn find_on_path(executable: &str) -> Option<PathBuf> {
@@ -392,6 +457,13 @@ mod tests {
     #[test]
     fn fake_oracle_javapath_parent_is_not_a_jdk() {
         let fake = Path::new(r"C:\Program Files\Common Files\Oracle\Java");
-        assert!(!valid_jdk_home(fake));
+        assert!(!valid_jdk_home(fake, 21));
+    }
+
+    #[test]
+    fn manifest_supported_versions_are_accepted_by_worker_front_door() {
+        assert!(bridge_compat::is_supported("1.19.4"));
+        assert!(bridge_compat::is_supported("1.21.11"));
+        assert!(bridge_compat::is_supported("26.2"));
     }
 }
