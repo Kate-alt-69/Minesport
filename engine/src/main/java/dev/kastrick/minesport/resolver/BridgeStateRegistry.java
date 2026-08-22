@@ -116,9 +116,11 @@ public final class BridgeStateRegistry {
             BlockData block = blocks.get(index);
             if (block == null) continue;
 
-            // Runtime baked geometry is currently authoritative for modded/custom
-            // registered blocks. Vanilla remains on the deterministic static path.
-            if (!block.blockId.startsWith("minecraft:") && runtimeModelBlocks.contains(block.blockId)) {
+            // Schema-2 capture is produced by Minecraft's own baked model
+            // manager and contains vanilla plus loader-registered blocks. Tag
+            // every matching world block, not just non-minecraft namespaces, so
+            // export can use the same authoritative cache that the worker made.
+            if (runtimeModelBlocks.contains(block.blockId)) {
                 block.runtimeRegistryPath = registryPath;
                 runtimeTagged++;
             }
@@ -141,7 +143,7 @@ public final class BridgeStateRegistry {
         if (log != null) {
             if (runtimeTagged > 0) {
                 log.accept("Runtime registry: attached baked model data to " + runtimeTagged
-                    + " modded world block(s)");
+                    + " world block(s)");
             }
             if (enriched > 0) {
                 log.accept("Runtime registry: applied Minecraft light emission to " + enriched
