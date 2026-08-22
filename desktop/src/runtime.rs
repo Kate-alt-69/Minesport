@@ -2,19 +2,28 @@ use anyhow::{Context, Result, bail};
 use std::{env, fs, path::{Path, PathBuf}};
 
 const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
+const BRIDGE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge.jar"));
 
 pub fn materialize_engine() -> Result<PathBuf> {
+    materialize_runtime_asset("minesport-engine-0.2.0.jar", ".minesport-engine-0.2.0.tmp", ENGINE_BYTES)
+}
+
+pub fn materialize_bundled_bridge() -> Result<PathBuf> {
+    materialize_runtime_asset("minesport-bridge-0.2.0.jar", ".minesport-bridge-0.2.0.tmp", BRIDGE_BYTES)
+}
+
+fn materialize_runtime_asset(name: &str, temporary_name: &str, bytes: &[u8]) -> Result<PathBuf> {
+    if bytes.is_empty() { bail!("embedded runtime asset {name} is empty"); }
     let root = data_root().join("runtime");
     fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
-    let destination = root.join("minesport-engine-0.2.0.jar");
-
+    let destination = root.join(name);
     let write = match fs::metadata(&destination) {
-        Ok(metadata) => metadata.len() != ENGINE_BYTES.len() as u64,
+        Ok(metadata) => metadata.len() != bytes.len() as u64,
         Err(_) => true,
     };
     if write {
-        let temporary = root.join(".minesport-engine-0.2.0.tmp");
-        fs::write(&temporary, ENGINE_BYTES).with_context(|| format!("write {}", temporary.display()))?;
+        let temporary = root.join(temporary_name);
+        fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
         let _ = fs::remove_file(&destination);
         fs::rename(&temporary, &destination).with_context(|| format!("install {}", destination.display()))?;
     }
@@ -70,8 +79,6 @@ pub fn remove_generated_cache() -> Result<()> {
     let compiled = bridge_data_root().join("compiled");
     validate_compiled_bridge_path(&compiled)?;
 
-    // Validate every path before deleting anything so a bad environment
-    // override cannot result in a partial cleanup.
     if cache.exists() {
         fs::remove_dir_all(&cache).with_context(|| format!("remove {}", cache.display()))?;
     }
@@ -89,9 +96,7 @@ fn validate_cache_root(path: &Path) -> Result<()> {
         bail!("refusing unsafe Minesport cache path: {}", clean.display());
     }
     if let Some(home) = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")) {
-        if clean == PathBuf::from(home) {
-            bail!("refusing to delete user home as cache");
-        }
+        if clean == PathBuf::from(home) { bail!("refusing to delete user home as cache"); }
     }
     Ok(())
 }
@@ -122,5 +127,11 @@ mod tests {
     fn broad_paths_are_rejected() {
         assert!(validate_cache_root(Path::new("/")).is_err());
         assert!(validate_compiled_bridge_path(Path::new("/tmp/compiled")).is_err());
+    }
+
+    #[test]
+    fn embedded_runtime_assets_are_present() {
+        assert!(!ENGINE_BYTES.is_empty());
+        assert!(!BRIDGE_BYTES.is_empty());
     }
 }
