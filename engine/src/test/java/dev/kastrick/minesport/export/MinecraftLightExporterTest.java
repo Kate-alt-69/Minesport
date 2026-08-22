@@ -2,9 +2,14 @@ package dev.kastrick.minesport.export;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import dev.kastrick.minesport.region.BlockData;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -72,5 +77,39 @@ class MinecraftLightExporterTest {
         assertEquals(1.72, position.get(2).getAsDouble(), 1e-6);
         assertEquals("minecraft_linear_smooth", descriptor.get("falloff").getAsString());
         assertFalse(descriptor.get("invisibleSource").getAsBoolean());
+    }
+
+    @Test
+    void gltfPostProcessorAddsNativePunctualLight(@TempDir Path tempDir) throws Exception {
+        Path file = tempDir.resolve("light-test.gltf");
+        Files.writeString(file, """
+            {
+              "asset": {"version": "2.0"},
+              "scene": 0,
+              "scenes": [{"nodes": [0]}],
+              "nodes": [{"name": "Root"}]
+            }
+            """, StandardCharsets.UTF_8);
+
+        BlockData lightBlock = new BlockData(4, 8, 12, "minecraft:light", Map.of("level", "6"));
+        GltfPostProcessor.addMinecraftLights(file.toFile(), List.of(lightBlock));
+
+        JsonObject root = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
+        JsonArray used = root.getAsJsonArray("extensionsUsed");
+        assertEquals("KHR_lights_punctual", used.get(0).getAsString());
+
+        JsonArray gltfLights = root.getAsJsonObject("extensions")
+            .getAsJsonObject("KHR_lights_punctual")
+            .getAsJsonArray("lights");
+        assertEquals(1, gltfLights.size());
+        assertEquals("point", gltfLights.get(0).getAsJsonObject().get("type").getAsString());
+        assertEquals(6.5, gltfLights.get(0).getAsJsonObject().get("range").getAsDouble(), 1e-6);
+
+        JsonArray nodes = root.getAsJsonArray("nodes");
+        assertEquals(2, nodes.size());
+        JsonObject lightNode = nodes.get(1).getAsJsonObject();
+        assertEquals(6, lightNode.getAsJsonObject("extras").get("minecraftLevel").getAsInt());
+        assertTrue(lightNode.getAsJsonObject("extras").get("invisibleSource").getAsBoolean());
+        assertEquals(1, nodes.get(0).getAsJsonObject().getAsJsonArray("children").get(0).getAsInt());
     }
 }
