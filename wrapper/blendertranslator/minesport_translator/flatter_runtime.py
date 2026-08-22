@@ -3,6 +3,10 @@
 Schema 2 allows multiple render layers per logical block face (for example an
 opaque grass side plus its tinted overlay). FLATTER 0.1.0 also exposes explicit
 3D dimensions while keeping old schema-1 single-face data readable.
+
+Repeated non-full SHAPE objects use the same logical voxel grid, but unlike
+SOLID cells they must not assume that an occupied neighbour covers an entire
+1x1 face. Partial faces also bypass the unit-grid greedy merger.
 """
 
 import json
@@ -28,14 +32,20 @@ def _face_infos(entry, direction):
     return []
 
 
+def _is_shape_payload(payload):
+    return str(payload.get("geometryClass") or "SOLID").upper() == "SHAPE"
+
+
 def _rebuild_flatter(obj, payload=None, grid=None):
     payload = payload or flatter._load_payload(obj)
     if payload is None:
         return False
     grid = grid if grid is not None else flatter._decode_grid(payload)
     center = flatter._vec3f(payload.get("center"), (0.0, 0.0, 0.0))
+    shape_mode = _is_shape_payload(payload)
 
     grouped = {}
+    rendered = []
     for xyz, palette_index in grid.items():
         entry = flatter._palette(payload, palette_index)
         if entry is None:
@@ -43,7 +53,10 @@ def _rebuild_flatter(obj, payload=None, grid=None):
         x, y, z = xyz
         for direction in flatter._DIRECTIONS:
             dx, dy, dz = flatter._DELTA[direction]
-            if (x + dx, y + dy, z + dz) in grid:
+            # Full SOLID voxels cover each other's complete shared face. SHAPE
+            # voxels (path/slab/etc.) do not get that shortcut unless a future
+            # coverage solver proves the exact face overlap.
+            if not shape_mode and (x + dx, y + dy, z + dz) in grid:
                 continue
 
             for layer_index, face in enumerate(_face_infos(entry, direction)):
@@ -53,8 +66,19 @@ def _rebuild_flatter(obj, payload=None, grid=None):
                     continue
                 edge1 = flatter._axis_edge(flatter._sub(local_vertices[1], local_vertices[0]))
                 edge3 = flatter._axis_edge(flatter._sub(local_vertices[3], local_vertices[0]))
+
+                # The greedy grid assumes both in-plane edges span exactly one
+                # Minecraft block. A dirt-path side is only 15/16 tall. Keep
+                # such faces verbatim rather than consuming neighbouring cells
+                # and accidentally emitting one shortened face for all of them.
                 if edge1 is None or edge3 is None or edge1[0] == edge3[0]:
-                    edge1, edge3 = flatter._fallback_edges(direction)
+                    rendered.append(
+                        flatter._expanded_face(
+                            xyz, face, local_vertices, uv, 1, 1, center
+                        )
+                    )
+                    continue
+
                 material = str(face.get("material") or "Minesport_Material")
                 signature = (
                     direction,
@@ -73,7 +97,6 @@ def _rebuild_flatter(obj, payload=None, grid=None):
                     xyz, face, local_vertices, uv
                 )
 
-    rendered = []
     for _signature, face_grid in grouped.items():
         used = set()
         for key in sorted(face_grid, key=lambda item: (item[1], item[0])):
@@ -220,9 +243,14 @@ def _attach_flatter_metadata(metadata, objects=None, asset_path=None):
         if obj is None or obj.get("minesport_type") != flatter._TYPE_FLATTER:
             continue
 
+        geometry_class = str(record.get("geometryClass") or "SOLID").upper()
         obj["minesport_display_type"] = "minesport_FLATTER_object"
         obj["minesport_object_mode"] = str(record.get("objectMode") or object_mode)
         obj["minesport_flatter_version"] = str(record.get("flatterVersion") or flatter_version)
+        obj["minesport_flatter_geometry_class"] = geometry_class
+        obj["minesport_flatter_cell_size"] = int(
+            record.get("chunkSize") or metadata.get("flatterCellSize") or 16
+        )
         obj["minesport_flatter_3d"] = True
 
         payload = flatter._load_payload(obj)
@@ -241,6 +269,8 @@ def _attach_flatter_metadata(metadata, objects=None, asset_path=None):
         if payload is not None:
             payload["objectMode"] = obj["minesport_object_mode"]
             payload["flatterVersion"] = obj["minesport_flatter_version"]
+            payload["geometryClass"] = geometry_class
+            payload["chunkSize"] = obj["minesport_flatter_cell_size"]
             payload["dimensions"] = {
                 "width": width,
                 "height": height,
