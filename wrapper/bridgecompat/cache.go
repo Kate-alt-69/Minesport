@@ -5,14 +5,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/kastrick/minesport/appdirs"
 )
+
+// generatedCacheUseMu protects long-lived users of the generated Bridge cache
+// (especially disposable Minecraft workers) from destructive diagnostics cleanup.
+// Workers hold a read lock for their lifetime; cleanup only proceeds when it can
+// acquire the write lock immediately.
+var generatedCacheUseMu sync.RWMutex
 
 // ClearGeneratedCache removes only Bridge artifacts that Minesport can recreate.
 // The bundled bridge under bridge-data/bundled is an installation asset and is
 // intentionally preserved; deleting it would require reinstalling Minesport.
 func ClearGeneratedCache() ([]string, error) {
+	if !generatedCacheUseMu.TryLock() {
+		return nil, fmt.Errorf("Bridge/runtime cache is currently in use; wait for the active runtime-model job to finish or cancel it first")
+	}
+	defer generatedCacheUseMu.Unlock()
+
 	ensureMu.Lock()
 	defer ensureMu.Unlock()
 
@@ -31,6 +44,10 @@ func ClearGeneratedCache() ([]string, error) {
 			continue
 		}
 		seen[candidate] = true
+		if err := validateGeneratedCachePath(candidate); err != nil {
+			failures = append(failures, err)
+			continue
+		}
 		if info, err := os.Stat(candidate); err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -48,4 +65,39 @@ func ClearGeneratedCache() ([]string, error) {
 		removed = append(removed, candidate)
 	}
 	return removed, errors.Join(failures...)
+}
+
+func validateGeneratedCachePath(candidate string) error {
+	candidate = filepath.Clean(strings.TrimSpace(candidate))
+	if candidate == "" || candidate == "." {
+		return fmt.Errorf("refusing to remove an empty Bridge cache path")
+	}
+	volume := filepath.VolumeName(candidate)
+	root := filepath.Clean(volume + string(filepath.Separator))
+	if candidate == root || candidate == string(filepath.Separator) {
+		return fmt.Errorf("refusing to remove filesystem root as Bridge cache: %s", candidate)
+	}
+
+	// The generated targets themselves must be dedicated subdirectories. This
+	// also makes a dangerous MINESPORT_BRIDGE_DATA override such as C:\ or /
+	// fail closed instead of turning <override>/compiled into an arbitrary path.
+	trimmed := strings.TrimPrefix(candidate, volume)
+	trimmed = strings.Trim(trimmed, string(filepath.Separator))
+	depth := 0
+	if trimmed != "" {
+		for _, part := range strings.Split(trimmed, string(filepath.Separator)) {
+			if strings.TrimSpace(part) != "" {
+				depth++
+			}
+		}
+	}
+	if depth < 2 {
+		return fmt.Errorf("refusing to remove an overly broad Bridge cache path: %s", candidate)
+	}
+
+	base := strings.ToLower(filepath.Base(candidate))
+	if base != "compiled" && base != "bridges" && base != "bridge-build" {
+		return fmt.Errorf("refusing to remove unexpected Bridge cache path: %s", candidate)
+	}
+	return nil
 }
