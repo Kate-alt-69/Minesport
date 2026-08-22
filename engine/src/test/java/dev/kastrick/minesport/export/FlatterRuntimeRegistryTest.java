@@ -22,7 +22,7 @@ class FlatterRuntimeRegistryTest {
         snapshot.deleteOnExit();
         Files.writeString(snapshot.toPath(), """
             {
-              "schema": 2,
+              "schema": 3,
               "minecraftVersion": "1.21.10",
               "modsFingerprint": "test",
               "blocks": {
