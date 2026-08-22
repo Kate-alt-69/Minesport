@@ -1,6 +1,7 @@
 package bridgecompat
 
 import (
+	"archive/zip"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kastrick/minesport/processutil"
 )
@@ -19,13 +21,15 @@ import (
 // and installed mods register and bake their actual block models. It never opens
 // the selected world and never writes into the user's real Minecraft instance.
 type RuntimeWorker struct {
-	cmd       *exec.Cmd
-	workspace string
-	logPath   string
-	done      chan struct{}
-	mu        sync.Mutex
-	result    error
-	stopOnce  sync.Once
+	cmd             *exec.Cmd
+	workspace       string
+	logPath         string
+	version         string
+	done            chan struct{}
+	mu              sync.Mutex
+	result          error
+	intentionalStop bool
+	stopOnce        sync.Once
 }
 
 // StartRuntimeWorker prepares an exact-version Loom workspace, copies the
@@ -130,6 +134,7 @@ func StartRuntimeWorker(
 		cmd:       cmd,
 		workspace: workspace,
 		logPath:   logPath,
+		version:   version,
 		done:      make(chan struct{}),
 	}
 	cleanupOnError = false
@@ -140,14 +145,30 @@ func StartRuntimeWorker(
 func (worker *RuntimeWorker) waitAndCleanup(logFile *os.File) {
 	err := worker.cmd.Wait()
 	_ = logFile.Close()
-	if err != nil {
+
+	worker.mu.Lock()
+	intentionalStop := worker.intentionalStop
+	worker.mu.Unlock()
+
+	if err != nil && !intentionalStop {
 		detail := tailFile(worker.logPath, 50)
-		if detail != "" {
+		diagnostics := preserveRuntimeWorkerDiagnostics(worker.workspace, worker.version)
+		if diagnostics != "" {
+			if detail != "" {
+				err = fmt.Errorf("runtime worker exited: %w\nDiagnostics preserved at: %s\n%s", err, diagnostics, detail)
+			} else {
+				err = fmt.Errorf("runtime worker exited: %w\nDiagnostics preserved at: %s", err, diagnostics)
+			}
+		} else if detail != "" {
 			err = fmt.Errorf("runtime worker exited: %w\n%s", err, detail)
 		} else {
 			err = fmt.Errorf("runtime worker exited: %w", err)
 		}
+	} else if intentionalStop {
+		// Cancel/timeout is a controlled shutdown, not a Minecraft crash.
+		err = nil
 	}
+
 	worker.mu.Lock()
 	worker.result = err
 	worker.mu.Unlock()
@@ -180,6 +201,9 @@ func (worker *RuntimeWorker) Stop() error {
 	}
 	var killErr error
 	worker.stopOnce.Do(func() {
+		worker.mu.Lock()
+		worker.intentionalStop = true
+		worker.mu.Unlock()
 		if worker.cmd != nil && worker.cmd.Process != nil {
 			killErr = worker.cmd.Process.Kill()
 		}
@@ -329,6 +353,9 @@ func copyWorkerMods(sourceDir, targetDir string) (int, error) {
 			continue
 		}
 		source := filepath.Join(sourceDir, entry.Name())
+		if shouldSkipRuntimeWorkerMod(source, entry.Name()) {
+			continue
+		}
 		target := filepath.Join(targetDir, entry.Name())
 		if err := copyFile(source, target, 0o444); err != nil {
 			return count, fmt.Errorf("copy mod %s into runtime worker: %w", entry.Name(), err)
@@ -337,6 +364,89 @@ func copyWorkerMods(sourceDir, targetDir string) (int, error) {
 		count++
 	}
 	return count, nil
+}
+
+// Crash Assistant treats the intentionally short-lived registry worker like a
+// normal player session and spawns a separate crash UI when the worker exits
+// before TitleScreen. It contributes no block/model registration, so it must not
+// be loaded in this headless disposable worker. Avoid broad client-mod filtering:
+// content mods and their client dependencies still need to initialize normally.
+func shouldSkipRuntimeWorkerMod(jarPath, filename string) bool {
+	if strings.EqualFold(runtimeWorkerFabricModID(jarPath), "crash_assistant") {
+		return true
+	}
+	lower := strings.ToLower(filename)
+	return strings.HasPrefix(lower, "crashassistant-") ||
+		strings.HasPrefix(lower, "crash-assistant-")
+}
+
+func runtimeWorkerFabricModID(jarPath string) string {
+	archive, err := zip.OpenReader(jarPath)
+	if err != nil {
+		return ""
+	}
+	defer archive.Close()
+
+	for _, item := range archive.File {
+		if item.Name != "fabric.mod.json" {
+			continue
+		}
+		reader, err := item.Open()
+		if err != nil {
+			return ""
+		}
+		var metadata struct {
+			ID string `json:"id"`
+		}
+		err = json.NewDecoder(io.LimitReader(reader, 1<<20)).Decode(&metadata)
+		_ = reader.Close()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(metadata.ID)
+	}
+	return ""
+}
+
+func preserveRuntimeWorkerDiagnostics(workspace, version string) string {
+	base, err := os.UserCacheDir()
+	if err != nil || strings.TrimSpace(base) == "" {
+		base = os.TempDir()
+	}
+	stamp := time.Now().UTC().Format("20060102T150405.000Z")
+	destination := filepath.Join(
+		base,
+		"kastrick_software",
+		"minesport",
+		"diagnostics",
+		"runtime-workers",
+		safeVersion(version)+"-"+stamp,
+	)
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		return ""
+	}
+
+	copied := false
+	files := []struct {
+		source string
+		name   string
+	}{
+		{filepath.Join(workspace, "runtime-worker.log"), "runtime-worker.log"},
+		{filepath.Join(workspace, "run", "logs", "latest.log"), "minecraft-latest.log"},
+	}
+	for _, file := range files {
+		if info, statErr := os.Stat(file.source); statErr != nil || info.IsDir() {
+			continue
+		}
+		if copyFile(file.source, filepath.Join(destination, file.name), 0o600) == nil {
+			copied = true
+		}
+	}
+	if !copied {
+		_ = os.RemoveAll(destination)
+		return ""
+	}
+	return destination
 }
 
 func copyDirectory(source, target string) error {
