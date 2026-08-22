@@ -19,12 +19,13 @@ import java.util.function.Consumer;
 /**
  * Read-only geometry registry captured from Minecraft's own baked model manager.
  *
- * The registry stores baked quad geometry and texture identifiers only. Texture
- * pixels deliberately remain outside this cache and continue through the normal
- * Minesport resolver chain (resource packs -> mod JARs -> vanilla/Piston).
+ * Schema 4 uses compact registry.data storage. Texture pixels deliberately remain
+ * outside this cache and continue through the normal Minesport resolver chain
+ * (resource packs -> mod JARs -> vanilla/Piston).
  */
 public final class RuntimeModelRegistry {
-    public static final int SNAPSHOT_SCHEMA = 3;
+    public static final int SNAPSHOT_SCHEMA = RuntimeRegistryDataReader.SCHEMA;
+    private static final int LEGACY_JSON_SCHEMA = 3;
 
     /** Distinguishes absence from Minecraft explicitly baking an empty model. */
     public enum StateKind {
@@ -69,19 +70,102 @@ public final class RuntimeModelRegistry {
         Consumer<String> log
     ) {
         if (snapshot == null || !snapshot.isFile()) return null;
+        if (snapshot.getName().toLowerCase().endsWith(".data")) {
+            return loadData(snapshot, expectedMinecraftVersion, log);
+        }
+        return loadLegacyJson(snapshot, expectedMinecraftVersion, log);
+    }
 
-        JsonObject root;
-        try (Reader reader = new FileReader(snapshot)) {
-            root = JsonParser.parseReader(reader).getAsJsonObject();
+    private static RuntimeModelRegistry loadData(
+        File snapshot,
+        String expectedMinecraftVersion,
+        Consumer<String> log
+    ) {
+        RuntimeRegistryDataReader.DataSnapshot root;
+        try {
+            root = RuntimeRegistryDataReader.read(snapshot);
         } catch (Exception exception) {
             warn(log, "Runtime model registry could not be read: " + exception.getMessage());
             return null;
         }
+        if (root.schema() != SNAPSHOT_SCHEMA) {
+            warn(log, "Runtime model registry schema " + root.schema()
+                + " is not geometry-compatible with schema " + SNAPSHOT_SCHEMA);
+            return null;
+        }
+
+        String capturedVersion = root.minecraftVersion() == null ? "" : root.minecraftVersion().trim();
+        String expected = expectedMinecraftVersion == null ? "" : expectedMinecraftVersion.trim();
+        if (!expected.isEmpty() && !capturedVersion.equals(expected)) {
+            warn(log, "Ignoring runtime models for Minecraft " + capturedVersion
+                + " while exporting " + expected);
+            return null;
+        }
+
+        Map<String, RuntimeBlock> parsed = new LinkedHashMap<>();
+        int variantCount = 0;
+        int quadCount = 0;
+        int emptyVariantCount = 0;
+        for (var blockEntry : root.blocks().entrySet()) {
+            RuntimeRegistryDataReader.DataBlock source = blockEntry.getValue();
+            if (source == null || source.variants() == null || source.variants().isEmpty()) continue;
+
+            List<Variant> variants = new ArrayList<>(source.variants().size());
+            for (RuntimeRegistryDataReader.DataVariant sourceVariant : source.variants()) {
+                List<RuntimeQuad> quads = new ArrayList<>(sourceVariant.quads().size());
+                for (RuntimeRegistryDataReader.DataQuad sourceQuad : sourceVariant.quads()) {
+                    float[] vertices = sourceQuad.vertices();
+                    if (vertices == null || vertices.length < 32) continue;
+                    quads.add(new RuntimeQuad(
+                        vertices.clone(),
+                        sourceQuad.textureId(),
+                        sourceQuad.face(),
+                        sourceQuad.shade(),
+                        sourceQuad.tintIndex()
+                    ));
+                }
+                if (quads.isEmpty()) emptyVariantCount++;
+                quadCount += quads.size();
+                variants.add(new Variant(
+                    sourceVariant.properties() == null ? Map.of() : Map.copyOf(sourceVariant.properties()),
+                    List.copyOf(quads)
+                ));
+            }
+            if (variants.isEmpty()) continue;
+            parsed.put(blockEntry.getKey(), new RuntimeBlock(
+                source.vanillaMapping() == null ? "" : source.vanillaMapping(),
+                source.loaderType() == null ? "" : source.loaderType(),
+                List.copyOf(variants)
+            ));
+            variantCount += variants.size();
+        }
+        if (parsed.isEmpty()) return null;
+
+        if (log != null) {
+            log.accept("Runtime model registry loaded from registry.data: " + parsed.size() + " block type(s), "
+                + variantCount + " state variant(s), " + quadCount + " baked quad(s), "
+                + emptyVariantCount + " known empty state(s)");
+        }
+        return new RuntimeModelRegistry(parsed, capturedVersion, root.modsFingerprint());
+    }
+
+    private static RuntimeModelRegistry loadLegacyJson(
+        File snapshot,
+        String expectedMinecraftVersion,
+        Consumer<String> log
+    ) {
+        JsonObject root;
+        try (Reader reader = new FileReader(snapshot)) {
+            root = JsonParser.parseReader(reader).getAsJsonObject();
+        } catch (Exception exception) {
+            warn(log, "Legacy runtime model registry could not be read: " + exception.getMessage());
+            return null;
+        }
 
         int schema = safeInt(root.get("schema"), -1);
-        if (schema != SNAPSHOT_SCHEMA) {
-            warn(log, "Runtime model registry schema " + schema
-                + " is not geometry-compatible with schema " + SNAPSHOT_SCHEMA);
+        if (schema != LEGACY_JSON_SCHEMA) {
+            warn(log, "Legacy runtime model registry schema " + schema
+                + " is not compatible with schema " + LEGACY_JSON_SCHEMA);
             return null;
         }
 
@@ -125,7 +209,7 @@ public final class RuntimeModelRegistry {
         if (parsed.isEmpty()) return null;
 
         if (log != null) {
-            log.accept("Runtime model registry loaded: " + parsed.size() + " block type(s), "
+            log.accept("Legacy runtime model registry loaded: " + parsed.size() + " block type(s), "
                 + variantCount + " state variant(s), " + quadCount + " baked quad(s), "
                 + emptyVariantCount + " known empty state(s)");
         }
@@ -136,14 +220,6 @@ public final class RuntimeModelRegistry {
         return blockId != null && blocks.containsKey(blockId);
     }
 
-    /**
-     * Minecraft's baked registry is authoritative whenever the captured
-     * Minecraft version/mod fingerprint matches and it contains the exact block
-     * state. This applies to vanilla and registered modded/custom blocks alike:
-     * the whole point of runtime capture is that the game's own model manager
-     * has already resolved resource-pack/model inheritance and loader-specific
-     * registration for that running instance.
-     */
     public boolean shouldOverride(BlockData block) {
         return stateKind(block) != StateKind.UNKNOWN;
     }
@@ -228,11 +304,6 @@ public final class RuntimeModelRegistry {
         }
         String cullface = faceName(quad.face());
 
-        // A runtime registry quad is still part of the block's ordinary baked
-        // model. Marking every quad as a synthetic "runtime:*" model part made
-        // exporters split normal blocks into artificial part objects and made
-        // FLATTER reject otherwise-safe geometry. Keep partName null; genuine
-        // movable/compound parts are handled by Minesport's structure layer.
         return new Quad(
             vertices,
             uv,
@@ -252,10 +323,6 @@ public final class RuntimeModelRegistry {
             JsonObject variant = variantElement.getAsJsonObject();
             Map<String, String> properties = parseProperties(variant.get("properties"));
             List<RuntimeQuad> quads = parseQuads(variant.get("quads"));
-            // Empty baked geometry is meaningful. It can represent an invisible
-            // state or a state whose visual is supplied by another renderer.
-            // Preserve it so Java can distinguish that from an unknown state and
-            // never invent fallback cube geometry.
             variants.add(new Variant(properties, quads));
         }
         return variants;
