@@ -3,6 +3,7 @@
 mod app;
 mod blender;
 mod ipc;
+mod launcher;
 mod preview;
 mod registry;
 mod runtime;
