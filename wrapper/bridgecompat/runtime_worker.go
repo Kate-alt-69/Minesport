@@ -128,12 +128,7 @@ func StartRuntimeWorker(
 	cmd := exec.Command(wrapper, "--no-daemon", "--console=plain", "runClient")
 	processutil.HideWindow(cmd)
 	cmd.Dir = workspace
-	cmd.Env = append(os.Environ(),
-		"JAVA_HOME="+javaHome,
-		fmt.Sprintf("MINESPORT_BRIDGE_PORT=%d", port),
-		"MINESPORT_BRIDGE_MODE=all",
-		"MINESPORT_BRIDGE_WORKER=1",
-	)
+	cmd.Env = runtimeWorkerEnvironment(javaHome, port)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 
@@ -156,6 +151,49 @@ func StartRuntimeWorker(
 	cleanupOnError = false
 	go worker.waitAndCleanup(logFile)
 	return worker, nil
+}
+
+// runtimeWorkerEnvironment gives Gradle exactly one authoritative Java home.
+// Windows environment keys are case-insensitive, and appending JAVA_HOME to an
+// inherited environment that already contains Java_Home/JAVA_HOME can leave
+// gradlew seeing the stale value. Remove Java selectors first, prepend the
+// selected JDK's bin directory to PATH, then add the worker-specific variables.
+func runtimeWorkerEnvironment(javaHome string, port int) []string {
+	base := os.Environ()
+	result := make([]string, 0, len(base)+5)
+	pathValue := ""
+	for _, item := range base {
+		key, value, found := strings.Cut(item, "=")
+		if !found {
+			continue
+		}
+		switch {
+		case strings.EqualFold(key, "JAVA_HOME"),
+			strings.EqualFold(key, "JDK_HOME"),
+			strings.EqualFold(key, "GRADLE_JAVA_HOME"):
+			continue
+		case strings.EqualFold(key, "PATH"):
+			pathValue = value
+			continue
+		default:
+			result = append(result, item)
+		}
+	}
+
+	javaBin := filepath.Join(javaHome, "bin")
+	if pathValue != "" {
+		pathValue = javaBin + string(os.PathListSeparator) + pathValue
+	} else {
+		pathValue = javaBin
+	}
+	result = append(result,
+		"JAVA_HOME="+javaHome,
+		"PATH="+pathValue,
+		fmt.Sprintf("MINESPORT_BRIDGE_PORT=%d", port),
+		"MINESPORT_BRIDGE_MODE=all",
+		"MINESPORT_BRIDGE_WORKER=1",
+	)
+	return result
 }
 
 func (worker *RuntimeWorker) waitAndCleanup(logFile *os.File) {
