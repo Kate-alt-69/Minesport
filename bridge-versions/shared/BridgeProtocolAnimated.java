@@ -5,14 +5,16 @@ import java.util.Map;
 
 /**
  * Wire format used by bridge targets that can preserve Minecraft texture
- * animation metadata. The protocol stays Java-only so the same overlay can be
- * shared across Minecraft versions with different renderer APIs.
+ * animation metadata. Geometry packets carry texture IDs; texture image bytes
+ * are legacy/optional because the runtime model cache resolves images through
+ * Minesport's normal resource-pack/mod/vanilla/Piston chain.
  */
 public final class BridgeProtocol {
     private BridgeProtocol() {}
 
     public static final String TYPE_HELLO       = "hello";
     public static final String TYPE_BLOCK_ENTRY = "block";
+    public static final String TYPE_BLOCK_LIGHT = "block_light";
     public static final String TYPE_TEXTURE     = "texture";
     public static final String TYPE_DONE        = "done";
     public static final String TYPE_ERROR       = "error";
@@ -37,6 +39,20 @@ public final class BridgeProtocol {
         int tintIndex
     ) {}
 
+    public record BlockLightEntry(
+        String blockId,
+        List<LightState> states
+    ) {}
+
+    public record LightState(
+        Map<String, String> properties,
+        int lightLevel
+    ) {}
+
+    /**
+     * Kept for wire compatibility with older bridge consumers. Runtime-registry
+     * schema 2 ignores these image payloads and caches texture identifiers only.
+     */
     public record TextureEntry(
         String textureId,
         int width,
