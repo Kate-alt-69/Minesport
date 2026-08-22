@@ -6,6 +6,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import dev.kastrick.minesport.region.BlockData;
+import dev.kastrick.minesport.resolver.ResolverChain;
 
 import java.io.*;
 import java.util.List;
@@ -16,7 +17,12 @@ public final class BlenderMetadataExporter {
 
     private BlenderMetadataExporter() {}
 
-    /** Compatibility overload for older tools that do not provide a geometry builder. */
+    /**
+     * Normal IPC path. Reuse the ResolverChain active on this export thread and
+     * create a runtime-aware builder only for the state-deduplicated animation
+     * material scan. This avoids plumbing another parameter through the entire
+     * IPC protocol while still using the exact resource-pack/mod/runtime stack.
+     */
     public static File write(
         File exportFile,
         List<BlockData> blocks,
@@ -24,7 +30,11 @@ public final class BlenderMetadataExporter {
         String format,
         String animationMode
     ) throws IOException {
-        return write(exportFile, blocks, mode, format, animationMode, null);
+        ResolverChain current = ResolverChain.current();
+        GeometryBuilder geometry = current == null
+            ? null
+            : new dev.kastrick.minesport.GeometryBuilder(current);
+        return write(exportFile, blocks, mode, format, animationMode, geometry);
     }
 
     public static File write(
@@ -58,9 +68,6 @@ public final class BlenderMetadataExporter {
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
         JsonArray logicalLightBlocks = MinecraftLightExporter.sidecarLightBlocks(blocks, center);
         JsonArray lights = MinecraftLightExporter.sidecarLights(blocks, center);
-        // LIGHT_BLOCK is deliberately uppercase and explicit: it is the logical
-        // Minecraft source-of-truth array. `lights` remains a derived DCC render
-        // descriptor for compatibility with older add-on builds and other tools.
         root.add("LIGHT_BLOCK", logicalLightBlocks);
         root.add("lights", lights);
 
@@ -86,10 +93,9 @@ public final class BlenderMetadataExporter {
 
         int textureAnimationCount = 0;
         for (JsonElement descriptor : animations) {
-            if (descriptor.isJsonObject()
-                && "texture_frames".equals(descriptor.getAsJsonObject().has("kind")
-                    ? descriptor.getAsJsonObject().get("kind").getAsString()
-                    : "")) {
+            if (!descriptor.isJsonObject()) continue;
+            JsonObject object = descriptor.getAsJsonObject();
+            if (object.has("kind") && "texture_frames".equals(object.get("kind").getAsString())) {
                 textureAnimationCount++;
             }
         }
