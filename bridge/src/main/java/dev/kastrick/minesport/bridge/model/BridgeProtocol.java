@@ -13,6 +13,7 @@ public class BridgeProtocol {
 
     public static final String TYPE_HELLO       = "hello";       // handshake
     public static final String TYPE_BLOCK_ENTRY = "block";       // one block's full data
+    public static final String TYPE_BLOCK_LIGHT = "block_light"; // state-dependent light emission
     public static final String TYPE_TEXTURE     = "texture";     // PNG bytes as base64
     public static final String TYPE_DONE        = "done";        // all data sent
     public static final String TYPE_ERROR       = "error";
@@ -37,6 +38,23 @@ public class BridgeProtocol {
         int face,           // 0=DOWN 1=UP 2=NORTH 3=SOUTH 4=WEST 5=EAST -1=none
         boolean shade,
         int tintIndex
+    ) {}
+
+    // ── Light metadata ────────────────────────────────────────────────────────
+
+    /**
+     * Separate message instead of extending BlockEntry so older compatibility
+     * overlays and consumers remain source/wire compatible. Only emitting
+     * states need to be sent; an absent state means Minecraft light level 0.
+     */
+    public record BlockLightEntry(
+        String blockId,
+        List<LightState> states
+    ) {}
+
+    public record LightState(
+        Map<String, String> properties,
+        int lightLevel
     ) {}
 
     // ── Texture entry ─────────────────────────────────────────────────────────
