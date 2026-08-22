@@ -179,7 +179,7 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 	state.mu.Unlock()
 
 	ms.appendLogAsync("Runtime registry worker started for Minecraft " + version)
-	ms.emitRuntimeCacheProgress(75, "Minecraft registry worker loading mods and baked models")
+	ms.emitRuntimeCacheProgress(75, "Minecraft registry worker loading all registered blocks, states and baked models")
 
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -188,14 +188,14 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 
 	for {
 		if path, ok := bridgecapture.SnapshotPathForMods(version, modsPath); ok {
-			// The Bridge only publishes a reusable registry after its complete
-			// packet has been received. Do not then wait forever for Gradle/the
-			// disposable client to decide to exit by itself: shut it down now.
-			ms.emitRuntimeCacheProgress(98, "Registry received · shutting down disposable worker")
+			// The Bridge publishes a reusable instance-wide registry only after its
+			// complete all-registry packet has been received. Selection bounds are
+			// never involved in this capture.
+			ms.emitRuntimeCacheProgress(98, "Full registry received · shutting down disposable worker")
 			_ = worker.Stop()
 			bridgecapture.CancelSession(version)
-			ms.appendLogAsync("Runtime model registry ready: " + path)
-			ms.emitRuntimeCacheProgress(100, "Runtime model cache ready")
+			ms.appendLogAsync("Full runtime model registry ready: " + path)
+			ms.emitRuntimeCacheProgress(100, "Full runtime model registry ready")
 			ms.finishRuntimeCacheJob(nil)
 			return
 		}
@@ -205,7 +205,7 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 			waitErr := worker.Wait()
 			bridgecapture.CancelSession(version)
 			if _, ok := bridgecapture.SnapshotPathForMods(version, modsPath); ok && waitErr == nil {
-				ms.emitRuntimeCacheProgress(100, "Runtime model cache ready")
+				ms.emitRuntimeCacheProgress(100, "Full runtime model registry ready")
 				ms.finishRuntimeCacheJob(nil)
 				return
 			}
@@ -254,8 +254,8 @@ func (ms *MinesportApp) cancelRuntimeModelCacheGeneration() {
 }
 
 // ensureRuntimeModelCacheForExport returns true when Export has been deferred
-// while a cache worker runs. Failure is non-fatal: Minesport reports it clearly
-// and continues with the static resolver chain rather than making Export unusable.
+// while the instance-wide registry worker runs. Failure is non-fatal: Minesport
+// reports it clearly and continues with the static resolver chain.
 func (ms *MinesportApp) ensureRuntimeModelCacheForExport(continueExport func()) bool {
 	if normalizedLoader(ms.loaderType) != "fabric" {
 		return false
@@ -270,21 +270,22 @@ func (ms *MinesportApp) ensureRuntimeModelCacheForExport(continueExport func()) 
 	}
 
 	ms.exportBtn.Disable()
-	ms.beginWorkbenchTaskV3("RUNTIME CACHE", "Preparing Minecraft runtime models…", true)
+	ms.beginWorkbenchTaskV3("RUNTIME CACHE", "Waiting for full Minecraft registry…", true)
 	ms.showRuntimeCacheWindow(version)
 	started, startErr := ms.generateRuntimeModelCache(
 		false,
 		func(percent int, message string) {
 			ms.updateRuntimeCacheWindow(percent, message)
-			ms.updateWorkbenchTaskV3(percent, message, "Minecraft "+version+" · exact current mod set")
+			ms.updateWorkbenchTaskV3(percent, message, "Minecraft "+version+" · full current-instance registry")
 		},
 		func(cacheErr error) {
 			ms.closeRuntimeCacheWindow()
+			ms.refreshWorkbenchSettingsActivity()
 			if cacheErr != nil {
 				ms.appendLog("[WARN] Runtime model cache unavailable; continuing with static resolver fallback: " + cacheErr.Error())
 				ms.finishWorkbenchTaskV3(false, "Runtime cache unavailable", "Continuing export with static asset resolution · "+cacheErr.Error())
 			} else {
-				ms.finishWorkbenchTaskV3(true, "Runtime model cache ready", "Minecraft "+version+" · current mod set")
+				ms.finishWorkbenchTaskV3(true, "Full runtime registry ready", "Minecraft "+version+" · current mod set")
 			}
 			ms.exportBtn.Enable()
 			if continueExport != nil {
@@ -305,14 +306,14 @@ func (ms *MinesportApp) ensureRuntimeModelCacheForExport(continueExport func()) 
 	return started
 }
 
-// buildBridgeRuntimeAdvancedCard is intentionally compact. Runtime cache
-// generation is automatic during Export; this UI exists only for manual rebuilds
-// and troubleshooting under Settings → Advanced.
+// buildBridgeRuntimeAdvancedCard is intentionally compact. Full-registry cache
+// generation starts automatically after selecting a Fabric world; this UI is
+// only for manual rebuilds and diagnostics under Settings → Advanced.
 func (ms *MinesportApp) buildBridgeRuntimeAdvancedCard() fyne.CanvasObject {
 	status := widget.NewLabel(ms.bridgeRuntimeCaptureStatus())
 	status.Truncation = fyne.TextTruncateEllipsis
 
-	rebuild := widget.NewButtonWithIcon("Generate / rebuild runtime model cache", theme.MediaPlayIcon(), nil)
+	rebuild := widget.NewButtonWithIcon("Generate / rebuild full runtime registry", theme.MediaPlayIcon(), nil)
 	cancel := widget.NewButton("Cancel", func() {
 		ms.cancelRuntimeModelCacheGeneration()
 		status.SetText("Runtime model cache: cancellation requested…")
@@ -327,39 +328,42 @@ func (ms *MinesportApp) buildBridgeRuntimeAdvancedCard() fyne.CanvasObject {
 		}
 		rebuild.Disable()
 		cancel.Enable()
-		ms.beginWorkbenchTaskV3("RUNTIME CACHE", "Manual runtime-cache rebuild…", true)
+		ms.beginWorkbenchTaskV3("RUNTIME CACHE", "Manual full-registry rebuild…", true)
 		_, err = ms.generateRuntimeModelCache(
 			true,
 			func(percent int, message string) {
 				status.SetText(fmt.Sprintf("Runtime model cache: %d%% · %s", percent, message))
-				ms.updateWorkbenchTaskV3(percent, message, "Minecraft "+version+" · manual rebuild")
+				ms.updateWorkbenchTaskV3(percent, message, "Minecraft "+version+" · full registry manual rebuild")
 			},
 			func(jobErr error) {
 				rebuild.Enable()
 				cancel.Disable()
 				status.SetText(ms.bridgeRuntimeCaptureStatus())
 				if jobErr != nil {
-					ms.finishWorkbenchTaskV3(false, "Runtime cache rebuild failed", jobErr.Error())
+					ms.finishWorkbenchTaskV3(false, "Runtime registry rebuild failed", jobErr.Error())
 					return
 				}
-				ms.finishWorkbenchTaskV3(true, "Runtime model cache ready", "Minecraft "+version+" · current mod set")
+				ms.finishWorkbenchTaskV3(true, "Full runtime registry ready", "Minecraft "+version+" · current mod set")
 			},
 		)
 		if err != nil {
 			rebuild.Enable()
 			cancel.Disable()
 			status.SetText("Runtime model cache: " + err.Error())
-			ms.finishWorkbenchTaskV3(false, "Runtime cache rebuild failed", err.Error())
+			ms.finishWorkbenchTaskV3(false, "Runtime registry rebuild failed", err.Error())
 		}
 	}
 
-	if _, err := ms.validateBridgeRuntimeCapture(); err != nil {
+	if ms.runtimeCacheIsPreparingForCurrentWorld() {
+		cancel.Enable()
+		rebuild.Disable()
+	} else if _, err := ms.validateBridgeRuntimeCapture(); err != nil {
 		rebuild.Disable()
 	}
 
 	return widget.NewCard(
 		"RUNTIME MODEL CACHE",
-		"Automatic during Fabric export · manual rebuild / diagnostics",
+		"Automatic after selecting a Fabric world · caches the full registered instance registry",
 		container.NewVBox(status, container.NewHBox(rebuild, cancel)),
 	)
 }
@@ -386,13 +390,16 @@ func (ms *MinesportApp) bridgeRuntimeCaptureStatus() string {
 	if info, err := os.Stat(ms.modsPath); err != nil || !info.IsDir() {
 		return "UNAVAILABLE · The selected instance mods folder cannot be read."
 	}
+	if ms.runtimeCacheIsPreparingForCurrentWorld() {
+		return "PREPARING · Caching every registered block state and baked model for Minecraft " + version + "."
+	}
 	if path, ok := bridgecapture.SnapshotPathForMods(version, ms.modsPath); ok {
-		return "READY · Minecraft " + version + " runtime registry matches this mod set · " + path
+		return "READY · Full Minecraft " + version + " runtime registry matches this mod set · " + path
 	}
 	if _, ok := bridgecapture.SnapshotPath(version); ok {
-		return "STALE · Mod set changed; Export will regenerate the runtime registry automatically."
+		return "STALE · Mod set changed; Minesport will rebuild the full runtime registry automatically."
 	}
-	return "NOT CACHED · Export will generate Minecraft's runtime block/model registry automatically."
+	return "NOT CACHED · Minesport will prepare the full registered block/state/model registry automatically."
 }
 
 func (ms *MinesportApp) validateBridgeRuntimeCapture() (string, error) {
