@@ -8,6 +8,7 @@ use std::{
     fs,
     io::Read,
     path::{Component, Path, PathBuf},
+    time::Duration,
 };
 
 static BRIDGE_SOURCE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../bridge");
@@ -249,9 +250,9 @@ where
     }
 
     let metadata = serde_json::json!({
-        "minecraft": version,
-        "profile": profile_id,
-        "variables": variables,
+        "minecraft": version.clone(),
+        "profile": profile_id.clone(),
+        "variables": variables.clone(),
         "purpose": "rust-compatibility-source"
     });
     fs::write(workspace.join("minesport-target.json"), serde_json::to_vec_pretty(&metadata)?)?;
@@ -296,11 +297,12 @@ fn apply_operation(workspace: &Path, operation: &PatchOperation, variables: &Has
             let file = safe_join(workspace, Path::new(&expand(&operation.file)))?;
             let text = fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
             let pattern = expand(&operation.pattern);
+            let replacement = expand(&operation.replacement);
             let rx = Regex::new(&pattern).with_context(|| format!("compile compatibility regex {pattern:?}"))?;
             if !rx.is_match(&text) {
                 bail!("expected regex {pattern:?} was not found in {}", file.display());
             }
-            fs::write(&file, rx.replace_all(&text, expand(&operation.replacement).as_str()).as_bytes())?;
+            fs::write(&file, rx.replace_all(&text, replacement.as_str()).as_bytes())?;
             Ok(())
         }
         "replace_tree" | "rename_package" => {
@@ -492,15 +494,15 @@ fn resolve_fabric_api(version: &str) -> Result<String> {
 }
 
 fn http_get_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
-    let response = ureq::get(url)
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(20))
+        .timeout_read(Duration::from_secs(120))
+        .build();
+    let response = agent
+        .get(url)
         .set("User-Agent", "Minesport-Rust-Bridge-Builder/0.2.0")
-        .timeout_connect(20_000)
-        .timeout_read(120_000)
         .call()
         .map_err(|error| anyhow!("HTTP request failed for {url}: {error}"))?;
-    if response.status() < 200 || response.status() >= 300 {
-        bail!("HTTP {} from {url}", response.status());
-    }
     let mut reader = response.into_reader().take(max_bytes + 1);
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
