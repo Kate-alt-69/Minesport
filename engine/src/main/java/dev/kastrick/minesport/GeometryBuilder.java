@@ -94,8 +94,13 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
 
         RuntimeModelRegistry runtime = runtimeRegistry(block.runtimeRegistryPath);
         if (runtime != null && runtime.shouldOverride(block)) {
+            // Runtime capture knows this exact state. A non-null empty list is
+            // authoritative too: Minecraft baked an empty model, so falling back
+            // to static JSON/fallback-cube geometry would invent visuals that do
+            // not exist. finalizeGeometry still appends independent FluidState
+            // geometry for waterlogged hosts.
             List<Quad> baked = runtime.build(block);
-            if (baked != null && !baked.isEmpty()) {
+            if (baked != null) {
                 return finalizeGeometry(block, baked);
             }
         }
