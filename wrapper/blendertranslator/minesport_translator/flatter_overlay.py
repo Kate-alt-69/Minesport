@@ -20,7 +20,9 @@ from . import flatter
 _VIEW_HANDLE = None
 _TEXT_HANDLE = None
 _CACHE = {}
-_MIGRATION_KEY = "minesport_flatter_overlay_v2"
+# v3 intentionally re-runs the one-time migration for .blend files that already
+# consumed v2 while FULL was still the confusing legacy default.
+_MIGRATION_KEY = "minesport_flatter_overlay_v3"
 
 _GRID_RGB = (0.10, 0.33, 0.14)
 _SELECTED_GREEN_RGB = (0.48, 1.0, 0.54)
@@ -50,11 +52,13 @@ def _migrate_overlay_default(obj):
         return
     props = getattr(obj, "minesport", None)
     if props is not None:
-        # 0.1.5 defaulted every imported cell to FULL, which looked exactly
-        # like every voxel was selected. Migrate that old default once.
-        if str(getattr(props, "flatter_overlay_mode", "FULL")) == "FULL":
+        # Old FLATTER imports could persist FULL, making every logical voxel look
+        # selected even though picking was working. Reset that old state once.
+        # The v3 marker is written immediately, so a user can deliberately turn
+        # FULL back on afterwards and Minesport will respect that choice.
+        if str(getattr(props, "flatter_overlay_mode", "SELECTED")) == "FULL":
             props.flatter_overlay_mode = "SELECTED"
-        if abs(float(getattr(props, "flatter_overlay_opacity", 0.58)) - 0.58) < 1e-4:
+        if float(getattr(props, "flatter_overlay_opacity", 0.32)) > 0.50:
             props.flatter_overlay_opacity = 0.32
     obj[_MIGRATION_KEY] = True
 
