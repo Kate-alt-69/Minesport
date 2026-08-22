@@ -31,10 +31,8 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	ms.engine = ipc.NewEngine(jarPath)
 	w.SetContent(ms.buildModernUI())
 	ms.installWorkbenchEnhancements()
-	installWorkbenchAssetCenter(ms)
 	ms.installViewportShortcuts()
 	w.SetCloseIntercept(func() {
-		cleanupWorkbenchAssetCenter(ms)
 		cleanupWorkbenchEnhancements(ms)
 		cleanupWorkbenchRuntimeV3(ms)
 		workbenchStates.Delete(ms)
