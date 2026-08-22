@@ -66,11 +66,14 @@ def register():
     properties.register()
     flatter.register()
 
-    # Lights and emissive repair patch translate.translate_scene before the
-    # dedicated OBJ/glTF importers load, so both formats share the same scene
-    # semantics and glowing blocks still look like sources instead of stickers.
+    # Build the translation stack from source-of-truth semantics outward:
+    # lights first, then logical LIGHT_BLOCK adaptation, animation/timeline,
+    # and finally material repair for water/glass after import.
     _register_optional("lights")
+    _register_optional("light_block_core")
     _register_optional("emissive_materials")
+    _register_optional("animation_core")
+    _register_optional("material_core")
     _register_optional("flatter_runtime")
     _register_optional("incremental_refresh")
     _register_optional("liquid_merge")
@@ -123,7 +126,10 @@ def unregister():
         "liquid_merge",
         "incremental_refresh",
         "flatter_runtime",
+        "material_core",
+        "animation_core",
         "emissive_materials",
+        "light_block_core",
         "lights",
     ):
         module = _OPTIONAL_MODULES.pop(name, None)
