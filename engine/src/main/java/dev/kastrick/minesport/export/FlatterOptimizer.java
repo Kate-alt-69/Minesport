@@ -152,7 +152,11 @@ public final class FlatterOptimizer {
         if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
 
         int cellSize = FlatterSettings.normalizeCellSize(requestedCellSize);
-        GeometryBuilder geometry = new GeometryBuilder(resolvers);
+        // Use the IPC/export GeometryBuilder rather than a second plain asset
+        // builder. That wrapper understands BlockData.runtimeRegistryPath, so
+        // FLATTER and conventional objects now consume the exact same baked
+        // Minecraft model source after runtime-cache capture.
+        GeometryBuilder geometry = new dev.kastrick.minesport.GeometryBuilder(resolvers);
         Map<MaterialKey,Boolean> opaqueCache = new HashMap<>();
         Map<ObjectKey,List<Candidate>> cells = new LinkedHashMap<>();
 
