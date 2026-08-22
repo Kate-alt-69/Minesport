@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestCaptureWritesReusableLightSnapshot(t *testing.T) {
+func TestCaptureWritesReusableRuntimeModelRegistry(t *testing.T) {
 	dir := t.TempDir()
 	server, err := start("127.0.0.1:0", dir, nil)
 	if err != nil {
@@ -23,12 +23,36 @@ func TestCaptureWritesReusableLightSnapshot(t *testing.T) {
 		t.Fatalf("connect bridge capture: %v", err)
 	}
 	writer := bufio.NewWriter(connection)
+	quadVertices := make([]float32, 32)
+	quadVertices[0], quadVertices[1], quadVertices[2] = 0, 0, 0
+	quadVertices[8], quadVertices[9], quadVertices[10] = 1, 0, 0
+	quadVertices[16], quadVertices[17], quadVertices[18] = 1, 1, 0
+	quadVertices[24], quadVertices[25], quadVertices[26] = 0, 1, 0
 	messages := []any{
 		map[string]any{
 			"type":          "hello",
 			"mcVersion":     "1.21.10",
 			"loaderVersion": "0.17.2",
 			"loadedMods":    []string{"example@1.0.0"},
+		},
+		map[string]any{
+			"type":       "block",
+			"blockId":    "example:lamp",
+			"loaderType": "fabric",
+			"variants": []any{
+				map[string]any{
+					"properties": map[string]string{"lit": "true"},
+					"quads": []any{
+						map[string]any{
+							"vertices":  quadVertices,
+							"textureId": "example:block/lamp",
+							"face":      2,
+							"shade":     true,
+							"tintIndex": -1,
+						},
+					},
+				},
+			},
 		},
 		map[string]any{
 			"type":    "block_light",
@@ -39,6 +63,12 @@ func TestCaptureWritesReusableLightSnapshot(t *testing.T) {
 					"lightLevel": 12,
 				},
 			},
+		},
+		// Texture packets from an older bridge are intentionally ignored.
+		map[string]any{
+			"type":      "texture",
+			"textureId": "example:block/lamp",
+			"pngBase64": "do-not-cache-me",
 		},
 		map[string]any{"type": "done"},
 	}
@@ -56,54 +86,64 @@ func TestCaptureWritesReusableLightSnapshot(t *testing.T) {
 	}
 	_ = connection.Close()
 
-	var path string
+	fingerprint := loadedModsFingerprint([]string{"example@1.0.0"})
+	path := snapshotPathAt(dir, "1.21.10", fingerprint)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if found, ok := snapshotPathAt(dir, "1.21.10"); ok {
-			path = found
+		if validSnapshot(path, "1.21.10", fingerprint) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if path == "" {
-		t.Fatal("bridge snapshot was not written")
+	if !validSnapshot(path, "1.21.10", fingerprint) {
+		t.Fatal("runtime model registry was not written")
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read bridge snapshot: %v", err)
+		t.Fatalf("read runtime registry: %v", err)
 	}
 	var snapshot Snapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
-		t.Fatalf("parse bridge snapshot: %v", err)
+		t.Fatalf("parse runtime registry: %v", err)
 	}
-	states := snapshot.Blocks["example:lamp"]
-	if len(states) != 1 {
-		t.Fatalf("expected one light state, got %d", len(states))
+	block, ok := snapshot.Blocks["example:lamp"]
+	if !ok {
+		t.Fatal("expected example:lamp in runtime registry")
 	}
-	if states[0].LightLevel != 12 || states[0].Properties["lit"] != "true" {
-		t.Fatalf("unexpected light state: %#v", states[0])
+	if len(block.Variants) != 1 || len(block.Variants[0].Quads) != 1 {
+		t.Fatalf("unexpected cached geometry: %#v", block.Variants)
+	}
+	if got := block.Variants[0].Quads[0].TextureID; got != "example:block/lamp" {
+		t.Fatalf("expected texture reference only, got %q", got)
+	}
+	if len(block.Lights) != 1 || block.Lights[0].LightLevel != 12 || block.Lights[0].Properties["lit"] != "true" {
+		t.Fatalf("unexpected light state: %#v", block.Lights)
+	}
+	if string(data) == "do-not-cache-me" {
+		t.Fatal("texture image payload must not be cached")
 	}
 }
 
 func TestSnapshotLookupRejectsWrongVersionAndSchema(t *testing.T) {
 	dir := t.TempDir()
-	_, err := writeSnapshotAt(dir, Snapshot{
+	fingerprint := "abc123"
+	path, err := writeSnapshotAt(dir, Snapshot{
 		Schema:           SnapshotSchema,
 		MinecraftVersion: "1.21.10",
-		Blocks:           map[string][]LightState{},
+		ModsFingerprint:  fingerprint,
+		Blocks:           map[string]RuntimeBlock{},
 	})
 	if err != nil {
 		t.Fatalf("write snapshot: %v", err)
 	}
-	if _, ok := snapshotPathAt(dir, "1.21.11"); ok {
+	if validSnapshot(path, "1.21.11", fingerprint) {
 		t.Fatal("snapshot lookup should not reuse another Minecraft version")
 	}
-
-	path, ok := snapshotPathAt(dir, "1.21.10")
-	if !ok {
+	if !validSnapshot(path, "1.21.10", fingerprint) {
 		t.Fatal("expected matching snapshot")
 	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +157,7 @@ func TestSnapshotLookupRejectsWrongVersionAndSchema(t *testing.T) {
 	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := snapshotPathAt(dir, "1.21.10"); ok {
+	if validSnapshot(path, "1.21.10", fingerprint) {
 		t.Fatal("snapshot lookup should reject unsupported schema")
 	}
 }
