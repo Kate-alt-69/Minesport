@@ -110,15 +110,21 @@ func Run(jarPath string) {
 	if ms.settings.DebugMode {
 		ms.openDebugConsole()
 	}
-	ms.engine.OnLog = func(msg string) { ms.appendLog(msg) }
+	ms.engine.OnLog = func(msg string) { ms.appendLogAsync(msg) }
 	ms.engine.OnProgress = func(pct int, msg string) {
-		ms.progressBar.SetValue(float64(pct) / 100)
-		ms.statusLabel.SetText(msg)
-		ms.stateIcon.SetResource(theme.ViewRefreshIcon())
-		ms.updateExportProgress(pct, msg)
+		ms.dispatchUI(func() {
+			ms.progressBar.SetValue(float64(pct) / 100)
+			ms.statusLabel.SetText(msg)
+			ms.stateIcon.SetResource(theme.ViewRefreshIcon())
+			ms.updateExportProgress(pct, msg)
+		})
 	}
-	ms.engine.OnDone = func(resp ipc.Response) { ms.finishExport(resp, true, "") }
-	ms.engine.OnError = func(msg string) { ms.finishExport(ipc.Response{}, false, msg) }
+	ms.engine.OnDone = func(resp ipc.Response) {
+		ms.dispatchUI(func() { ms.finishExport(resp, true, "") })
+	}
+	ms.engine.OnError = func(msg string) {
+		ms.dispatchUI(func() { ms.finishExport(ipc.Response{}, false, msg) })
+	}
 	if jarPath == "" {
 		ms.statusLabel.SetText("Engine jar not found")
 		ms.exportBtn.Disable()
@@ -173,8 +179,8 @@ func (ms *MinesportApp) buildInspector() fyne.CanvasObject {
 	ms.minYRange = NewAxisRange("Y", -64, 320, func() { ms.updateMetaHUD(ms.selectionSizeText()) })
 	ms.minZRange = NewAxisRange("Z", -256, 256, func() { ms.updateMetaHUD(ms.selectionSizeText()) })
 	ms.minXEntry, ms.maxXEntry = ms.minXRange.Front, ms.minXRange.Back
-	ms.minYEntry, ms.maxYEntry = ms.minYRange.Front, ms.minYRange.Back
-	ms.minZEntry, ms.maxZEntry = ms.minZRange.Front, ms.minZRange.Back
+	ms.minYEntry, ms.maxYEntry = ms.minYRange.Front, ms.maxYRange.Back
+	ms.minZEntry, ms.maxZEntry = ms.minZRange.Front, ms.maxZRange.Back
 	ms.boxCoordGroup = container.NewVBox(ms.minXRange.Container, ms.minYRange.Container, ms.minZRange.Container)
 
 	ms.centerX = NewStepperEntry("0")
@@ -368,11 +374,16 @@ func (ms *MinesportApp) onSelectWorld() {
 			ms.outputLabel.SetText(ms.outputPath)
 		}
 		ms.showLoaderWarning()
+		ms.refreshWorkbenchSettingsActivity()
 		if ms.isEngineAvailable() {
 			ms.exportBtn.Enable()
 			ms.autoDetectBtn.Enable()
 			ms.viewToggle3D.Enable()
 			ms.requireBridgeCompatibility(nil)
+			// Runtime capture is instance-wide and selection-independent. Start it
+			// immediately after the instance context is known so normal Export can
+			// usually consume a ready full registry instead of waiting later.
+			ms.precacheRuntimeModelsForSelectedWorld()
 			go ms.generateHeightmap(worldPath)
 		} else {
 			ms.appendLog("World selected while core engine is unavailable; preview and export remain disabled")
@@ -383,8 +394,10 @@ func (ms *MinesportApp) onSelectOutput() {
 	go func() {
 		f := nativeOpenFolder("Select Output Folder")
 		if f != "" {
-			ms.outputPath = f
-			ms.outputLabel.SetText(f)
+			ms.dispatchUI(func() {
+				ms.outputPath = f
+				ms.outputLabel.SetText(f)
+			})
 		}
 	}()
 }
@@ -396,28 +409,34 @@ func (ms *MinesportApp) onAutoDetect() {
 		ms.handleCoreEngineFailure("World bounds were requested while the core engine was unavailable.")
 		return
 	}
+	worldPath := ms.worldPath
 	go func() {
-		r, e := ms.engine.SendCommand(map[string]interface{}{"command": "heightmap", "worldPath": ms.worldPath, "scale": 1})
+		r, e := ms.engine.SendCommand(map[string]interface{}{"command": "heightmap", "worldPath": worldPath, "scale": 1})
 		if e != nil {
-			ms.heightmapFailed("Auto-detect IPC failed: " + e.Error())
+			ms.dispatchUI(func() { ms.heightmapFailed("Auto-detect IPC failed: " + e.Error()) })
 			return
 		}
 		if r == nil {
-			ms.heightmapFailed("Auto-detect returned no response")
+			ms.dispatchUI(func() { ms.heightmapFailed("Auto-detect returned no response") })
 			return
 		}
 		if r.Type == "error" {
-			ms.heightmapFailed(r.Message)
+			ms.dispatchUI(func() { ms.heightmapFailed(r.Message) })
 			return
 		}
 		if r.Type != "heightmap" {
-			ms.heightmapFailed("Unexpected auto-detect response: " + r.Type)
+			ms.dispatchUI(func() { ms.heightmapFailed("Unexpected auto-detect response: " + r.Type) })
 			return
 		}
-		ms.minXRange.Front.SetText(fmt.Sprintf("%d", r.MinX))
-		ms.minXRange.Back.SetText(fmt.Sprintf("%d", r.MaxX))
-		ms.minZRange.Front.SetText(fmt.Sprintf("%d", r.MinZ))
-		ms.minZRange.Back.SetText(fmt.Sprintf("%d", r.MaxZ))
+		ms.dispatchUI(func() {
+			if ms.worldPath != worldPath {
+				return
+			}
+			ms.minXRange.Front.SetText(fmt.Sprintf("%d", r.MinX))
+			ms.minXRange.Back.SetText(fmt.Sprintf("%d", r.MaxX))
+			ms.minZRange.Front.SetText(fmt.Sprintf("%d", r.MinZ))
+			ms.minZRange.Back.SetText(fmt.Sprintf("%d", r.MaxZ))
+		})
 	}()
 }
 
@@ -681,85 +700,104 @@ func (ms *MinesportApp) finishExport(resp ipc.Response, ok bool, msg string) {
 		ms.exportBtn.Enable()
 	}
 }
+
 func (ms *MinesportApp) generateHeightmap(worldFolder string) {
 	ms.heightmapMu.Lock()
 	defer ms.heightmapMu.Unlock()
-	if ms.worldPath != worldFolder {
-		return
-	}
-	ms.setMapPreparing(true, "Preparing 2D map…")
+
+	ms.dispatchUI(func() {
+		if ms.worldPath == worldFolder {
+			ms.setMapPreparing(true, "Preparing 2D map…")
+		}
+	})
+
 	if cached, pngBytes, ok := loadCachedHeightmap(worldFolder); ok {
-		ms.appendLog("2D map cache hit: using saved heightmap")
-		if err := ms.applyHeightmapBytes(worldFolder, pngBytes, cached.MinX, cached.MinZ, cached.MaxX, cached.MaxZ, cached.Scale); err == nil {
-			ms.statusLabel.SetText("Heightmap ready · cached")
-			ms.stateIcon.SetResource(theme.ConfirmIcon())
-			ms.setMapPreparing(false, "")
+		ms.appendLogAsync("2D map cache hit: using saved heightmap")
+		rgba, err := decodeHeightmapRGBA(pngBytes)
+		if err == nil {
+			ms.dispatchUI(func() {
+				if ms.worldPath != worldFolder {
+					return
+				}
+				ms.applyHeightmapImage(worldFolder, rgba, cached.MinX, cached.MinZ, cached.MaxX, cached.MaxZ, cached.Scale)
+				ms.statusLabel.SetText("Heightmap ready · cached")
+				ms.stateIcon.SetResource(theme.ConfirmIcon())
+				ms.setMapPreparing(false, "")
+			})
 			return
 		}
-		ms.appendLog("Cached 2D map was unreadable; rebuilding it")
+		ms.appendLogAsync("Cached 2D map was unreadable; rebuilding it")
 	}
-	ms.appendLog("Heightmap request: " + worldFolder)
+
+	ms.appendLogAsync("Heightmap request: " + worldFolder)
 	resp, err := ms.engine.SendCommand(map[string]interface{}{"command": "heightmap", "worldPath": worldFolder, "scale": 1})
 	if err != nil {
-		ms.setMapPreparing(false, "")
-		ms.heightmapFailed("Heightmap IPC failed: " + err.Error())
+		ms.dispatchUI(func() { ms.heightmapFailed("Heightmap IPC failed: " + err.Error()) })
 		return
 	}
 	if resp == nil {
-		ms.setMapPreparing(false, "")
-		ms.heightmapFailed("Engine returned no heightmap response")
+		ms.dispatchUI(func() { ms.heightmapFailed("Engine returned no heightmap response") })
 		return
 	}
 	if resp.Type == "error" {
-		ms.setMapPreparing(false, "")
-		ms.heightmapFailed("Engine error: " + resp.Message)
+		ms.dispatchUI(func() { ms.heightmapFailed("Engine error: " + resp.Message) })
 		return
 	}
 	if resp.Type != "heightmap" {
-		ms.setMapPreparing(false, "")
-		ms.heightmapFailed("Unexpected response type " + resp.Type)
+		ms.dispatchUI(func() { ms.heightmapFailed("Unexpected response type " + resp.Type) })
 		return
 	}
 	if resp.Image == "" {
-		ms.setMapPreparing(false, "")
-		ms.heightmapFailed("Engine response contained no image")
+		ms.dispatchUI(func() { ms.heightmapFailed("Engine response contained no image") })
 		return
 	}
-	ms.appendLog(fmt.Sprintf("Heightmap response: %d base64 bytes, bounds X %d..%d Z %d..%d, scale %d", len(resp.Image), resp.MinX, resp.MaxX, resp.MinZ, resp.MaxZ, resp.Scale))
+	ms.appendLogAsync(fmt.Sprintf("Heightmap response: %d base64 bytes, bounds X %d..%d Z %d..%d, scale %d", len(resp.Image), resp.MinX, resp.MaxX, resp.MinZ, resp.MaxZ, resp.Scale))
 	b, err := base64.StdEncoding.DecodeString(resp.Image)
 	if err != nil {
-		ms.setMapPreparing(false, "")
-		ms.heightmapFailed("Heightmap base64 decode failed: " + err.Error())
+		ms.dispatchUI(func() { ms.heightmapFailed("Heightmap base64 decode failed: " + err.Error()) })
 		return
 	}
-	if err := ms.applyHeightmapBytes(worldFolder, b, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ, resp.Scale); err != nil {
-		ms.setMapPreparing(false, "")
-		ms.heightmapFailed("Heightmap PNG decode failed: " + err.Error())
+	rgba, err := decodeHeightmapRGBA(b)
+	if err != nil {
+		ms.dispatchUI(func() { ms.heightmapFailed("Heightmap PNG decode failed: " + err.Error()) })
 		return
 	}
 	if err := saveCachedHeightmap(worldFolder, b, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ, resp.Scale); err != nil {
-		ms.appendLog("Could not cache 2D map: " + err.Error())
+		ms.appendLogAsync("Could not cache 2D map: " + err.Error())
 	} else {
-		ms.appendLog("2D map cached for the next launch")
+		ms.appendLogAsync("2D map cached for the next launch")
 	}
-	ms.setMapPreparing(false, "")
-	ms.statusLabel.SetText("Heightmap ready")
-	ms.stateIcon.SetResource(theme.ConfirmIcon())
+	ms.dispatchUI(func() {
+		if ms.worldPath != worldFolder {
+			return
+		}
+		ms.applyHeightmapImage(worldFolder, rgba, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ, resp.Scale)
+		ms.setMapPreparing(false, "")
+		ms.statusLabel.SetText("Heightmap ready")
+		ms.stateIcon.SetResource(theme.ConfirmIcon())
+	})
 }
 
-func (ms *MinesportApp) applyHeightmapBytes(worldFolder string, pngBytes []byte, minX, minZ, maxX, maxZ, scale int) error {
+func decodeHeightmapRGBA(pngBytes []byte) (*image.RGBA, error) {
 	img, _, err := image.Decode(bytes.NewReader(pngBytes))
 	if err != nil {
-		return err
-	}
-	if ms.worldPath != worldFolder {
-		return fmt.Errorf("world selection changed while the map was preparing")
+		return nil, err
 	}
 	rgba := image.NewRGBA(img.Bounds())
 	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
 		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
 			rgba.Set(x, y, img.At(x, y))
 		}
+	}
+	return rgba, nil
+}
+
+func (ms *MinesportApp) applyHeightmapImage(worldFolder string, rgba *image.RGBA, minX, minZ, maxX, maxZ, scale int) error {
+	if rgba == nil {
+		return fmt.Errorf("heightmap image is nil")
+	}
+	if ms.worldPath != worldFolder {
+		return fmt.Errorf("world selection changed while the map was preparing")
 	}
 	ms.worldMap.LoadHeightmap(rgba, minX, minZ, maxX, maxZ)
 	ms.worldMap.FitToWindow()
@@ -769,6 +807,14 @@ func (ms *MinesportApp) applyHeightmapBytes(worldFolder string, pngBytes []byte,
 	ms.minZRange.Back.SetText(fmt.Sprintf("%d", maxZ))
 	_ = scale
 	return nil
+}
+
+func (ms *MinesportApp) applyHeightmapBytes(worldFolder string, pngBytes []byte, minX, minZ, maxX, maxZ, scale int) error {
+	rgba, err := decodeHeightmapRGBA(pngBytes)
+	if err != nil {
+		return err
+	}
+	return ms.applyHeightmapImage(worldFolder, rgba, minX, minZ, maxX, maxZ, scale)
 }
 
 func (ms *MinesportApp) setMapPreparing(preparing bool, message string) {
@@ -882,7 +928,6 @@ func (ms *MinesportApp) detectWorldMeta(path string) string {
 				}
 				return fmt.Sprintf("MC %s · %s%s", i.Version, i.Loader, poly)
 			}
-		}
 	}
 	return "Minecraft world"
 }
