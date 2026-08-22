@@ -191,7 +191,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         output.flush().context("flush Java engine announcement")?;
     }
 
-    let stdout_relay = thread::spawn(move || {
+    let stdout_relay = thread::spawn(move || -> std::io::Result<()> {
         let reader = BufReader::new(java_stdout);
         let stdout = std::io::stdout();
         let mut output = stdout.lock();
@@ -200,10 +200,10 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
             writeln!(output, "{line}")?;
             output.flush()?;
         }
-        std::io::Result::Ok(())
+        Ok(())
     });
 
-    let stderr_relay = thread::spawn(move || {
+    let stderr_relay = thread::spawn(move || -> std::io::Result<()> {
         let reader = BufReader::new(java_stderr);
         let stderr = std::io::stderr();
         let mut output = stderr.lock();
@@ -212,7 +212,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
             writeln!(output, "{line}")?;
             output.flush()?;
         }
-        std::io::Result::Ok(())
+        Ok(())
     });
 
     // Do not join this thread: if Java crashes while the parent UI remains
