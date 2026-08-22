@@ -12,8 +12,8 @@ import java.util.List;
 /**
  * Writes DCC-neutral Minesport translation metadata next to an export.
  *
- * The sidecar deliberately stores capabilities and animation descriptors. When
- * FLATTER is active, its lossless logical block grid is preserved from the
+ * The sidecar deliberately stores capabilities, lights and animation descriptors.
+ * When FLATTER is active, its lossless logical block grid is preserved from the
  * geometry export and merged into this same sidecar.
  */
 public final class BlenderMetadataExporter {
@@ -51,6 +51,17 @@ public final class BlenderMetadataExporter {
         // grid when Blender animation metadata is layered on afterward.
         FlatterMetadataExporter.copyExistingFlatter(sidecar, root);
 
+        float[] center = BlockGrouper.boundingBoxCenter(blocks);
+        JsonArray lights = MinecraftLightExporter.sidecarLights(blocks, center);
+        root.add("lights", lights);
+
+        JsonObject lightModel = new JsonObject();
+        lightModel.addProperty("logicalLevels", 15);
+        lightModel.addProperty("decay", "one_level_per_block");
+        lightModel.addProperty("renderFalloff", "smooth");
+        lightModel.addProperty("defaultHelpersVisible", false);
+        root.add("lightModel", lightModel);
+
         JsonObject capabilities = new JsonObject();
         capabilities.addProperty("dynamicDescriptors", true);
         capabilities.addProperty("bridgeDescriptorSchema", 1);
@@ -58,11 +69,13 @@ public final class BlenderMetadataExporter {
         capabilities.addProperty("continuousTextureAnimations", true);
         capabilities.addProperty("flatter", root.has("flatterObjects"));
         capabilities.addProperty("flatterMaterialization", root.has("flatterObjects"));
+        capabilities.addProperty("minecraftLights", !lights.isEmpty());
+        capabilities.addProperty("minecraftLightLevels", true);
+        capabilities.addProperty("flatterLightPlacement", root.has("flatterObjects"));
         root.add("capabilities", capabilities);
 
         JsonArray animations = new JsonArray();
         if (!"animate_static".equals(animationMode)) {
-            float[] center = BlockGrouper.boundingBoxCenter(blocks);
             for (BlockData block : blocks) {
                 if (!isVanillaChest(block)) continue;
                 animations.add(chestLidDescriptor(block, center));
