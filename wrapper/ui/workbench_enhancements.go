@@ -172,8 +172,6 @@ func (ms *MinesportApp) refreshWorkbenchSettingsActivity() {
 	}
 	holder.RemoveAll()
 	holder.Add(ms.buildWorkbenchSettingsPane())
-	workbenchAssetCenterStates.Delete(ms)
-	installWorkbenchAssetCenter(ms)
 }
 
 // buildAdvancedPreflightCard keeps heavyweight preview analysis out of the
