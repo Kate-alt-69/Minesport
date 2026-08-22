@@ -3,10 +3,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::{
     env,
     fs::{self, File},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::mpsc,
+    sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -34,7 +34,20 @@ pub struct Progress {
     pub message: String,
 }
 
-pub fn prepare_full_registry<F>(version: &str, mods_path: &Path, force: bool, mut progress: F) -> Result<CacheResult>
+pub fn prepare_full_registry<F>(version: &str, mods_path: &Path, force: bool, progress: F) -> Result<CacheResult>
+where
+    F: FnMut(Progress) + Send,
+{
+    prepare_full_registry_cancellable(version, mods_path, force, Arc::new(AtomicBool::new(false)), progress)
+}
+
+pub fn prepare_full_registry_cancellable<F>(
+    version: &str,
+    mods_path: &Path,
+    force: bool,
+    cancel: Arc<AtomicBool>,
+    mut progress: F,
+) -> Result<CacheResult>
 where
     F: FnMut(Progress) + Send,
 {
@@ -43,9 +56,12 @@ where
         bail!("Rust fast runtime worker currently supports the canonical bundled Minecraft 1.21.10 path; compatibility-profile port for {version} is still in progress");
     }
     if !mods_path.is_dir() { bail!("mods folder is unavailable: {}", mods_path.display()); }
+    if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
 
     progress(Progress { percent: 1, message: "Verifying exact mod contents…".into() });
     let fingerprint = registry::mods_fingerprint(mods_path)?;
+    if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
+
     let cache_root = runtime::cache_root();
     let existing = registry::snapshot_path(&cache_root, version, &fingerprint);
     if !force && registry::snapshot_exists(&cache_root, version, &fingerprint) {
@@ -69,23 +85,22 @@ where
             &capture_root,
             &capture_version,
             &capture_fingerprint,
-            |notice| match notice {
-                registry::CaptureNotice::Listening(_) => {
-                    if !announced {
-                        announced = true;
-                        let _ = listen_tx.send(Ok(()));
-                    }
+            |notice| {
+                if matches!(notice, registry::CaptureNotice::Listening(_)) && !announced {
+                    announced = true;
+                    let _ = listen_tx.send(Ok(()));
                 }
-                _ => {}
             },
         );
         if !announced { let _ = listen_tx.send(Err(anyhow!("registry receiver stopped before listening"))); }
         let _ = capture_tx.send(result);
     });
 
-    listen_rx.recv_timeout(Duration::from_secs(5))
-        .context("wait for Rust runtime registry receiver")??;
+    listen_rx.recv_timeout(Duration::from_secs(5)).context("wait for Rust runtime registry receiver")??;
 
+    // Once the listener exists, launch even when cancellation raced this point;
+    // doing so guarantees the accept/read thread receives a connection that can
+    // be closed cleanly instead of leaking a blocked receiver in the backend.
     progress(Progress { percent: 12, message: "Receiver ready · starting local Fabric/Loom client…".into() });
     let log_path = workspace.join("runtime-worker.log");
     let mut child = start_gradle_worker(&workspace, &log_path)?;
@@ -93,6 +108,11 @@ where
 
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            stop_child(&mut child);
+            bail!("runtime model-cache generation cancelled");
+        }
+
         match capture_rx.try_recv() {
             Ok(Ok(path)) => {
                 progress(Progress { percent: 96, message: "Full registry received · stopping disposable Minecraft client…".into() });
