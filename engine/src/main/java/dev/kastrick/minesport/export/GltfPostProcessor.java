@@ -7,6 +7,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Locale;
 
 /** Post-processes generated .gltf JSON for format-level fixes that do not belong in mesh generation. */
 public final class GltfPostProcessor {
@@ -14,6 +15,14 @@ public final class GltfPostProcessor {
     private static final int CLAMP_TO_EDGE = 33071;
     private static final int NEAREST = 9728;
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+    private static final String[] EMISSIVE_TOKENS = {
+        "torch", "lantern", "glowstone", "sea_lantern", "shroomlight", "froglight",
+        "end_rod", "jack_o_lantern", "fire", "lava", "glow_lichen", "amethyst_cluster",
+        "amethyst_bud", "crying_obsidian", "magma", "candle", "cave_vines_lit",
+        "furnace_front_on", "blast_furnace_front_on", "smoker_front_on",
+        "redstone_torch", "redstone_lamp_on"
+    };
 
     private GltfPostProcessor() {}
 
@@ -78,6 +87,7 @@ public final class GltfPostProcessor {
         if (sources.isEmpty()) return;
 
         JsonObject root = readRoot(gltfFile);
+        markMinecraftEmissiveMaterials(root);
         JsonArray nodes = array(root, "nodes");
         JsonArray scenes = array(root, "scenes");
         if (scenes.isEmpty()) return;
@@ -162,6 +172,54 @@ public final class GltfPostProcessor {
         root.add("nodes", nodes);
 
         writeRoot(gltfFile, root);
+    }
+
+    /** Makes the source texture itself glow as well as creating a scene light. */
+    private static void markMinecraftEmissiveMaterials(JsonObject root) {
+        JsonArray materials = root.has("materials") && root.get("materials").isJsonArray()
+            ? root.getAsJsonArray("materials") : null;
+        if (materials == null) return;
+
+        for (JsonElement element : materials) {
+            if (!element.isJsonObject()) continue;
+            JsonObject material = element.getAsJsonObject();
+            String name = material.has("name") ? material.get("name").getAsString() : "";
+            if (!looksEmissive(name)) continue;
+
+            JsonArray factor = new JsonArray();
+            factor.add(1.0);
+            factor.add(1.0);
+            factor.add(1.0);
+            material.add("emissiveFactor", factor);
+
+            JsonObject pbr = material.has("pbrMetallicRoughness") && material.get("pbrMetallicRoughness").isJsonObject()
+                ? material.getAsJsonObject("pbrMetallicRoughness") : null;
+            if (pbr != null && pbr.has("baseColorTexture") && pbr.get("baseColorTexture").isJsonObject()) {
+                JsonObject baseTexture = pbr.getAsJsonObject("baseColorTexture");
+                if (baseTexture.has("index")) {
+                    JsonObject emissiveTexture = new JsonObject();
+                    emissiveTexture.addProperty("index", baseTexture.get("index").getAsInt());
+                    material.add("emissiveTexture", emissiveTexture);
+                }
+            }
+
+            JsonObject extras = material.has("extras") && material.get("extras").isJsonObject()
+                ? material.getAsJsonObject("extras") : new JsonObject();
+            extras.addProperty("minesportEmissive", true);
+            material.add("extras", extras);
+        }
+    }
+
+    private static boolean looksEmissive(String rawName) {
+        String name = rawName == null ? "" : rawName.toLowerCase(Locale.ROOT);
+        if (name.contains("redstone_lamp") && !name.contains("redstone_lamp_on")) return false;
+        if (name.contains("furnace_front") && !name.contains("furnace_front_on")) return false;
+        if (name.contains("blast_furnace_front") && !name.contains("blast_furnace_front_on")) return false;
+        if (name.contains("smoker_front") && !name.contains("smoker_front_on")) return false;
+        for (String token : EMISSIVE_TOKENS) {
+            if (name.contains(token)) return true;
+        }
+        return false;
     }
 
     private static JsonObject readRoot(File file) throws IOException {
