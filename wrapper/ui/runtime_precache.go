@@ -3,7 +3,6 @@ package ui
 import (
 	"strings"
 
-	"github.com/kastrick/minesport/bridgecapture"
 	"github.com/kastrick/minesport/bridgecompat"
 )
 
@@ -22,7 +21,11 @@ func (ms *MinesportApp) precacheRuntimeModelsForSelectedWorld() {
 		ms.refreshWorkbenchSettingsActivity()
 		return
 	}
-	if _, ok := bridgecapture.SnapshotPathForMods(version, ms.modsPath); ok {
+	// Never call ModsFingerprint/SnapshotPathForMods from this UI callback.
+	// Exact content hashing may read every JAR in the instance and is performed
+	// by generateRuntimeModelCache's background worker. A retained fingerprint
+	// lets repeated visits to the same selected instance take the cheap path.
+	if _, ok := ms.runtimeCacheReadyForCurrentWorld(); ok {
 		ms.appendLog("Full runtime model registry already cached for Minecraft " + version + " and the current mod set")
 		ms.refreshWorkbenchSettingsActivity()
 		return
@@ -53,7 +56,6 @@ func (ms *MinesportApp) precacheRuntimeModelsForSelectedWorld() {
 		return
 	}
 	if !started {
-		// A matching snapshot appeared between the initial check and job setup.
 		ms.finishWorkbenchTaskV3(true, "Full runtime registry already ready", "Minecraft "+version+" · current mod set")
 		ms.refreshWorkbenchSettingsActivity()
 		return
