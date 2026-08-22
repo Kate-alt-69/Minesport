@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kastrick/minesport/appdirs"
 )
 
 const defaultFlatterCellSize = 16
@@ -64,6 +66,10 @@ func DefaultSettings() Settings {
 }
 
 func settingsPath() (string, error) {
+	return appdirs.SettingsPath(), nil
+}
+
+func legacySettingsPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
@@ -78,6 +84,16 @@ func LoadSettings() Settings {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		// One-time compatibility migration from the old unscoped config folder.
+		// The old file is left untouched so downgrades remain safe.
+		if legacy, legacyErr := legacySettingsPath(); legacyErr == nil && filepath.Clean(legacy) != filepath.Clean(path) {
+			if legacyData, readErr := os.ReadFile(legacy); readErr == nil {
+				data = legacyData
+				err = nil
+			}
+		}
+	}
+	if err != nil {
 		return DefaultSettings()
 	}
 	var settings Settings
@@ -85,6 +101,11 @@ func LoadSettings() Settings {
 		return DefaultSettings()
 	}
 	settings.FlatterCellSize = normalizeFlatterCellSize(settings.FlatterCellSize)
+
+	// Persist migrated settings into the canonical LocalAppData/app-data root.
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+		_ = settings.Save()
+	}
 	return settings
 }
 
