@@ -17,7 +17,13 @@ use std::{
 
 slint::include_modules!();
 
+const VERSION: &str = "0.2.0";
+
 fn main() -> Result<()> {
+    if handle_cli() {
+        return Ok(());
+    }
+
     let ui = MainWindow::new().context("create Minesport Slint window")?;
     wire_file_pickers(&ui);
 
@@ -36,6 +42,22 @@ fn main() -> Result<()> {
     ui.run().context("run Minesport Slint event loop")?;
     engine.shutdown();
     Ok(())
+}
+
+fn handle_cli() -> bool {
+    let mut args = std::env::args().skip(1);
+    let Some(arg) = args.next() else { return false; };
+    match arg.as_str() {
+        "-h" | "--help" => {
+            println!("Minesport {VERSION}\nRust + Slint desktop by Kastrick\n\nUsage:\n  minesport                 Open the desktop app\n  minesport --version       Print version\n  minesport --help          Show this help");
+            true
+        }
+        "-V" | "--version" => {
+            println!("Minesport {VERSION}");
+            true
+        }
+        _ => false,
+    }
 }
 
 fn wire_file_pickers(ui: &MainWindow) {
@@ -67,7 +89,7 @@ fn wire_file_pickers(ui: &MainWindow) {
                 ui.set_world_name(name.into());
                 ui.set_minecraft_version(version.clone().into());
                 ui.set_loader_type("Fabric".into());
-                ui.set_runtime_cache_status("NOT CACHED · background registry port follows".into());
+                ui.set_runtime_cache_status("NOT CACHED · runtime backend migration in progress".into());
                 ui.set_task_title("World selected".into());
                 ui.set_task_detail(format!("Minecraft {version} · Fabric").into());
                 append_diagnostic(&ui, &format!("Selected world: {display} (Minecraft {version}, Fabric)"));
@@ -202,12 +224,8 @@ fn pump_engine_events(weak: slint::Weak<MainWindow>, events: Receiver<EngineEven
         let mut pending_logs: Vec<String> = Vec::with_capacity(64);
         loop {
             match events.recv_timeout(Duration::from_millis(100)) {
-                Ok(EngineEvent::Started { pid, java }) => {
-                    pending_logs.push(format!("Started Java engine (PID {pid}) with {java}"));
-                }
-                Ok(EngineEvent::Stderr(line)) => {
-                    pending_logs.push(format!("[java] {line}"));
-                }
+                Ok(EngineEvent::Started { pid, java }) => pending_logs.push(format!("Started Java engine (PID {pid}) with {java}")),
+                Ok(EngineEvent::Stderr(line)) => pending_logs.push(format!("[java] {line}")),
                 Ok(EngineEvent::ReadEnded(message)) => {
                     flush_logs(&weak, &mut pending_logs);
                     let _ = weak.upgrade_in_event_loop(move |ui| {
@@ -220,9 +238,7 @@ fn pump_engine_events(weak: slint::Weak<MainWindow>, events: Receiver<EngineEven
                 Ok(EngineEvent::Response(response)) => {
                     if response.kind == "log" {
                         pending_logs.push(response.message);
-                        if pending_logs.len() >= 96 {
-                            flush_logs(&weak, &mut pending_logs);
-                        }
+                        if pending_logs.len() >= 96 { flush_logs(&weak, &mut pending_logs); }
                     } else {
                         flush_logs(&weak, &mut pending_logs);
                         apply_response(&weak, response);
@@ -240,9 +256,7 @@ fn pump_engine_events(weak: slint::Weak<MainWindow>, events: Receiver<EngineEven
 
 fn apply_response(weak: &slint::Weak<MainWindow>, response: Response) {
     let _ = weak.clone().upgrade_in_event_loop(move |ui| match response.kind.as_str() {
-        "info" => {
-            append_diagnostic(&ui, &format!("Engine version: {}", response.version));
-        }
+        "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
         "pong" => {
             ui.set_engine_ready(true);
             ui.set_engine_status("ENGINE READY".into());
@@ -259,13 +273,7 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response) {
             ui.set_task_active(false);
             ui.set_task_progress(1.0);
             ui.set_task_title("Export complete".into());
-            ui.set_task_detail(
-                format!(
-                    "{} · {} blocks · {} faces · {} vertices",
-                    response.output, response.block_count, response.quad_count, response.vertex_count
-                )
-                .into(),
-            );
+            ui.set_task_detail(format!("{} · {} blocks · {} faces · {} vertices", response.output, response.block_count, response.quad_count, response.vertex_count).into());
             append_diagnostic(&ui, &format!("IPC <- done · {}", response.output));
         }
         "error" => {
@@ -279,9 +287,7 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response) {
 }
 
 fn flush_logs(weak: &slint::Weak<MainWindow>, logs: &mut Vec<String>) {
-    if logs.is_empty() {
-        return;
-    }
+    if logs.is_empty() { return; }
     let batch = logs.join("\n");
     logs.clear();
     let _ = weak.clone().upgrade_in_event_loop(move |ui| append_diagnostic(&ui, &batch));
@@ -289,17 +295,11 @@ fn flush_logs(weak: &slint::Weak<MainWindow>, logs: &mut Vec<String>) {
 
 fn append_diagnostic(ui: &MainWindow, line: &str) {
     let current = ui.get_diagnostics().to_string();
-    let mut combined = if current.is_empty() {
-        line.to_string()
-    } else {
-        format!("{current}\n{line}")
-    };
+    let mut combined = if current.is_empty() { line.to_string() } else { format!("{current}\n{line}") };
     const MAX_BYTES: usize = 48 * 1024;
     if combined.len() > MAX_BYTES {
         let mut start = combined.len() - MAX_BYTES;
-        while !combined.is_char_boundary(start) {
-            start += 1;
-        }
+        while !combined.is_char_boundary(start) { start += 1; }
         combined = format!("… older diagnostics trimmed …\n{}", &combined[start..]);
     }
     ui.set_diagnostics(combined.into());
@@ -307,9 +307,7 @@ fn append_diagnostic(ui: &MainWindow, line: &str) {
 
 fn output_directory(ui: &MainWindow) -> PathBuf {
     let selected = ui.get_output_path().to_string();
-    if !selected.trim().is_empty() {
-        return PathBuf::from(selected);
-    }
+    if !selected.trim().is_empty() { return PathBuf::from(selected); }
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
@@ -318,20 +316,14 @@ fn output_directory(ui: &MainWindow) -> PathBuf {
 }
 
 fn infer_mods_path(world: &Path) -> PathBuf {
-    world
-        .parent()
-        .and_then(Path::parent)
-        .map(|minecraft| minecraft.join("mods"))
-        .unwrap_or_else(|| world.join("mods"))
+    world.parent().and_then(Path::parent).map(|minecraft| minecraft.join("mods")).unwrap_or_else(|| world.join("mods"))
 }
 
 fn detect_minecraft_version(world: &Path) -> Option<String> {
     for component in world.components().rev() {
         let value = component.as_os_str().to_string_lossy();
         for token in value.split(|ch: char| !(ch.is_ascii_digit() || ch == '.')) {
-            if looks_like_minecraft_version(token) {
-                return Some(token.to_string());
-            }
+            if looks_like_minecraft_version(token) { return Some(token.to_string()); }
         }
     }
     None
@@ -339,22 +331,16 @@ fn detect_minecraft_version(world: &Path) -> Option<String> {
 
 fn looks_like_minecraft_version(value: &str) -> bool {
     let parts: Vec<&str> = value.split('.').collect();
-    if parts.len() < 2 || parts.len() > 3 || parts.iter().any(|part| part.is_empty() || !part.chars().all(|c| c.is_ascii_digit())) {
-        return false;
-    }
+    if parts.len() < 2 || parts.len() > 3 || parts.iter().any(|part| part.is_empty() || !part.chars().all(|c| c.is_ascii_digit())) { return false; }
     parts[0] == "1" || parts[0].parse::<u32>().is_ok_and(|major| major >= 20)
 }
 
 fn sanitize_export_name(value: &str) -> String {
-    let cleaned: String = value
-        .trim()
-        .chars()
-        .map(|ch| match ch {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
-            ch if ch.is_control() => '_',
-            _ => ch,
-        })
-        .collect();
+    let cleaned: String = value.trim().chars().map(|ch| match ch {
+        '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+        ch if ch.is_control() => '_',
+        _ => ch,
+    }).collect();
     let cleaned = cleaned.trim_matches([' ', '.']);
     if cleaned.is_empty() { "Minesport_Export".to_string() } else { cleaned.to_string() }
 }
