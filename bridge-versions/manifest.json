@@ -6,7 +6,7 @@
     "version": "1.21.10",
     "compatible": ["1.21.9", "1.21.10"],
     "source_root": "bridge",
-    "bundled_jar": "minesport-bridge-0.1.0.jar",
+    "bundled_jar": "minesport-bridge-0.2.0.jar",
     "java": 21,
     "files": ["build.gradle","settings.gradle","gradle.properties","gradlew","gradlew.bat","gradle/wrapper/gradle-wrapper.jar","gradle/wrapper/gradle-wrapper.properties","src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java","src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java","src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java","src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java","src/main/resources/fabric.mod.json"]
   },
