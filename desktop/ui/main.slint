@@ -1,86 +1,202 @@
-import { Button, CheckBox, LineEdit, ProgressIndicator, ScrollView, SpinBox } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ProgressIndicator, ScrollView, SpinBox, Spinner } from "std-widgets.slint";
+
+component RailButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+    height: 54px;
+    width: 58px;
+    background: active ? #1a252f : touch.has-hover ? #151d25 : transparent;
+    border-width: active ? 2px : 0px;
+    border-color: #57a26f;
+
+    Text {
+        text: root.label;
+        color: root.active ? #f2f6f8 : #8999a9;
+        font-size: 9px;
+        font-weight: root.active ? 700 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component SectionTitle inherits Text {
+    in property <string> label;
+    text: label;
+    color: #738394;
+    font-size: 10px;
+    font-weight: 700;
+    height: 20px;
+    vertical-alignment: center;
+}
+
+component HintText inherits Text {
+    color: #738394;
+    font-size: 10px;
+    wrap: word-wrap;
+}
+
+component Surface inherits Rectangle {
+    background: #12191f;
+    border-width: 1px;
+    border-color: #26333f;
+    border-radius: 6px;
+}
 
 export component MainWindow inherits Window {
     title: "Minesport 0.2.0 — by Kastrick";
-    width: 1280px;
-    height: 800px;
-    min-width: 980px;
-    min-height: 640px;
-    background: #0d1117;
+    width: 1360px;
+    height: 820px;
+    min-width: 1060px;
+    min-height: 680px;
+    background: #0c1116;
 
-    in-out property <int> active-page: 0;
+    // Workbench state -------------------------------------------------------
+    // 0 World · 1 Export · 2 Blender · 3 Tasks · 4 Settings
+    in-out property <int> active-activity: 0;
+    // Settings sub-pages: 0 Geometry · 1 Pipeline · 2 Assets · 3 Advanced · 4 Diagnostics
+    in-out property <int> settings-page: 0;
+    in-out property <int> viewport-mode: 0;
+
+    // World / selection -----------------------------------------------------
     in-out property <string> world-path: "No world selected";
-    in-out property <string> world-name: "NO WORLD";
-    in-out property <string> minecraft-version: "1.21.10";
-    in-out property <string> loader-type: "Fabric";
+    in-out property <string> world-name: "No world selected";
+    in-out property <string> minecraft-version: "—";
+    in-out property <string> loader-type: "—";
+    in-out property <int> selection-mode: 0;
+    in-out property <int> min-x: -256;
+    in-out property <int> min-y: -64;
+    in-out property <int> min-z: -256;
+    in-out property <int> max-x: 256;
+    in-out property <int> max-y: 320;
+    in-out property <int> max-z: 256;
+    in-out property <int> center-x: 0;
+    in-out property <int> center-y: 64;
+    in-out property <int> center-z: 0;
+    in-out property <int> radius-x: 32;
+    in-out property <int> radius-y: 32;
+    in-out property <int> radius-z: 32;
+
+    // Heightmap -------------------------------------------------------------
+    in-out property <image> map-image;
+    in-out property <bool> map-available: false;
+    in-out property <bool> map-loading: false;
+    in-out property <int> map-min-x: -256;
+    in-out property <int> map-min-z: -256;
+    in-out property <int> map-max-x: 256;
+    in-out property <int> map-max-z: 256;
+    in-out property <int> map-scale: 1;
+
+    // Export ---------------------------------------------------------------
     in-out property <string> output-path: "";
     in-out property <string> export-name: "Minesport_Export";
-    in-out property <string> export-format: "GLTF";
-    in-out property <string> export-mode: "Grouped";
+    in-out property <int> export-format-index: 0;
+    in-out property <int> export-mode-index: 0;
     in-out property <bool> optimize: true;
-    in-out property <int> min-x: -32;
-    in-out property <int> min-y: -64;
-    in-out property <int> min-z: -32;
-    in-out property <int> max-x: 32;
-    in-out property <int> max-y: 320;
-    in-out property <int> max-z: 32;
 
+    // Persistent settings --------------------------------------------------
+    in-out property <bool> face-culling: true;
+    in-out property <bool> flatter-enabled: true;
+    in-out property <int> flatter-cell-index: 3;
+    in-out property <bool> hidden-culling: false;
+    in-out property <bool> blender-export: true;
+    in-out property <bool> select-by-model: false;
+    in-out property <bool> debug-mode: false;
+    in-out property <int> blender-animation-index: 0;
+    in-out property <string> resource-pack-summary: "No resource-pack overrides";
+    in-out property <string> data-pack-summary: "No data-pack overrides";
+
+    // Runtime / task --------------------------------------------------------
     in-out property <string> engine-status: "STARTING";
     in-out property <bool> engine-ready: false;
     in-out property <string> runtime-cache-status: "WAITING FOR WORLD";
-    in-out property <string> task-title: "Idle";
+    in-out property <bool> runtime-cache-busy: false;
+    in-out property <string> task-title: "IDLE";
     in-out property <string> task-detail: "Ready";
     in-out property <float> task-progress: 0.0;
     in-out property <bool> task-active: false;
     in-out property <string> diagnostics: "Minesport Rust/Slint desktop initialized.";
 
+    // Documentation browser ------------------------------------------------
+    in-out property <bool> docs-visible: false;
+    in-out property <int> doc-page: 1;
+    in-out property <int> doc-total: 8;
+    in-out property <string> doc-title: "Start Here";
+    in-out property <string> doc-content: "Open Documentation from Settings to load the Minesport manual.";
+    in-out property <bool> doc-video-available: false;
+
     callback pick-world();
     callback pick-output();
+    callback reload-map();
     callback export-requested();
+    callback run-preflight();
+    callback open-3d();
     callback rebuild-runtime-cache();
+    callback cancel-runtime-cache();
     callback remove-cache();
+    callback add-resource-pack();
+    callback add-data-pack();
+    callback install-blender-translator();
+    callback open-docs();
+    callback docs-navigate(int);
+    callback docs-open-github();
+    callback docs-open-video();
 
     VerticalLayout {
         spacing: 0px;
 
+        // Top bar -----------------------------------------------------------
         Rectangle {
-            height: 66px;
-            background: #111820;
+            height: 52px;
+            background: #10171d;
             border-width: 1px;
-            border-color: #26313d;
+            border-color: #202c36;
 
             HorizontalLayout {
-                padding: 16px;
-                spacing: 14px;
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 12px;
 
                 Text {
                     text: "MINESPORT";
-                    color: #f3f6f9;
-                    font-size: 22px;
+                    color: #f1f5f7;
+                    font-size: 18px;
+                    font-weight: 700;
                     vertical-alignment: center;
                 }
-
                 Text {
-                    horizontal-stretch: 1;
                     text: "0.2.0  ·  KASTRICK";
-                    color: #8191a2;
-                    font-size: 12px;
+                    color: #718292;
+                    font-size: 10px;
                     vertical-alignment: center;
                 }
-
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Text {
+                    text: root.world-path == "No world selected" ? "NO WORLD" : root.world-name + "  ·  " + root.minecraft-version;
+                    color: #93a2b1;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    max-width: 420px;
+                }
                 Rectangle {
-                    width: 126px;
-                    height: 32px;
-                    border-radius: 6px;
-                    background: root.engine-ready ? #173b2d : #3b2424;
+                    width: 116px;
+                    height: 28px;
+                    border-radius: 5px;
+                    background: root.engine-ready ? #163425 : #3a2424;
                     border-width: 1px;
-                    border-color: root.engine-ready ? #2c7b58 : #7a3b3b;
+                    border-color: root.engine-ready ? #2e7653 : #793b3b;
                     Text {
                         text: root.engine-status;
-                        color: root.engine-ready ? #89e6b7 : #ffaaaa;
+                        color: root.engine-ready ? #8de1b4 : #f5aaaa;
+                        font-size: 9px;
+                        font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        font-size: 11px;
                     }
                 }
             }
@@ -90,91 +206,268 @@ export component MainWindow inherits Window {
             spacing: 0px;
             vertical-stretch: 1;
 
+            // Activity rail -------------------------------------------------
             Rectangle {
-                width: 210px;
-                background: #0f151c;
+                width: 58px;
+                background: #0d1318;
                 border-width: 1px;
-                border-color: #202b36;
-
+                border-color: #202b35;
                 VerticalLayout {
-                    padding: 14px;
-                    spacing: 10px;
-
-                    Text { text: "WORKSPACE"; color: #718096; font-size: 10px; }
-                    Button { text: "Workbench"; enabled: root.active-page != 0; clicked => { root.active-page = 0; } }
-                    Button { text: "Settings"; enabled: root.active-page != 1; clicked => { root.active-page = 1; } }
-                    Button { text: "Diagnostics"; enabled: root.active-page != 2; clicked => { root.active-page = 2; } }
-
+                    spacing: 0px;
+                    RailButton { label: "WORLD"; active: root.active-activity == 0; clicked => { root.active-activity = 0; } }
+                    RailButton { label: "EXPORT"; active: root.active-activity == 1; clicked => { root.active-activity = 1; } }
+                    RailButton { label: "BLENDER"; active: root.active-activity == 2; clicked => { root.active-activity = 2; } }
+                    RailButton { label: "TASKS"; active: root.active-activity == 3; clicked => { root.active-activity = 3; } }
                     Rectangle { vertical-stretch: 1; background: transparent; }
-
-                    Text { text: "RUNTIME CACHE"; color: #718096; font-size: 10px; }
-                    Text {
-                        text: root.runtime-cache-status;
-                        color: #bdc8d4;
-                        wrap: word-wrap;
-                        font-size: 11px;
-                    }
+                    RailButton { label: "SETTINGS"; active: root.active-activity == 4; clicked => { root.active-activity = 4; } }
                 }
             }
 
+            // Context sidebar ----------------------------------------------
             Rectangle {
-                horizontal-stretch: 1;
-                background: #0d1117;
+                width: 326px;
+                background: #12181e;
+                border-width: 1px;
+                border-color: #202b35;
 
-                if root.active-page == 0: HorizontalLayout {
-                    padding: 18px;
-                    spacing: 18px;
+                VerticalLayout {
+                    spacing: 0px;
+                    Rectangle {
+                        height: 42px;
+                        background: #141c23;
+                        border-width: 1px;
+                        border-color: #24313c;
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 10px;
+                            Text {
+                                text: root.active-activity == 0 ? "WORLD"
+                                    : root.active-activity == 1 ? "EXPORT"
+                                    : root.active-activity == 2 ? "BLENDER"
+                                    : root.active-activity == 3 ? "TASKS"
+                                    : "SETTINGS";
+                                color: #e1e7ec;
+                                font-size: 11px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            if root.active-activity == 4: Button {
+                                text: "DOCS";
+                                clicked => { root.open-docs(); }
+                            }
+                        }
+                    }
 
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 12px;
+                    // WORLD -------------------------------------------------
+                    if root.active-activity == 0: ScrollView {
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 9px;
+                            Text { text: root.world-name; color: #eef2f5; font-size: 14px; font-weight: 700; overflow: elide; }
+                            Text { text: root.world-path; color: #758696; font-size: 10px; wrap: word-wrap; }
+                            Text { text: root.minecraft-version + "  ·  " + root.loader-type; color: #6da5d5; font-size: 10px; }
+                            Button { text: "OPEN MINECRAFT WORLD…"; primary: true; clicked => { root.pick-world(); } }
 
-                        Rectangle {
-                            height: 82px;
-                            background: #121922;
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: #283544;
-                            HorizontalLayout {
-                                padding: 14px;
-                                spacing: 12px;
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    spacing: 4px;
-                                    Text { text: root.world-name; color: #f0f4f8; font-size: 16px; }
-                                    Text { text: root.world-path; color: #8393a5; font-size: 11px; overflow: elide; }
-                                    Text { text: root.minecraft-version + "  ·  " + root.loader-type; color: #6fa8dc; font-size: 11px; }
+                            SectionTitle { label: "SELECTION"; }
+                            ComboBox {
+                                model: ["Box selection", "Bubble selection"];
+                                current-index <=> root.selection-mode;
+                            }
+
+                            if root.selection-mode == 0: VerticalLayout {
+                                spacing: 6px;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text { width: 30px; text: "X"; color: #8796a5; vertical-alignment: center; }
+                                    SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-x; }
+                                    Text { text: "→"; color: #627384; vertical-alignment: center; }
+                                    SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-x; }
                                 }
-                                Button { text: "SELECT WORLD"; clicked => { root.pick-world(); } }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text { width: 30px; text: "Y"; color: #8796a5; vertical-alignment: center; }
+                                    SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.min-y; }
+                                    Text { text: "→"; color: #627384; vertical-alignment: center; }
+                                    SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.max-y; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text { width: 30px; text: "Z"; color: #8796a5; vertical-alignment: center; }
+                                    SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-z; }
+                                    Text { text: "→"; color: #627384; vertical-alignment: center; }
+                                    SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-z; }
+                                }
+                            }
+
+                            if root.selection-mode == 1: VerticalLayout {
+                                spacing: 6px;
+                                HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Center X"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.center-x; } }
+                                HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Center Y"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.center-y; } }
+                                HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Center Z"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.center-z; } }
+                                Rectangle { height: 1px; background: #27333e; }
+                                HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius X"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 30000000; value <=> root.radius-x; } }
+                                HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Y"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 4096; value <=> root.radius-y; } }
+                                HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Z"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 30000000; value <=> root.radius-z; } }
+                            }
+
+                            Button {
+                                text: "USE WORLD BOUNDS";
+                                enabled: root.map-available;
+                                clicked => {
+                                    root.min-x = root.map-min-x;
+                                    root.max-x = root.map-max-x;
+                                    root.min-z = root.map-min-z;
+                                    root.max-z = root.map-max-z;
+                                }
+                            }
+                            HintText { text: "LMB-drag on the 2D map updates X/Z box selection. Bubble mode uses a map click as its center."; }
+                        }
+                    }
+
+                    // EXPORT ------------------------------------------------
+                    if root.active-activity == 1: ScrollView {
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 9px;
+                            SectionTitle { label: "OUTPUT"; }
+                            Text { text: "Name"; color: #8191a0; font-size: 10px; }
+                            LineEdit { text <=> root.export-name; }
+                            Text { text: "Format"; color: #8191a0; font-size: 10px; }
+                            ComboBox { model: ["glTF 2.0", "OBJ + MTL"]; current-index <=> root.export-format-index; }
+                            Text { text: "Objects"; color: #8191a0; font-size: 10px; }
+                            ComboBox { model: ["Grouped", "Individual blocks", "Merged"]; current-index <=> root.export-mode-index; }
+                            CheckBox { text: "Optimize mesh output"; checked <=> root.optimize; }
+                            Text { text: root.output-path == "" ? "~/Minesport_Exports" : root.output-path; color: #758696; font-size: 10px; wrap: word-wrap; }
+                            Button { text: "CHOOSE OUTPUT FOLDER…"; clicked => { root.pick-output(); } }
+
+                            SectionTitle { label: "ANALYSIS"; }
+                            Button { text: "RUN PREFLIGHT"; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.run-preflight(); } }
+                            HintText { text: "Preflight reports block count, pressure and unresolved preview assets without changing export output."; }
+
+                            SectionTitle { label: "EXPORT"; }
+                            Button {
+                                text: root.task-active ? "WORKING…" : "EXPORT WORLD";
+                                primary: true;
+                                enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected";
+                                clicked => { root.export-requested(); }
+                            }
+                            HintText { text: "Export consumes the full instance-wide runtime registry when available; selection bounds only decide what geometry is written."; }
+                        }
+                    }
+
+                    // BLENDER -----------------------------------------------
+                    if root.active-activity == 2: ScrollView {
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 9px;
+                            SectionTitle { label: "BLENDER TRANSLATOR"; }
+                            CheckBox { text: "Blender integration"; checked <=> root.blender-export; }
+                            Button { text: "INSTALL / UPDATE ADD-ON"; clicked => { root.install-blender-translator(); } }
+                            Text { text: "Animation"; color: #8191a0; font-size: 10px; }
+                            ComboBox { model: ["Minecraft timing", "Static first frame"]; current-index <=> root.blender-animation-index; }
+                            HintText { text: "Minecraft texture timing, LIGHT_BLOCK metadata, FLATTER logical editing, water/glass materials and per-block origins are exported through the translation metadata."; }
+                            SectionTitle { label: "LIGHT_BLOCK"; }
+                            HintText { text: "Logical light levels remain 0–15 in export metadata. The add-on derives Blender point-light energy, range and falloff from those logical values."; }
+                        }
+                    }
+
+                    // TASKS -------------------------------------------------
+                    if root.active-activity == 3: ScrollView {
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 9px;
+                            SectionTitle { label: "ACTIVE TASK"; }
+                            Text { text: root.task-title; color: #e4e9ed; font-size: 13px; font-weight: 700; }
+                            Text { text: root.task-detail; color: #7e8f9f; font-size: 10px; wrap: word-wrap; }
+                            if root.task-active: ProgressIndicator { progress: root.task-progress; }
+                            SectionTitle { label: "RUNTIME REGISTRY"; }
+                            Text { text: root.runtime-cache-status; color: #8fa2b4; font-size: 10px; wrap: word-wrap; }
+                            if root.runtime-cache-busy: Button { text: "CANCEL RUNTIME WORKER"; clicked => { root.cancel-runtime-cache(); } }
+                            HintText { text: "The registry worker is instance-wide and never uses the current selection bounds."; }
+                        }
+                    }
+
+                    // SETTINGS ----------------------------------------------
+                    if root.active-activity == 4: VerticalLayout {
+                        spacing: 0px;
+                        Rectangle {
+                            height: 42px;
+                            background: #10171d;
+                            HorizontalLayout {
+                                spacing: 2px;
+                                padding: 5px;
+                                Button { text: "GEO"; checkable: true; checked: root.settings-page == 0; clicked => { root.settings-page = 0; } }
+                                Button { text: "PIPE"; checkable: true; checked: root.settings-page == 1; clicked => { root.settings-page = 1; } }
+                                Button { text: "ASSET"; checkable: true; checked: root.settings-page == 2; clicked => { root.settings-page = 2; } }
+                                Button { text: "ADV"; checkable: true; checked: root.settings-page == 3; clicked => { root.settings-page = 3; } }
+                                Button { text: "LOG"; checkable: true; checked: root.settings-page == 4; clicked => { root.settings-page = 4; } }
                             }
                         }
 
-                        Rectangle {
-                            vertical-stretch: 1;
-                            background: #10161d;
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: #26313d;
+                        ScrollView {
+                            if root.settings-page == 0: VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                SectionTitle { label: "GEOMETRY"; }
+                                CheckBox { text: "Face culling"; checked <=> root.face-culling; }
+                                HintText { text: "Remove a face only when neighboring geometry proves it is fully hidden."; }
+                                CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; }
+                                ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; }
+                                HintText { text: "Smaller cells rebuild locally; larger cells create fewer Blender objects and broader greedy surfaces."; }
+                                CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; }
+                                CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; }
+                            }
 
-                            VerticalLayout {
-                                padding: 18px;
-                                spacing: 10px;
-                                Text { text: "WORLD VIEW"; color: #dfe7ef; font-size: 14px; }
-                                Rectangle {
-                                    vertical-stretch: 1;
-                                    background: #151d26;
-                                    border-radius: 6px;
-                                    border-width: 1px;
-                                    border-color: #293746;
-                                    VerticalLayout {
-                                        padding: 18px;
+                            if root.settings-page == 1: VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                SectionTitle { label: "PIPELINE"; }
+                                CheckBox { text: "Blender integration"; checked <=> root.blender-export; }
+                                CheckBox { text: "Debug engine diagnostics"; checked <=> root.debug-mode; }
+                                Text { text: "Runtime model cache"; color: #c5d0d9; font-size: 11px; font-weight: 700; }
+                                Text { text: root.runtime-cache-status; color: #7f91a3; font-size: 10px; wrap: word-wrap; }
+                                Button { text: "REBUILD FULL RUNTIME REGISTRY"; enabled: root.world-path != "No world selected" && !root.runtime-cache-busy; clicked => { root.rebuild-runtime-cache(); } }
+                                if root.runtime-cache-busy: Button { text: "CANCEL"; clicked => { root.cancel-runtime-cache(); } }
+                            }
+
+                            if root.settings-page == 2: VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                SectionTitle { label: "ASSET RESOLUTION"; }
+                                Text { text: root.resource-pack-summary; color: #8798a8; font-size: 10px; wrap: word-wrap; }
+                                Button { text: "ADD RESOURCE PACK…"; clicked => { root.add-resource-pack(); } }
+                                Text { text: root.data-pack-summary; color: #8798a8; font-size: 10px; wrap: word-wrap; }
+                                Button { text: "ADD DATA PACK…"; clicked => { root.add-data-pack(); } }
+                                HintText { text: "Asset precedence is preserved by the engine resolver chain. The Slint shell only edits the ordered paths."; }
+                            }
+
+                            if root.settings-page == 3: VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                SectionTitle { label: "ADVANCED"; }
+                                Button { text: "RUN PREFLIGHT"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.run-preflight(); } }
+                                Button { text: "RELOAD 2D MAP"; enabled: root.world-path != "No world selected" && !root.map-loading; clicked => { root.reload-map(); } }
+                                Button { text: "OPEN DOCUMENTATION"; clicked => { root.open-docs(); } }
+                                SectionTitle { label: "DIAGNOSTICS"; }
+                                Button { text: "REMOVE ALL MINESPORT CACHE"; enabled: !root.task-active && !root.runtime-cache-busy; clicked => { root.remove-cache(); } }
+                                HintText { text: "Deletes regenerable Minesport cache data only. Worlds, exports and your real mods folder are never touched."; }
+                            }
+
+                            if root.settings-page == 4: VerticalLayout {
+                                padding: 14px;
+                                spacing: 8px;
+                                SectionTitle { label: "DIAGNOSTICS"; }
+                                Surface {
+                                    height: 500px;
+                                    ScrollView {
                                         Text {
-                                            text: root.world-path == "No world selected"
-                                                ? "Select a Minecraft world to load the map."
-                                                : "Rust/Slint map renderer comes next.\nThe UI event loop is already independent from Java/Gradle/cache work.";
-                                            color: #7f91a4;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
+                                            x: 10px;
+                                            y: 10px;
+                                            width: parent.width - 20px;
+                                            text: root.diagnostics;
+                                            color: #9cadbd;
+                                            font-size: 9px;
                                             wrap: word-wrap;
                                         }
                                     }
@@ -182,105 +475,189 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                }
+            }
+
+            // Permanent workbench viewport ---------------------------------
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #0b1015;
+
+                VerticalLayout {
+                    spacing: 0px;
 
                     Rectangle {
-                        width: 330px;
-                        background: #111820;
-                        border-radius: 8px;
+                        height: 42px;
+                        background: #11181f;
                         border-width: 1px;
-                        border-color: #293746;
+                        border-color: #222e38;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 10px;
+                            spacing: 8px;
+                            Text {
+                                text: root.viewport-mode == 0 ? "LMB select · scroll/zoom renderer follows selection bounds" : "3D preview";
+                                color: #758696;
+                                font-size: 9px;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button { text: "2D"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
+                            Button { text: "3D"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-path != "No world selected"; clicked => { root.viewport-mode = 1; root.open-3d(); } }
+                            Button { text: "FIT"; clicked => { root.viewport-mode = 0; } }
+                        }
+                    }
 
-                        ScrollView {
-                            VerticalLayout {
-                                padding: 16px;
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: #0c1217;
+
+                        if root.viewport-mode == 0: Rectangle {
+                            background: #0c1217;
+
+                            if root.map-available: Image {
+                                source: root.map-image;
+                                image-fit: fill;
+                                width: parent.width;
+                                height: parent.height;
+                            }
+
+                            if !root.map-available && !root.map-loading: Text {
+                                text: root.world-path == "No world selected" ? "SELECT A MINECRAFT WORLD" : "NO 2D MAP LOADED";
+                                color: #566777;
+                                font-size: 16px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            if root.map-loading: VerticalLayout {
+                                alignment: center;
                                 spacing: 10px;
+                                Spinner { width: 34px; height: 34px; indeterminate: true; }
+                                Text { text: "Loading chunks…"; color: #a6b4c0; font-size: 12px; horizontal-alignment: center; }
+                                Text { text: "The Slint workbench remains interactive while Java prepares the map."; color: #607181; font-size: 9px; horizontal-alignment: center; }
+                            }
 
-                                Text { text: "EXPORT"; color: #f0f4f8; font-size: 15px; }
-                                Text { text: "Name"; color: #8191a2; font-size: 10px; }
-                                LineEdit { text <=> root.export-name; }
-
-                                Text { text: "Output"; color: #8191a2; font-size: 10px; }
-                                Button { text: root.output-path == "" ? "Choose output folder" : root.output-path; clicked => { root.pick-output(); } }
-
-                                Text { text: "Format"; color: #8191a2; font-size: 10px; }
-                                Button {
-                                    text: root.export-format;
-                                    clicked => { root.export-format = root.export-format == "GLTF" ? "OBJ" : "GLTF"; }
-                                }
-
-                                Text { text: "Object mode"; color: #8191a2; font-size: 10px; }
-                                Button {
-                                    text: root.export-mode;
-                                    clicked => {
-                                        root.export-mode = root.export-mode == "Grouped"
-                                            ? "Individual blocks"
-                                            : root.export-mode == "Individual blocks" ? "Merged" : "Grouped";
+                            map-touch := TouchArea {
+                                enabled: root.map-available && !root.docs-visible;
+                                mouse-cursor: crosshair;
+                                pointer-event(event) => {
+                                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                                        if (root.selection-mode == 0) {
+                                            root.min-x = round(root.map-min-x + min(self.pressed-x, self.mouse-x) / self.width * (root.map-max-x - root.map-min-x));
+                                            root.max-x = round(root.map-min-x + max(self.pressed-x, self.mouse-x) / self.width * (root.map-max-x - root.map-min-x));
+                                            root.min-z = round(root.map-min-z + min(self.pressed-y, self.mouse-y) / self.height * (root.map-max-z - root.map-min-z));
+                                            root.max-z = round(root.map-min-z + max(self.pressed-y, self.mouse-y) / self.height * (root.map-max-z - root.map-min-z));
+                                        } else {
+                                            root.center-x = round(root.map-min-x + self.mouse-x / self.width * (root.map-max-x - root.map-min-x));
+                                            root.center-z = round(root.map-min-z + self.mouse-y / self.height * (root.map-max-z - root.map-min-z));
+                                        }
                                     }
                                 }
+                            }
 
-                                CheckBox { text: "Optimize / face culling"; checked <=> root.optimize; }
+                            if map-touch.pressed && root.selection-mode == 0: Rectangle {
+                                x: min(map-touch.pressed-x, map-touch.mouse-x);
+                                y: min(map-touch.pressed-y, map-touch.mouse-y);
+                                width: max(1px, max(map-touch.pressed-x, map-touch.mouse-x) - min(map-touch.pressed-x, map-touch.mouse-x));
+                                height: max(1px, max(map-touch.pressed-y, map-touch.mouse-y) - min(map-touch.pressed-y, map-touch.mouse-y));
+                                background: #3e8f6240;
+                                border-width: 1px;
+                                border-color: #7ce0a3;
+                            }
+                        }
 
-                                Text { text: "Selection bounds"; color: #8191a2; font-size: 10px; }
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    VerticalLayout { Text { text: "Min X"; color: #718096; font-size: 9px; } SpinBox { minimum: -30000000; maximum: 30000000; value <=> root.min-x; } }
-                                    VerticalLayout { Text { text: "Max X"; color: #718096; font-size: 9px; } SpinBox { minimum: -30000000; maximum: 30000000; value <=> root.max-x; } }
-                                }
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    VerticalLayout { Text { text: "Min Y"; color: #718096; font-size: 9px; } SpinBox { minimum: -2048; maximum: 4096; value <=> root.min-y; } }
-                                    VerticalLayout { Text { text: "Max Y"; color: #718096; font-size: 9px; } SpinBox { minimum: -2048; maximum: 4096; value <=> root.max-y; } }
-                                }
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    VerticalLayout { Text { text: "Min Z"; color: #718096; font-size: 9px; } SpinBox { minimum: -30000000; maximum: 30000000; value <=> root.min-z; } }
-                                    VerticalLayout { Text { text: "Max Z"; color: #718096; font-size: 9px; } SpinBox { minimum: -30000000; maximum: 30000000; value <=> root.max-z; } }
-                                }
+                        if root.viewport-mode == 1: Rectangle {
+                            background: #0c1217;
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 10px;
+                                Text { text: "3D PREVIEW"; color: #91a2b1; font-size: 18px; font-weight: 700; horizontal-alignment: center; }
+                                Text { text: "The Rust renderer migration is isolated from the Slint event loop."; color: #607181; font-size: 10px; horizontal-alignment: center; }
+                                Button { text: "REFRESH 3D PREVIEW"; clicked => { root.open-3d(); } }
+                            }
+                        }
 
-                                Button { text: root.task-active ? "WORKING…" : "EXPORT"; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.export-requested(); } }
+                        // Documentation browser overlay ----------------------
+                        if root.docs-visible: Rectangle {
+                            background: #0d1319f8;
+                            border-width: 1px;
+                            border-color: #2b3945;
+                            VerticalLayout {
+                                spacing: 0px;
+                                Rectangle {
+                                    height: 48px;
+                                    background: #121b22;
+                                    HorizontalLayout {
+                                        padding-left: 14px;
+                                        padding-right: 10px;
+                                        Text { text: "DOCUMENTATION  ·  Page " + root.doc-page + " of " + root.doc-total + "  ·  " + root.doc-title; color: #eef2f5; font-size: 12px; font-weight: 700; vertical-alignment: center; }
+                                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                                        Button { text: "GITHUB"; clicked => { root.docs-open-github(); } }
+                                        if root.doc-video-available: Button { text: "VIDEO"; clicked => { root.docs-open-video(); } }
+                                        Button { text: "CLOSE"; clicked => { root.docs-visible = false; } }
+                                    }
+                                }
+                                ScrollView {
+                                    Text {
+                                        x: 20px;
+                                        y: 18px;
+                                        width: parent.width - 40px;
+                                        text: root.doc-content;
+                                        color: #b8c4ce;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                Rectangle {
+                                    height: 52px;
+                                    background: #111920;
+                                    border-width: 1px;
+                                    border-color: #27343f;
+                                    HorizontalLayout {
+                                        padding: 8px;
+                                        spacing: 7px;
+                                        Button { text: "FIRST"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(0); } }
+                                        Button { text: "PREVIOUS"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(-1); } }
+                                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                                        Text { text: "Page " + root.doc-page + " of " + root.doc-total; color: #8fa0af; font-size: 10px; vertical-alignment: center; }
+                                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                                        Button { text: "NEXT"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(1); } }
+                                        Button { text: "LAST"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(2); } }
+                                    }
+                                }
                             }
                         }
                     }
-                }
 
-                if root.active-page == 1: ScrollView {
-                    VerticalLayout {
-                        padding: 22px;
-                        spacing: 12px;
-                        Text { text: "SETTINGS"; color: #f0f4f8; font-size: 18px; }
-                        Text { text: "Minecraft runtime registry"; color: #c9d4df; font-size: 13px; }
-                        Text {
-                            text: "The runtime cache is instance-wide. It caches the full registered Minecraft block/state/model registry and is independent from export selection bounds.";
-                            color: #8191a2;
-                            wrap: word-wrap;
-                        }
-                        Button { text: "REBUILD FULL RUNTIME REGISTRY"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.rebuild-runtime-cache(); } }
-                        Button { text: "REMOVE ALL MINESPORT CACHE"; enabled: !root.task-active; clicked => { root.remove-cache(); } }
-                        Rectangle { height: 1px; background: #293746; }
-                        Text { text: "Desktop runtime"; color: #c9d4df; font-size: 13px; }
-                        Text { text: "Rust  ·  Slint 1.17.1  ·  no Fyne event queue"; color: #6fa8dc; }
-                    }
-                }
-
-                if root.active-page == 2: VerticalLayout {
-                    padding: 22px;
-                    spacing: 12px;
-                    Text { text: "DIAGNOSTICS"; color: #f0f4f8; font-size: 18px; }
+                    // Viewport footer HUD -----------------------------------
                     Rectangle {
-                        vertical-stretch: 1;
-                        background: #080c10;
-                        border-radius: 6px;
+                        height: 34px;
+                        background: #11181e;
                         border-width: 1px;
-                        border-color: #26313d;
-                        ScrollView {
+                        border-color: #222e38;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
                             Text {
-                                x: 12px;
-                                y: 12px;
-                                width: parent.width - 24px;
-                                text: root.diagnostics;
-                                color: #9eb0c1;
-                                wrap: word-wrap;
-                                font-size: 11px;
+                                text: root.selection-mode == 0
+                                    ? "BOX  X " + root.min-x + ".." + root.max-x + "  ·  Y " + root.min-y + ".." + root.max-y + "  ·  Z " + root.min-z + ".." + root.max-z
+                                    : "BUBBLE  center " + root.center-x + "," + root.center-y + "," + root.center-z + "  ·  radius " + root.radius-x + "," + root.radius-y + "," + root.radius-z;
+                                color: #8c9cab;
+                                font-size: 9px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            if root.map-available: Text {
+                                text: map-touch.has-hover
+                                    ? "X " + round(root.map-min-x + map-touch.mouse-x / max(1px, map-touch.width) * (root.map-max-x - root.map-min-x)) + "  ·  Z " + round(root.map-min-z + map-touch.mouse-y / max(1px, map-touch.height) * (root.map-max-z - root.map-min-z))
+                                    : "X —  ·  Z —";
+                                color: #a0aebb;
+                                font-size: 9px;
+                                font-family: "monospace";
+                                vertical-alignment: center;
                             }
                         }
                     }
@@ -288,21 +665,23 @@ export component MainWindow inherits Window {
             }
         }
 
+        // Bottom task drawer ------------------------------------------------
         Rectangle {
-            height: root.task-active ? 72px : 34px;
-            background: #101820;
+            height: root.task-active ? 66px : 30px;
+            background: root.task-active ? #131e18 : #0f161b;
             border-width: 1px;
-            border-color: #26313d;
-
+            border-color: root.task-active ? #31563d : #202c35;
             VerticalLayout {
-                padding-left: 16px;
-                padding-right: 16px;
-                padding-top: 7px;
-                padding-bottom: 7px;
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 5px;
+                padding-bottom: 5px;
                 spacing: 4px;
                 HorizontalLayout {
-                    Text { text: root.task-title; color: #dfe7ef; font-size: 11px; }
-                    Text { horizontal-stretch: 1; text: root.task-detail; color: #718096; font-size: 10px; horizontal-alignment: right; overflow: elide; }
+                    spacing: 8px;
+                    if root.task-active: Spinner { width: 18px; height: 18px; progress: root.task-progress; }
+                    Text { text: root.task-title; color: #dce5df; font-size: 9px; font-weight: 700; vertical-alignment: center; }
+                    Text { horizontal-stretch: 1; text: root.task-detail; color: #7f9185; font-size: 9px; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
                 }
                 if root.task-active: ProgressIndicator { progress: root.task-progress; }
             }
