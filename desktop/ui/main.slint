@@ -4,21 +4,21 @@ component RailButton inherits Rectangle {
     in property <string> label;
     in property <bool> active;
     callback clicked();
-    height: 54px;
-    width: 58px;
-    background: active ? #1a252f : touch.has-hover ? #151d25 : transparent;
+    width: 62px;
+    height: 56px;
+    background: active ? #19252e : hit.has-hover ? #141d24 : transparent;
     border-width: active ? 2px : 0px;
-    border-color: #57a26f;
+    border-color: #59a676;
 
     Text {
         text: root.label;
-        color: root.active ? #f2f6f8 : #8999a9;
+        color: root.active ? #f2f6f8 : #8192a2;
         font-size: 9px;
         font-weight: root.active ? 700 : 500;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    touch := TouchArea {
+    hit := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
@@ -27,24 +27,44 @@ component RailButton inherits Rectangle {
 component SectionTitle inherits Text {
     in property <string> label;
     text: label;
-    color: #738394;
+    height: 21px;
+    color: #758697;
     font-size: 10px;
     font-weight: 700;
-    height: 20px;
     vertical-alignment: center;
 }
 
 component HintText inherits Text {
-    color: #738394;
+    color: #738494;
     font-size: 10px;
     wrap: word-wrap;
 }
 
 component Surface inherits Rectangle {
-    background: #12191f;
+    background: #121a20;
     border-width: 1px;
-    border-color: #26333f;
+    border-color: #26343f;
     border-radius: 6px;
+}
+
+component StatusPill inherits Rectangle {
+    in property <string> label;
+    in property <bool> good;
+    height: 28px;
+    width: 122px;
+    border-radius: 5px;
+    background: good ? #153424 : #382326;
+    border-width: 1px;
+    border-color: good ? #2f7553 : #713942;
+    Text {
+        text: root.label;
+        color: root.good ? #8be0b2 : #f0a7ae;
+        font-size: 9px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
 }
 
 export component MainWindow inherits Window {
@@ -53,13 +73,14 @@ export component MainWindow inherits Window {
     height: 820px;
     min-width: 1060px;
     min-height: 680px;
-    background: #0c1116;
+    background: #0b1015;
 
-    // Workbench state -------------------------------------------------------
+    // Workbench navigation --------------------------------------------------
     // 0 World · 1 Export · 2 Blender · 3 Tasks · 4 Settings
     in-out property <int> active-activity: 0;
-    // Settings sub-pages: 0 Geometry · 1 Pipeline · 2 Assets · 3 Advanced · 4 Diagnostics
+    // Settings: 0 Geometry · 1 Pipeline · 2 Assets · 3 Advanced · 4 Diagnostics
     in-out property <int> settings-page: 0;
+    // 0 map · 1 preview
     in-out property <int> viewport-mode: 0;
 
     // World / selection -----------------------------------------------------
@@ -81,7 +102,7 @@ export component MainWindow inherits Window {
     in-out property <int> radius-y: 32;
     in-out property <int> radius-z: 32;
 
-    // Heightmap -------------------------------------------------------------
+    // 2D map ---------------------------------------------------------------
     in-out property <image> map-image;
     in-out property <bool> map-available: false;
     in-out property <bool> map-loading: false;
@@ -91,12 +112,19 @@ export component MainWindow inherits Window {
     in-out property <int> map-max-z: 256;
     in-out property <int> map-scale: 1;
 
+    // Rust preview ----------------------------------------------------------
+    in-out property <image> preview-image;
+    in-out property <bool> preview-available: false;
+    in-out property <bool> preview-loading: false;
+    in-out property <int> preview-block-count: 0;
+
     // Export ---------------------------------------------------------------
     in-out property <string> output-path: "";
     in-out property <string> export-name: "Minesport_Export";
     in-out property <int> export-format-index: 0;
     in-out property <int> export-mode-index: 0;
     in-out property <bool> optimize: true;
+    in-out property <string> preflight-summary: "Preflight has not been run for this selection.";
 
     // Persistent settings --------------------------------------------------
     in-out property <bool> face-culling: true;
@@ -121,7 +149,7 @@ export component MainWindow inherits Window {
     in-out property <bool> task-active: false;
     in-out property <string> diagnostics: "Minesport Rust/Slint desktop initialized.";
 
-    // Documentation browser ------------------------------------------------
+    // Documentation --------------------------------------------------------
     in-out property <bool> docs-visible: false;
     in-out property <int> doc-page: 1;
     in-out property <int> doc-total: 8;
@@ -149,18 +177,16 @@ export component MainWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
-        // Top bar -----------------------------------------------------------
+        // Header ------------------------------------------------------------
         Rectangle {
             height: 52px;
             background: #10171d;
             border-width: 1px;
             border-color: #202c36;
-
             HorizontalLayout {
                 padding-left: 14px;
                 padding-right: 14px;
                 spacing: 12px;
-
                 Text {
                     text: "MINESPORT";
                     color: #f1f5f7;
@@ -169,36 +195,21 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
                 Text {
-                    text: "0.2.0  ·  KASTRICK";
+                    text: "0.2.0  ·  RUST + SLINT  ·  KASTRICK";
                     color: #718292;
                     font-size: 10px;
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Text {
-                    text: root.world-path == "No world selected" ? "NO WORLD" : root.world-name + "  ·  " + root.minecraft-version;
+                    text: root.world-path == "No world selected" ? "NO WORLD" : root.world-name + "  ·  " + root.minecraft-version + "  ·  " + root.loader-type;
                     color: #93a2b1;
                     font-size: 10px;
                     vertical-alignment: center;
                     overflow: elide;
-                    max-width: 420px;
+                    max-width: 480px;
                 }
-                Rectangle {
-                    width: 116px;
-                    height: 28px;
-                    border-radius: 5px;
-                    background: root.engine-ready ? #163425 : #3a2424;
-                    border-width: 1px;
-                    border-color: root.engine-ready ? #2e7653 : #793b3b;
-                    Text {
-                        text: root.engine-status;
-                        color: root.engine-ready ? #8de1b4 : #f5aaaa;
-                        font-size: 9px;
-                        font-weight: 700;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
+                StatusPill { label: root.engine-status; good: root.engine-ready; }
             }
         }
 
@@ -208,7 +219,7 @@ export component MainWindow inherits Window {
 
             // Activity rail -------------------------------------------------
             Rectangle {
-                width: 58px;
+                width: 62px;
                 background: #0d1318;
                 border-width: 1px;
                 border-color: #202b35;
@@ -223,13 +234,12 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Context sidebar ----------------------------------------------
+            // Sidebar -------------------------------------------------------
             Rectangle {
-                width: 326px;
+                width: 330px;
                 background: #12181e;
                 border-width: 1px;
                 border-color: #202b35;
-
                 VerticalLayout {
                     spacing: 0px;
                     Rectangle {
@@ -252,14 +262,10 @@ export component MainWindow inherits Window {
                                 vertical-alignment: center;
                             }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                            if root.active-activity == 4: Button {
-                                text: "DOCS";
-                                clicked => { root.open-docs(); }
-                            }
+                            if root.active-activity == 4: Button { text: "DOCS"; clicked => { root.open-docs(); } }
                         }
                     }
 
-                    // WORLD -------------------------------------------------
                     if root.active-activity == 0: ScrollView {
                         VerticalLayout {
                             padding: 14px;
@@ -270,34 +276,13 @@ export component MainWindow inherits Window {
                             Button { text: "OPEN MINECRAFT WORLD…"; primary: true; clicked => { root.pick-world(); } }
 
                             SectionTitle { label: "SELECTION"; }
-                            ComboBox {
-                                model: ["Box selection", "Bubble selection"];
-                                current-index <=> root.selection-mode;
-                            }
+                            ComboBox { model: ["Box selection", "Bubble selection"]; current-index <=> root.selection-mode; }
 
                             if root.selection-mode == 0: VerticalLayout {
                                 spacing: 6px;
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    Text { width: 30px; text: "X"; color: #8796a5; vertical-alignment: center; }
-                                    SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-x; }
-                                    Text { text: "→"; color: #627384; vertical-alignment: center; }
-                                    SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-x; }
-                                }
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    Text { width: 30px; text: "Y"; color: #8796a5; vertical-alignment: center; }
-                                    SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.min-y; }
-                                    Text { text: "→"; color: #627384; vertical-alignment: center; }
-                                    SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.max-y; }
-                                }
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    Text { width: 30px; text: "Z"; color: #8796a5; vertical-alignment: center; }
-                                    SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-z; }
-                                    Text { text: "→"; color: #627384; vertical-alignment: center; }
-                                    SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-z; }
-                                }
+                                HorizontalLayout { spacing: 6px; Text { width: 30px; text: "X"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-x; } Text { text: "→"; color: #627384; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-x; } }
+                                HorizontalLayout { spacing: 6px; Text { width: 30px; text: "Y"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.min-y; } Text { text: "→"; color: #627384; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.max-y; } }
+                                HorizontalLayout { spacing: 6px; Text { width: 30px; text: "Z"; color: #8796a5; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-z; } Text { text: "→"; color: #627384; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-z; } }
                             }
 
                             if root.selection-mode == 1: VerticalLayout {
@@ -321,11 +306,13 @@ export component MainWindow inherits Window {
                                     root.max-z = root.map-max-z;
                                 }
                             }
-                            HintText { text: "LMB-drag on the 2D map updates X/Z box selection. Bubble mode uses a map click as its center."; }
+                            HintText { text: "Drag on the 2D map for a box. Bubble mode uses a map click as the center. Y remains editable here."; }
+                            SectionTitle { label: "RUNTIME REGISTRY"; }
+                            Text { text: root.runtime-cache-status; color: root.runtime-cache-busy ? #d2b777 : #86a997; font-size: 10px; wrap: word-wrap; }
+                            if root.runtime-cache-busy: Button { text: "CANCEL PREPARATION"; clicked => { root.cancel-runtime-cache(); } }
                         }
                     }
 
-                    // EXPORT ------------------------------------------------
                     if root.active-activity == 1: ScrollView {
                         VerticalLayout {
                             padding: 14px;
@@ -342,8 +329,9 @@ export component MainWindow inherits Window {
                             Button { text: "CHOOSE OUTPUT FOLDER…"; clicked => { root.pick-output(); } }
 
                             SectionTitle { label: "ANALYSIS"; }
+                            Text { text: root.preflight-summary; color: #8da0af; font-size: 10px; wrap: word-wrap; }
                             Button { text: "RUN PREFLIGHT"; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.run-preflight(); } }
-                            HintText { text: "Preflight reports block count, pressure and unresolved preview assets without changing export output."; }
+                            HintText { text: "Preflight reads the selected block set and reports pressure/categories without changing export output."; }
 
                             SectionTitle { label: "EXPORT"; }
                             Button {
@@ -352,27 +340,25 @@ export component MainWindow inherits Window {
                                 enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected";
                                 clicked => { root.export-requested(); }
                             }
-                            HintText { text: "Export consumes the full instance-wide runtime registry when available; selection bounds only decide what geometry is written."; }
+                            HintText { text: "If the full instance registry is still preparing, Export joins that same worker and continues automatically when registry.data is ready."; }
                         }
                     }
 
-                    // BLENDER -----------------------------------------------
                     if root.active-activity == 2: ScrollView {
                         VerticalLayout {
                             padding: 14px;
                             spacing: 9px;
                             SectionTitle { label: "BLENDER TRANSLATOR"; }
                             CheckBox { text: "Blender integration"; checked <=> root.blender-export; }
-                            Button { text: "INSTALL / UPDATE ADD-ON"; clicked => { root.install-blender-translator(); } }
-                            Text { text: "Animation"; color: #8191a0; font-size: 10px; }
+                            Button { text: "INSTALL / UPDATE ADD-ON"; enabled: !root.task-active; clicked => { root.install-blender-translator(); } }
+                            Text { text: "Texture animation"; color: #8191a0; font-size: 10px; }
                             ComboBox { model: ["Minecraft timing", "Static first frame"]; current-index <=> root.blender-animation-index; }
-                            HintText { text: "Minecraft texture timing, LIGHT_BLOCK metadata, FLATTER logical editing, water/glass materials and per-block origins are exported through the translation metadata."; }
-                            SectionTitle { label: "LIGHT_BLOCK"; }
-                            HintText { text: "Logical light levels remain 0–15 in export metadata. The add-on derives Blender point-light energy, range and falloff from those logical values."; }
+                            HintText { text: "The Rust executable embeds the Minesport 0.2.0 add-on and installs it into detected Blender 4.3+ profiles."; }
+                            SectionTitle { label: "MINECRAFT DATA"; }
+                            HintText { text: "Texture frame schedules, timeline markers, LIGHT_BLOCK levels, FLATTER data, water/glass materials and individual-block origins are carried in export metadata."; }
                         }
                     }
 
-                    // TASKS -------------------------------------------------
                     if root.active-activity == 3: ScrollView {
                         VerticalLayout {
                             padding: 14px;
@@ -384,19 +370,18 @@ export component MainWindow inherits Window {
                             SectionTitle { label: "RUNTIME REGISTRY"; }
                             Text { text: root.runtime-cache-status; color: #8fa2b4; font-size: 10px; wrap: word-wrap; }
                             if root.runtime-cache-busy: Button { text: "CANCEL RUNTIME WORKER"; clicked => { root.cancel-runtime-cache(); } }
-                            HintText { text: "The registry worker is instance-wide and never uses the current selection bounds."; }
+                            HintText { text: "Heavy work runs outside the Slint event loop. The registry is instance-wide; selection bounds never change what the Bridge caches."; }
                         }
                     }
 
-                    // SETTINGS ----------------------------------------------
                     if root.active-activity == 4: VerticalLayout {
                         spacing: 0px;
                         Rectangle {
                             height: 42px;
                             background: #10171d;
                             HorizontalLayout {
-                                spacing: 2px;
                                 padding: 5px;
+                                spacing: 2px;
                                 Button { text: "GEO"; checkable: true; checked: root.settings-page == 0; clicked => { root.settings-page = 0; } }
                                 Button { text: "PIPE"; checkable: true; checked: root.settings-page == 1; clicked => { root.settings-page = 1; } }
                                 Button { text: "ASSET"; checkable: true; checked: root.settings-page == 2; clicked => { root.settings-page = 2; } }
@@ -411,7 +396,7 @@ export component MainWindow inherits Window {
                                 spacing: 9px;
                                 SectionTitle { label: "GEOMETRY"; }
                                 CheckBox { text: "Face culling"; checked <=> root.face-culling; }
-                                HintText { text: "Remove a face only when neighboring geometry proves it is fully hidden."; }
+                                HintText { text: "Remove faces only when neighboring geometry proves they are fully hidden."; }
                                 CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; }
                                 ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; }
                                 HintText { text: "Smaller cells rebuild locally; larger cells create fewer Blender objects and broader greedy surfaces."; }
@@ -425,7 +410,7 @@ export component MainWindow inherits Window {
                                 SectionTitle { label: "PIPELINE"; }
                                 CheckBox { text: "Blender integration"; checked <=> root.blender-export; }
                                 CheckBox { text: "Debug engine diagnostics"; checked <=> root.debug-mode; }
-                                Text { text: "Runtime model cache"; color: #c5d0d9; font-size: 11px; font-weight: 700; }
+                                Text { text: "Full runtime model registry"; color: #c5d0d9; font-size: 11px; font-weight: 700; }
                                 Text { text: root.runtime-cache-status; color: #7f91a3; font-size: 10px; wrap: word-wrap; }
                                 Button { text: "REBUILD FULL RUNTIME REGISTRY"; enabled: root.world-path != "No world selected" && !root.runtime-cache-busy; clicked => { root.rebuild-runtime-cache(); } }
                                 if root.runtime-cache-busy: Button { text: "CANCEL"; clicked => { root.cancel-runtime-cache(); } }
@@ -439,7 +424,7 @@ export component MainWindow inherits Window {
                                 Button { text: "ADD RESOURCE PACK…"; clicked => { root.add-resource-pack(); } }
                                 Text { text: root.data-pack-summary; color: #8798a8; font-size: 10px; wrap: word-wrap; }
                                 Button { text: "ADD DATA PACK…"; clicked => { root.add-data-pack(); } }
-                                HintText { text: "Asset precedence is preserved by the engine resolver chain. The Slint shell only edits the ordered paths."; }
+                                HintText { text: "The Java resolver chain keeps precedence semantics. Rust stores the selected paths and sends them with preflight/export requests."; }
                             }
 
                             if root.settings-page == 3: VerticalLayout {
@@ -447,11 +432,12 @@ export component MainWindow inherits Window {
                                 spacing: 9px;
                                 SectionTitle { label: "ADVANCED"; }
                                 Button { text: "RUN PREFLIGHT"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.run-preflight(); } }
+                                Text { text: root.preflight-summary; color: #8193a3; font-size: 10px; wrap: word-wrap; }
                                 Button { text: "RELOAD 2D MAP"; enabled: root.world-path != "No world selected" && !root.map-loading; clicked => { root.reload-map(); } }
                                 Button { text: "OPEN DOCUMENTATION"; clicked => { root.open-docs(); } }
                                 SectionTitle { label: "DIAGNOSTICS"; }
                                 Button { text: "REMOVE ALL MINESPORT CACHE"; enabled: !root.task-active && !root.runtime-cache-busy; clicked => { root.remove-cache(); } }
-                                HintText { text: "Deletes regenerable Minesport cache data only. Worlds, exports and your real mods folder are never touched."; }
+                                HintText { text: "Deletes only regenerable Minesport cache data and compiled compatibility caches. Worlds, exports and the real mods folder are never touched."; }
                             }
 
                             if root.settings-page == 4: VerticalLayout {
@@ -459,7 +445,7 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 SectionTitle { label: "DIAGNOSTICS"; }
                                 Surface {
-                                    height: 500px;
+                                    height: 510px;
                                     ScrollView {
                                         Text {
                                             x: 10px;
@@ -468,6 +454,7 @@ export component MainWindow inherits Window {
                                             text: root.diagnostics;
                                             color: #9cadbd;
                                             font-size: 9px;
+                                            font-family: "monospace";
                                             wrap: word-wrap;
                                         }
                                     }
@@ -478,14 +465,12 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Permanent workbench viewport ---------------------------------
+            // Viewport ------------------------------------------------------
             Rectangle {
                 horizontal-stretch: 1;
                 background: #0b1015;
-
                 VerticalLayout {
                     spacing: 0px;
-
                     Rectangle {
                         height: 42px;
                         background: #11181f;
@@ -496,7 +481,7 @@ export component MainWindow inherits Window {
                             padding-right: 10px;
                             spacing: 8px;
                             Text {
-                                text: root.viewport-mode == 0 ? "LMB select · scroll/zoom renderer follows selection bounds" : "3D preview";
+                                text: root.viewport-mode == 0 ? "2D world map · drag to select" : "Rust 3D preview · rendered off-thread";
                                 color: #758696;
                                 font-size: 9px;
                                 vertical-alignment: center;
@@ -504,7 +489,7 @@ export component MainWindow inherits Window {
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             Button { text: "2D"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
                             Button { text: "3D"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-path != "No world selected"; clicked => { root.viewport-mode = 1; root.open-3d(); } }
-                            Button { text: "FIT"; clicked => { root.viewport-mode = 0; } }
+                            if root.viewport-mode == 1: Button { text: "REFRESH"; enabled: !root.preview-loading; clicked => { root.open-3d(); } }
                         }
                     }
 
@@ -514,14 +499,12 @@ export component MainWindow inherits Window {
 
                         if root.viewport-mode == 0: Rectangle {
                             background: #0c1217;
-
                             if root.map-available: Image {
                                 source: root.map-image;
                                 image-fit: fill;
                                 width: parent.width;
                                 height: parent.height;
                             }
-
                             if !root.map-available && !root.map-loading: Text {
                                 text: root.world-path == "No world selected" ? "SELECT A MINECRAFT WORLD" : "NO 2D MAP LOADED";
                                 color: #566777;
@@ -530,13 +513,12 @@ export component MainWindow inherits Window {
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
-
                             if root.map-loading: VerticalLayout {
                                 alignment: center;
                                 spacing: 10px;
                                 Spinner { width: 34px; height: 34px; indeterminate: true; }
                                 Text { text: "Loading chunks…"; color: #a6b4c0; font-size: 12px; horizontal-alignment: center; }
-                                Text { text: "The Slint workbench remains interactive while Java prepares the map."; color: #607181; font-size: 9px; horizontal-alignment: center; }
+                                Text { text: "Java prepares the map while Slint stays interactive."; color: #607181; font-size: 9px; horizontal-alignment: center; }
                             }
 
                             map-touch := TouchArea {
@@ -556,7 +538,6 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-
                             if map-touch.pressed && root.selection-mode == 0: Rectangle {
                                 x: min(map-touch.pressed-x, map-touch.mouse-x);
                                 y: min(map-touch.pressed-y, map-touch.mouse-y);
@@ -570,16 +551,40 @@ export component MainWindow inherits Window {
 
                         if root.viewport-mode == 1: Rectangle {
                             background: #0c1217;
-                            VerticalLayout {
+                            if root.preview-available: Image {
+                                source: root.preview-image;
+                                image-fit: contain;
+                                width: parent.width;
+                                height: parent.height;
+                            }
+                            if root.preview-loading: VerticalLayout {
+                                alignment: center;
+                                spacing: 10px;
+                                Spinner { width: 34px; height: 34px; indeterminate: true; }
+                                Text { text: "Rendering 3D preview…"; color: #a8b5c0; font-size: 12px; horizontal-alignment: center; }
+                                Text { text: "Block parsing and rasterization run outside the Slint event loop."; color: #607181; font-size: 9px; horizontal-alignment: center; }
+                            }
+                            if !root.preview-available && !root.preview-loading: VerticalLayout {
                                 alignment: center;
                                 spacing: 10px;
                                 Text { text: "3D PREVIEW"; color: #91a2b1; font-size: 18px; font-weight: 700; horizontal-alignment: center; }
-                                Text { text: "The Rust renderer migration is isolated from the Slint event loop."; color: #607181; font-size: 10px; horizontal-alignment: center; }
-                                Button { text: "REFRESH 3D PREVIEW"; clicked => { root.open-3d(); } }
+                                Text { text: "Generate a lightweight Rust preview for the current selection."; color: #607181; font-size: 10px; horizontal-alignment: center; }
+                                Button { text: "GENERATE PREVIEW"; clicked => { root.open-3d(); } }
+                            }
+                            if root.preview-available: Rectangle {
+                                x: 12px;
+                                y: 12px;
+                                width: 170px;
+                                height: 30px;
+                                border-radius: 5px;
+                                background: #101820dd;
+                                border-width: 1px;
+                                border-color: #2a3945;
+                                Text { text: root.preview-block-count + " blocks"; color: #a7b6c3; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
                             }
                         }
 
-                        // Documentation browser overlay ----------------------
+                        // Documentation overlay ------------------------------
                         if root.docs-visible: Rectangle {
                             background: #0d1319f8;
                             border-width: 1px;
@@ -592,7 +597,7 @@ export component MainWindow inherits Window {
                                     HorizontalLayout {
                                         padding-left: 14px;
                                         padding-right: 10px;
-                                        Text { text: "DOCUMENTATION  ·  Page " + root.doc-page + " of " + root.doc-total + "  ·  " + root.doc-title; color: #eef2f5; font-size: 12px; font-weight: 700; vertical-alignment: center; }
+                                        Text { text: "DOCUMENTATION  ·  Page " + root.doc-page + " of " + root.doc-total + "  ·  " + root.doc-title; color: #eef2f5; font-size: 12px; font-weight: 700; vertical-alignment: center; overflow: elide; }
                                         Rectangle { horizontal-stretch: 1; background: transparent; }
                                         Button { text: "GITHUB"; clicked => { root.docs-open-github(); } }
                                         if root.doc-video-available: Button { text: "VIDEO"; clicked => { root.docs-open-video(); } }
@@ -631,7 +636,6 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // Viewport footer HUD -----------------------------------
                     Rectangle {
                         height: 34px;
                         background: #11181e;
@@ -650,7 +654,7 @@ export component MainWindow inherits Window {
                                 overflow: elide;
                             }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                            if root.map-available: Text {
+                            if root.viewport-mode == 0 && root.map-available: Text {
                                 text: map-touch.has-hover
                                     ? "X " + round(root.map-min-x + map-touch.mouse-x / max(1px, map-touch.width) * (root.map-max-x - root.map-min-x)) + "  ·  Z " + round(root.map-min-z + map-touch.mouse-y / max(1px, map-touch.height) * (root.map-max-z - root.map-min-z))
                                     : "X —  ·  Z —";
@@ -659,13 +663,20 @@ export component MainWindow inherits Window {
                                 font-family: "monospace";
                                 vertical-alignment: center;
                             }
+                            if root.viewport-mode == 1 && root.preview-available: Text {
+                                text: "RUST SOFTWARE PREVIEW";
+                                color: #7ba58b;
+                                font-size: 9px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Bottom task drawer ------------------------------------------------
+        // Bottom task shelf -------------------------------------------------
         Rectangle {
             height: root.task-active ? 66px : 30px;
             background: root.task-active ? #131e18 : #0f161b;
@@ -679,7 +690,7 @@ export component MainWindow inherits Window {
                 spacing: 4px;
                 HorizontalLayout {
                     spacing: 8px;
-                    if root.task-active: Spinner { width: 18px; height: 18px; progress: root.task-progress; }
+                    if root.task-active: Spinner { width: 18px; height: 18px; indeterminate: true; }
                     Text { text: root.task-title; color: #dce5df; font-size: 9px; font-weight: 700; vertical-alignment: center; }
                     Text { horizontal-stretch: 1; text: root.task-detail; color: #7f9185; font-size: 9px; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
                 }
