@@ -78,6 +78,14 @@ def register():
     _register_optional("liquid_ui")
     _register_optional("viewport_interaction")
     _register_optional("edit_mode")
+
+    # Performance is intentionally installed after the logical editing systems
+    # exist but before the overlay registers its draw handlers. It replaces only
+    # repeated bookkeeping paths (metadata/RLE decode, depsgraph polling,
+    # selection redraw/rebuild work) and leaves FLATTER's lossless data model
+    # unchanged. This makes 0.2.0 substantially friendlier to older hardware.
+    _register_optional("performance")
+
     _register_optional("flatter_overlay")
     _register_optional("flatter_020_ui")
     _register_optional("flatter_map")
@@ -98,6 +106,7 @@ def unregister():
         "flatter_map",
         "flatter_020_ui",
         "flatter_overlay",
+        "performance",
         "edit_mode",
         "viewport_interaction",
         "liquid_ui",
