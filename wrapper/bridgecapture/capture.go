@@ -19,7 +19,7 @@ import (
 
 const (
 	DefaultAddress      = "127.0.0.1:25590"
-	SnapshotSchema      = 2
+	SnapshotSchema      = 3
 	maxMessageSize      = 128 << 20
 	captureBridgePrefix = "minesport-capture-bridge-"
 	captureBridgeSuffix = ".jar"
@@ -213,7 +213,7 @@ func (s *Server) capture(connection net.Conn) {
 			entry.Lights = sanitizeLights(message.States)
 			snapshot.Blocks[blockID] = entry
 		case "texture":
-			// Legacy bridge packets may still send images. Runtime-registry schema 2
+			// Legacy bridge packets may still send images. Runtime-registry schema 3
 			// intentionally does not cache texture bytes; texture IDs on baked quads
 			// are resolved later from resource packs/mod JARs/vanilla/Piston.
 		case "error":
