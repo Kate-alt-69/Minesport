@@ -116,7 +116,7 @@ public final class BlockGeometryExtractor {
                 vertices[offset + 7] = v;
             }
 
-            Direction face = quad.lightFace();
+            Direction face = quad.cullFace();
             return new BakedQuadData(
                 vertices,
                 sprite == null ? "missing" : sprite.contents().name().toString(),
