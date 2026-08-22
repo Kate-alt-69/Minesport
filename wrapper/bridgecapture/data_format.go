@@ -23,10 +23,10 @@ const (
 // writeSnapshotData stores runtime geometry in a compact deterministic binary
 // representation. The Bridge wire protocol remains newline JSON for easy
 // compatibility debugging; this format is only the persistent hot-path cache.
+// Production callers validate SnapshotSchema before reaching this low-level
+// encoder; keeping the encoder schema-agnostic also lets tests create deliberate
+// incompatible-schema fixtures for reader validation.
 func writeSnapshotData(writer io.Writer, snapshot Snapshot) error {
-	if snapshot.Schema != SnapshotSchema {
-		return fmt.Errorf("unsupported runtime registry schema %d; expected %d", snapshot.Schema, SnapshotSchema)
-	}
 	w := bufio.NewWriterSize(writer, 256*1024)
 	if _, err := w.WriteString(registryDataMagic); err != nil {
 		return err
