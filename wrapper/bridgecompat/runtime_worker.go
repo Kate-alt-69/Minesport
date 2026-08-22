@@ -31,6 +31,7 @@ type RuntimeWorker struct {
 	result          error
 	intentionalStop bool
 	stopOnce        sync.Once
+	cacheLeaseHeld  bool
 }
 
 // StartRuntimeWorker prepares an exact-version Loom workspace, copies the
@@ -56,6 +57,17 @@ func StartRuntimeWorker(
 	if port <= 0 || port > 65535 {
 		return nil, fmt.Errorf("invalid runtime registry port %d", port)
 	}
+
+	// The runtime worker uses bridge-build plus downloaded toolchains for its
+	// entire lifetime. Diagnostics cleanup must not remove those directories
+	// underneath a running Gradle/Minecraft process.
+	generatedCacheUseMu.RLock()
+	cacheLeaseHeld := true
+	defer func() {
+		if cacheLeaseHeld {
+			generatedCacheUseMu.RUnlock()
+		}
+	}()
 
 	report(progress, 2, "Preparing worker…", "Building an isolated Minecraft runtime workspace")
 	prepared, err := prepareRuntimeWorkerSource(version, progress)
@@ -132,12 +144,15 @@ func StartRuntimeWorker(
 	}
 
 	worker := &RuntimeWorker{
-		cmd:       cmd,
-		workspace: workspace,
-		logPath:   logPath,
-		version:   version,
-		done:      make(chan struct{}),
+		cmd:            cmd,
+		workspace:      workspace,
+		logPath:        logPath,
+		version:        version,
+		done:           make(chan struct{}),
+		cacheLeaseHeld: true,
 	}
+	// Ownership of the read lock moves to worker.waitAndCleanup.
+	cacheLeaseHeld = false
 	cleanupOnError = false
 	go worker.waitAndCleanup(logFile)
 	return worker, nil
@@ -174,6 +189,10 @@ func (worker *RuntimeWorker) waitAndCleanup(logFile *os.File) {
 	worker.result = err
 	worker.mu.Unlock()
 	_ = os.RemoveAll(worker.workspace)
+	if worker.cacheLeaseHeld {
+		worker.cacheLeaseHeld = false
+		generatedCacheUseMu.RUnlock()
+	}
 	close(worker.done)
 }
 
