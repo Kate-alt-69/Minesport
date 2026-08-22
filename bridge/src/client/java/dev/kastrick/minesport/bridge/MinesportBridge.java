@@ -75,6 +75,11 @@ public class MinesportBridge implements ClientModInitializer {
                             textureIds.add(quad.textureId());
 
                 sender.send("block", new BlockEntry(blockId, vanillaMapping, loaderType, variants));
+
+                List<LightState> lightStates = extractLightStates(block);
+                if (!lightStates.isEmpty()) {
+                    sender.send(TYPE_BLOCK_LIGHT, new BlockLightEntry(blockId, lightStates));
+                }
             }
 
             System.out.println("[MinesportBridge] Dumping " + textureIds.size() + " textures...");
@@ -109,6 +114,26 @@ public class MinesportBridge implements ClientModInitializer {
         } catch (Exception e) {
             return List.of();
         }
+    }
+
+    private List<LightState> extractLightStates(Block block) {
+        var result = new ArrayList<LightState>();
+        for (var state : block.getStateDefinition().getPossibleStates()) {
+            int level;
+            try {
+                level = Math.max(0, Math.min(15, state.getLightEmission()));
+            } catch (Exception ignored) {
+                continue;
+            }
+            if (level <= 0) continue;
+
+            Map<String, String> properties = new LinkedHashMap<>();
+            state.getValues().forEach((property, value) ->
+                properties.put(property.getName(), String.valueOf(value))
+            );
+            result.add(new LightState(properties, level));
+        }
+        return result;
     }
 
     private boolean isPolymerPresent() {
