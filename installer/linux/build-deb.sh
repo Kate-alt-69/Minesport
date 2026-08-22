@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${MINESPORT_VERSION:-0.1.0}"
+VERSION="${MINESPORT_VERSION:-0.2.0}"
+BRIDGE_VERSION="0.2.0"
 ARCH_RAW="$(uname -m)"
 case "$ARCH_RAW" in
   x86_64) DEB_ARCH=amd64 ;;
@@ -12,7 +13,7 @@ esac
 
 BIN="$ROOT/wrapper/dist/minesport"
 MANIFEST="$ROOT/bridge-versions/manifest.json"
-BRIDGE="$ROOT/dist/bundled-bridge/minesport-bridge-0.1.0.jar"
+BRIDGE="$ROOT/dist/bundled-bridge/minesport-bridge-${BRIDGE_VERSION}.jar"
 OUT="$ROOT/dist/installer"
 PKGROOT="$ROOT/dist/linux-deb-root"
 
@@ -31,14 +32,12 @@ mkdir -p \
   "$PKGROOT/usr/share/applications" \
   "$PKGROOT/usr/share/icons/hicolor/scalable/apps" \
   "$OUT"
-# Some mounted/CI workspaces inherit setgid from their parent and preserve it
-# through a numeric chmod. dpkg-deb rejects DEBIAN/ when special bits remain.
 chmod g-s "$PKGROOT/DEBIAN" || true
 chmod 0755 "$PKGROOT/DEBIAN"
 
 install -m 0755 "$BIN" "$PKGROOT/usr/lib/kastrick_software/minesport/minesport"
 install -m 0644 "$MANIFEST" "$PKGROOT/usr/share/kastrick_software/minesport/bridge-data/manifest.json"
-install -m 0644 "$BRIDGE" "$PKGROOT/usr/share/kastrick_software/minesport/bridge-data/bundled/1.21.10/minesport-bridge-0.1.0.jar"
+install -m 0644 "$BRIDGE" "$PKGROOT/usr/share/kastrick_software/minesport/bridge-data/bundled/1.21.10/minesport-bridge-${BRIDGE_VERSION}.jar"
 install -m 0644 "$ROOT/installer/linux/minesport.desktop" "$PKGROOT/usr/share/applications/minesport.desktop"
 install -m 0644 "$ROOT/installer/linux/minesport.svg" "$PKGROOT/usr/share/icons/hicolor/scalable/apps/minesport.svg"
 
