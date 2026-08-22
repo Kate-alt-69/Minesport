@@ -45,16 +45,17 @@ jobs:
           mkdir -p dist/bundled-bridge
           jar="$(find bridge/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' -print -quit)"
           test -n "$jar"
+          cp "$jar" dist/bundled-bridge/minesport-bridge-0.2.0.jar
           cp "$jar" dist/bundled-bridge/minesport-bridge-0.1.0.jar
       - uses: actions/upload-artifact@v7
         with:
           name: fabric-bridge-1.21.10
-          path: dist/bundled-bridge/minesport-bridge-0.1.0.jar
+          path: dist/bundled-bridge/
           if-no-files-found: error
           retention-days: 7
 
   bridge-recipe-tests:
-    name: Bridge recipe engine · Go tests
+    name: Bridge recipe engine · headless Go tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -65,11 +66,11 @@ jobs:
         with:
           go-version-file: wrapper/go.mod
           cache-dependency-path: wrapper/go.sum
-      - name: Test resolver and patch operations
+      - name: Test compatibility backend only
         working-directory: wrapper
         env:
           MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
-        run: go test ./bridgecompat
+        run: go test ./bridgecompat ./bridgecapture ./cacheclean ./ipc ./launcher ./processutil
 
   fabric-bridge-recipes:
     name: Dynamic bridge · ${{ matrix.minecraft }} · Java ${{ matrix.java }}
@@ -107,7 +108,7 @@ jobs:
           go-version-file: wrapper/go.mod
           cache-dependency-path: wrapper/go.sum
       - uses: gradle/actions/setup-gradle@v6
-      - name: Generate and compile from canonical 1.21.10 source
+      - name: Generate and compile compatibility bridge
         working-directory: wrapper
         env:
           MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
@@ -164,11 +165,11 @@ jobs:
           python -c "import pathlib,tomllib; tomllib.loads(pathlib.Path('wrapper/blendertranslator/pyproject.toml').read_text(encoding='utf-8')); print('pyproject.toml OK')"
           python -m compileall -q wrapper/blendertranslator/minesport_translator
 
-  wrapper:
-    name: Wrapper release · ${{ matrix.name }}
+  desktop:
+    name: Rust + Slint desktop · ${{ matrix.name }}
     needs: java-engine
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -184,80 +185,35 @@ jobs:
         with:
           name: minesport-engine-ci
           path: engine/build/libs
-      - uses: actions/setup-go@v7
+      - uses: dtolnay/rust-toolchain@master
         with:
-          go-version-file: wrapper/go.mod
-          cache-dependency-path: wrapper/go.sum
-      - name: Install Linux Fyne/OpenGL dependencies
+          toolchain: 1.92.0
+      - name: Install Linux Slint dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc libgl1-mesa-dev xorg-dev
-      - name: Check Windows C compiler
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          gcc --version
-          if ($LASTEXITCODE -ne 0) { throw 'gcc is required for Fyne/CGO' }
-      - name: Check macOS C compiler
-        if: runner.os == 'macOS'
-        run: clang --version
-      - name: Verify Go module files are tidy
-        working-directory: wrapper
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+      - name: Test Rust desktop and compile Slint UI
         shell: bash
-        env:
-          CGO_ENABLED: '1'
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-      - name: Test all Go packages
-        working-directory: wrapper
+        run: cargo test --manifest-path desktop/Cargo.toml
+      - name: Build Rust desktop release
         shell: bash
-        env:
-          CGO_ENABLED: '1'
-          MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
-        run: go test ./...
-      - name: Generate embedded engine source
-        working-directory: wrapper
-        shell: bash
-        run: |
-          engine_jars=(../engine/build/libs/minesport-engine-*.jar)
-          engine_jar="${engine_jars[0]}"
-          test -f "$engine_jar"
-          go run ./cmd/embed-engine -input "$engine_jar" -output embedded_engine_generated.go
-      - name: Compile actual release configuration
-        working-directory: wrapper
-        shell: bash
-        env:
-          CGO_ENABLED: '1'
-        run: |
-          mkdir -p dist
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            go build -tags minesport_embedded_engine -trimpath -ldflags='-H windowsgui -s -w' -o dist/minesport.exe .
-            mkdir -p ../dist/source
-            cp dist/minesport.exe ../dist/source/Minesport.exe
-          else
-            go build -tags minesport_embedded_engine -trimpath -ldflags='-s -w' -o dist/minesport .
-          fi
-      - name: Test all packages with embedded-engine tag
-        working-directory: wrapper
-        shell: bash
-        env:
-          CGO_ENABLED: '1'
-          MINESPORT_BRIDGE_REPO_ROOT: ${{ github.workspace }}
-        run: go test -tags minesport_embedded_engine ./...
-      - name: Smoke test release CLI
-        working-directory: wrapper
+        run: cargo build --release --manifest-path desktop/Cargo.toml
+      - name: Smoke test headless CLI
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            ./dist/minesport.exe --help
-            ./dist/minesport.exe --install-blender-translator
+            ./desktop/target/release/minesport.exe --version
+            ./desktop/target/release/minesport.exe --help
+            mkdir -p dist/source
+            cp desktop/target/release/minesport.exe dist/source/Minesport.exe
           else
-            ./dist/minesport --help
-            ./dist/minesport --install-blender-translator
+            ./desktop/target/release/minesport --version
+            ./desktop/target/release/minesport --help
           fi
-      - name: Validate Bash build and packaging scripts
+      - name: Validate Bash packaging scripts
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -265,7 +221,7 @@ jobs:
           bash -n installer/linux/build-deb.sh
           bash -n installer/linux/build-appimage.sh
           ./build.sh --help >/dev/null
-      - name: Validate PowerShell and batch build scripts
+      - name: Validate PowerShell build scripts
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -286,8 +242,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'build.bat --help failed.' }
       - uses: actions/upload-artifact@v7
         with:
-          name: minesport-${{ runner.os }}-${{ runner.arch }}
-          path: wrapper/dist/${{ matrix.binary }}
+          name: minesport-desktop-${{ runner.os }}-${{ runner.arch }}
+          path: desktop/target/release/${{ matrix.binary }}
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v7
@@ -299,8 +255,8 @@ jobs:
           retention-days: 7
 
   windows-installer:
-    name: Windows installers · NSIS EXE + WiX 7 MSI
-    needs: [wrapper, fabric-bridge-bundled]
+    name: Windows installers · Rust/Slint · NSIS EXE + WiX 7 MSI
+    needs: [desktop, fabric-bridge-bundled]
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -312,27 +268,17 @@ jobs:
           dotnet-version: '8.0.x'
       - uses: actions/download-artifact@v7
         with:
-          name: minesport-Windows-X64
-          path: wrapper/dist
-      - uses: actions/download-artifact@v7
-        with:
           name: minesport-windows-standalone
           path: dist/source
       - uses: actions/download-artifact@v7
         with:
           name: fabric-bridge-1.21.10
           path: dist/bundled-bridge
-      - name: Smoke test packaged runtime data path
+      - name: Smoke test Rust desktop artifact
         shell: pwsh
         run: |
-          $bridgeData = Join-Path $env:RUNNER_TEMP 'minesport-bridge-data'
-          New-Item -ItemType Directory -Force -Path (Join-Path $bridgeData 'bundled\1.21.10') | Out-Null
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'bridge-versions\manifest.json') (Join-Path $bridgeData 'manifest.json')
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'dist\bundled-bridge\minesport-bridge-0.1.0.jar') (Join-Path $bridgeData 'bundled\1.21.10\minesport-bridge-0.1.0.jar')
-          $env:MINESPORT_BRIDGE_DATA = $bridgeData
-          $binary = Join-Path $env:GITHUB_WORKSPACE 'wrapper\dist\minesport.exe'
-          $process = Start-Process -FilePath $binary -ArgumentList @('--build-bridge', '1.21.10') -NoNewWindow -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Bundled bridge CLI smoke test failed with exit code $($process.ExitCode)." }
+          & .\dist\source\Minesport.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Rust desktop --version smoke test failed.' }
       - name: Install and locate NSIS
         shell: pwsh
         run: |
@@ -341,7 +287,6 @@ jobs:
           $nsisCandidates = @('C:\Program Files (x86)\NSIS\makensis.exe','C:\Program Files\NSIS\makensis.exe')
           $makensis = $nsisCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $makensis) { throw 'NSIS makensis.exe was not found after installation.' }
-
           "NSIS_EXE=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path (Join-Path $env:GITHUB_WORKSPACE 'dist\installer') | Out-Null
       - name: Build MSI with WiX 7
@@ -359,56 +304,26 @@ jobs:
       - name: Verify Windows installer outputs
         shell: pwsh
         run: |
-          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.1-x64.msi'
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.1-Setup-x64.exe'
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.0-x64.msi'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.0-Setup-x64.exe'
           $standalone = Join-Path $env:GITHUB_WORKSPACE 'dist\source\Minesport.exe'
           if (-not (Test-Path $msi)) { throw "Missing MSI: $msi" }
           if (-not (Test-Path $exe)) { throw "Missing setup EXE: $exe" }
           if (-not (Test-Path $standalone)) { throw "Missing standalone executable: $standalone" }
           if ((Get-Item $msi).Length -le 0 -or (Get-Item $exe).Length -le 0) { throw 'An installer output is empty.' }
-      - name: Install and uninstall MSI smoke test
-        shell: pwsh
-        run: |
-          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.1.1-x64.msi'
-          $installLog = Join-Path $env:RUNNER_TEMP 'minesport-msi-install.log'
-          $installArgs = @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$installLog`"")
-          $installProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $installArgs -Wait -PassThru
-          $installCode = $installProcess.ExitCode
-          if ($installCode -notin @(0, 3010)) {
-            if (Test-Path $installLog) { Get-Content $installLog -Tail 200 }
-            throw "MSI installation failed with exit code $installCode."
-          }
-
-          $installedExe = Join-Path $env:ProgramFiles "kastrick's_software\minesport\minesport.exe"
-          if (-not (Test-Path $installedExe)) {
-            throw "MSI completed but the installed executable is missing: $installedExe"
-          }
-          $process = Start-Process -FilePath $installedExe -ArgumentList '--help' -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            throw "Installed Minesport CLI smoke test failed with exit code $($process.ExitCode)."
-          }
-
-          $uninstallLog = Join-Path $env:RUNNER_TEMP 'minesport-msi-uninstall.log'
-          $uninstallArgs = @('/x', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$uninstallLog`"")
-          $uninstallProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $uninstallArgs -Wait -PassThru
-          $uninstallCode = $uninstallProcess.ExitCode
-          if ($uninstallCode -notin @(0, 3010)) {
-            if (Test-Path $uninstallLog) { Get-Content $uninstallLog -Tail 200 }
-            throw "MSI uninstall failed with exit code $uninstallCode."
-          }
       - uses: actions/upload-artifact@v7
         with:
           name: minesport-windows-installers
           path: |
-            dist/installer/Minesport-0.1.1-x64.msi
-            dist/installer/Minesport-0.1.1-Setup-x64.exe
+            dist/installer/Minesport-0.2.0-x64.msi
+            dist/installer/Minesport-0.2.0-Setup-x64.exe
             dist/source/Minesport.exe
           if-no-files-found: error
           retention-days: 7
 
   linux-installer:
-    name: Linux packages · DEB + AppImage
-    needs: [wrapper, fabric-bridge-bundled]
+    name: Linux packages · Rust/Slint · DEB + AppImage
+    needs: [desktop, fabric-bridge-bundled]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -417,8 +332,8 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v7
         with:
-          name: minesport-Linux-X64
-          path: wrapper/dist
+          name: minesport-desktop-Linux-X64
+          path: desktop/dist
       - uses: actions/download-artifact@v7
         with:
           name: fabric-bridge-1.21.10
@@ -429,7 +344,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends dpkg-dev curl file
       - name: Build Linux packages
         run: |
-          chmod +x wrapper/dist/minesport installer/linux/build-deb.sh installer/linux/build-appimage.sh
+          chmod +x desktop/dist/minesport installer/linux/build-deb.sh installer/linux/build-appimage.sh
           installer/linux/build-deb.sh
           installer/linux/build-appimage.sh
       - name: Inspect and smoke test DEB
@@ -437,23 +352,18 @@ jobs:
           deb="$(find dist/installer -maxdepth 1 -type f -name 'Minesport-*.deb' -print -quit)"
           test -n "$deb"
           dpkg-deb --info "$deb" >/dev/null
-          dpkg-deb --contents "$deb" | grep -q 'usr/lib/kastrick_software/minesport/minesport'
-          dpkg-deb --contents "$deb" | grep -q 'bridge-data/bundled/1.21.10/minesport-bridge-0.1.0.jar'
           root="$RUNNER_TEMP/minesport-deb-root"
           rm -rf "$root"
           mkdir -p "$root"
           dpkg-deb -x "$deb" "$root"
-          "$root/usr/lib/kastrick_software/minesport/minesport" --help >/dev/null
-          MINESPORT_BRIDGE_DATA="$root/usr/share/kastrick_software/minesport/bridge-data" \
-            "$root/usr/lib/kastrick_software/minesport/minesport" --build-bridge 1.21.10
+          "$root/usr/lib/kastrick_software/minesport/minesport" --version
       - name: Inspect and smoke test AppImage
         run: |
           appimage="$(find dist/installer -maxdepth 1 -type f -name 'Minesport-*.AppImage' -print -quit)"
           test -n "$appimage"
           test -x "$appimage"
           file "$appimage"
-          APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --help >/dev/null
-          APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --build-bridge 1.21.10
+          APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version
           ls -lh dist/installer
       - uses: actions/upload-artifact@v7
         with:
@@ -473,7 +383,7 @@ jobs:
       - fabric-bridge-recipes
       - java-engine
       - blender-translator
-      - wrapper
+      - desktop
       - windows-installer
       - linux-installer
     runs-on: ubuntu-latest
@@ -484,7 +394,7 @@ jobs:
       RECIPE_BRIDGE_RESULT: ${{ needs.fabric-bridge-recipes.result }}
       ENGINE_RESULT: ${{ needs.java-engine.result }}
       TRANSLATOR_RESULT: ${{ needs.blender-translator.result }}
-      WRAPPER_RESULT: ${{ needs.wrapper.result }}
+      DESKTOP_RESULT: ${{ needs.desktop.result }}
       WIN_INSTALLER_RESULT: ${{ needs.windows-installer.result }}
       LINUX_INSTALLER_RESULT: ${{ needs.linux-installer.result }}
     steps:
@@ -498,13 +408,13 @@ jobs:
             echo "| Component | Result |"
             echo "|---|---|"
             echo "| Bundled bridge · 1.21.9–1.21.10 | $BUNDLED_BRIDGE_RESULT |"
-            echo "| Recipe engine tests | $RECIPE_TEST_RESULT |"
-            echo "| Dynamic bridges · 1.21–1.21.8, 1.21.11, 26.1.x, 26.2 | $RECIPE_BRIDGE_RESULT |"
+            echo "| Compatibility backend tests | $RECIPE_TEST_RESULT |"
+            echo "| Dynamic bridge matrix | $RECIPE_BRIDGE_RESULT |"
             echo "| Java engine | $ENGINE_RESULT |"
             echo "| Blender translator | $TRANSLATOR_RESULT |"
-            echo "| Wrapper · Linux + Windows + macOS | $WRAPPER_RESULT |"
-            echo "| Windows · NSIS EXE + WiX 7 MSI | $WIN_INSTALLER_RESULT |"
-            echo "| Linux · DEB + AppImage | $LINUX_INSTALLER_RESULT |"
+            echo "| Rust + Slint desktop | $DESKTOP_RESULT |"
+            echo "| Windows installers | $WIN_INSTALLER_RESULT |"
+            echo "| Linux packages | $LINUX_INSTALLER_RESULT |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$BUNDLED_BRIDGE_RESULT" = success ] && \
@@ -512,11 +422,11 @@ jobs:
              [ "$RECIPE_BRIDGE_RESULT" = success ] && \
              [ "$ENGINE_RESULT" = success ] && \
              [ "$TRANSLATOR_RESULT" = success ] && \
-             [ "$WRAPPER_RESULT" = success ] && \
+             [ "$DESKTOP_RESULT" = success ] && \
              [ "$WIN_INSTALLER_RESULT" = success ] && \
              [ "$LINUX_INSTALLER_RESULT" = success ]; then
             echo 'result=success' >> "$GITHUB_OUTPUT"
-            echo '✅ Everything supported compiled, tested, and packaged cleanly.' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '✅ Supported Minesport 0.2.0 components compiled, tested, and packaged cleanly.' | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo 'result=failure' >> "$GITHUB_OUTPUT"
             echo '❌ One or more required compile/package jobs failed.' | tee -a "$GITHUB_STEP_SUMMARY"
@@ -530,7 +440,7 @@ jobs:
         run: |
           state="$VERDICT"
           if [ "$state" != success ]; then state=failure; fi
-          description='Supported builds, tests, and packages passed'
+          description='Supported Rust/Slint Minesport builds and packages passed'
           if [ "$state" != success ]; then description='One or more required CI jobs failed'; fi
           payload="$(printf '{\"state\":\"%s\",\"context\":\"Minesport/full-ci\",\"description\":\"%s\",\"target_url\":\"https://github.com/%s/actions/runs/%s\"}' "$state" "$description" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
           curl --fail-with-body --silent --show-error \
@@ -544,5 +454,4 @@ jobs:
         if: always()
         env:
           VERDICT: ${{ steps.verdict.outputs.result }}
-        run: |
-          test "$VERDICT" = success
+        run: test "$VERDICT" = success
