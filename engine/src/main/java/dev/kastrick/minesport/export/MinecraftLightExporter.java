@@ -10,38 +10,22 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Resolves Minecraft block-light emitters into DCC-friendly point-light descriptors.
- *
- * Minecraft's logical light level is retained as the source of truth (0..15). The
- * Blender translator and glTF exporter are free to render that discrete reach with
- * smooth falloff while still preserving the original level for editing/round trips.
+ * Resolves Minecraft block-light emitters. Minecraft's logical 0..15 light
+ * level remains the source of truth; DCC render intensity/range is derived from
+ * that value rather than replacing it.
  */
 public final class MinecraftLightExporter {
     private static final Set<String> LEVEL_15 = Set.of(
-        "minecraft:beacon",
-        "minecraft:conduit",
-        "minecraft:fire",
-        "minecraft:glowstone",
-        "minecraft:jack_o_lantern",
-        "minecraft:lava",
-        "minecraft:sea_lantern",
-        "minecraft:shroomlight",
-        "minecraft:ochre_froglight",
-        "minecraft:verdant_froglight",
+        "minecraft:beacon", "minecraft:conduit", "minecraft:fire", "minecraft:glowstone",
+        "minecraft:jack_o_lantern", "minecraft:lava", "minecraft:sea_lantern",
+        "minecraft:shroomlight", "minecraft:ochre_froglight", "minecraft:verdant_froglight",
         "minecraft:pearlescent_froglight"
     );
-
     private static final Set<String> LEVEL_14 = Set.of(
-        "minecraft:torch",
-        "minecraft:wall_torch",
-        "minecraft:end_rod"
+        "minecraft:torch", "minecraft:wall_torch", "minecraft:end_rod"
     );
-
     private static final Set<String> LEVEL_10 = Set.of(
-        "minecraft:soul_torch",
-        "minecraft:soul_wall_torch",
-        "minecraft:soul_lantern",
-        "minecraft:soul_fire"
+        "minecraft:soul_torch", "minecraft:soul_wall_torch", "minecraft:soul_lantern", "minecraft:soul_fire"
     );
 
     private MinecraftLightExporter() {}
@@ -49,6 +33,9 @@ public final class MinecraftLightExporter {
     public record LightSource(
         String name,
         String sourceBlock,
+        int blockX,
+        int blockY,
+        int blockZ,
         double x,
         double y,
         double z,
@@ -58,41 +45,75 @@ public final class MinecraftLightExporter {
         float blue,
         boolean invisibleSource
     ) {
-        public double rangeBlocks() {
-            return minecraftLevel + 0.5;
-        }
-
-        /** Conservative glTF/Blender-friendly intensity; level remains separately editable. */
-        public double intensity() {
-            return 45.0 * minecraftLevel;
-        }
+        public double rangeBlocks() { return minecraftLevel + 0.5; }
+        public double intensity() { return 45.0 * minecraftLevel; }
+        public double offsetX() { return x - blockX; }
+        public double offsetY() { return y - blockY; }
+        public double offsetZ() { return z - blockZ; }
     }
 
     public static List<LightSource> resolve(List<BlockData> blocks) {
         List<LightSource> result = new ArrayList<>();
         if (blocks == null) return result;
-
         for (BlockData block : blocks) {
             if (block == null) continue;
             int level = lightLevel(block);
             if (level <= 0) continue;
-
             float[] color = lightColor(block);
             double[] origin = lightOrigin(block);
             boolean invisible = "minecraft:light".equals(block.blockId);
             String name = safeName(block.blockId) + "_Light_" + block.x + "_" + block.y + "_" + block.z;
             result.add(new LightSource(
-                name,
-                block.blockId,
-                origin[0], origin[1], origin[2],
-                level,
-                color[0], color[1], color[2],
-                invisible
+                name, block.blockId,
+                block.x, block.y, block.z,
+                origin[0], origin[1], origin[2], level,
+                color[0], color[1], color[2], invisible
             ));
         }
         return result;
     }
 
+    /**
+     * Logical source-of-truth array consumed by the Minesport Blender add-on.
+     * x/y/z are the original Minecraft block cell coordinates. localOffset says
+     * where inside that 1x1x1 cell the emitter sits; blenderPosition is already
+     * transformed relative to the export center for direct DCC placement.
+     */
+    public static JsonArray sidecarLightBlocks(List<BlockData> blocks, float[] center) {
+        JsonArray records = new JsonArray();
+        for (LightSource source : resolve(blocks)) {
+            JsonObject record = new JsonObject();
+            record.addProperty("name", source.name());
+            record.addProperty("source", source.sourceBlock());
+            record.addProperty("x", source.blockX());
+            record.addProperty("y", source.blockY());
+            record.addProperty("z", source.blockZ());
+            record.addProperty("level", source.minecraftLevel());
+            record.addProperty("invisibleSource", source.invisibleSource());
+
+            JsonArray offset = new JsonArray();
+            offset.add(source.offsetX());
+            offset.add(source.offsetY());
+            offset.add(source.offsetZ());
+            record.add("localOffset", offset);
+
+            JsonArray position = new JsonArray();
+            position.add(source.x() - center[0]);
+            position.add(-(source.z() - center[2]));
+            position.add(source.y() - center[1]);
+            record.add("blenderPosition", position);
+
+            JsonArray color = new JsonArray();
+            color.add(source.red());
+            color.add(source.green());
+            color.add(source.blue());
+            record.add("color", color);
+            records.add(record);
+        }
+        return records;
+    }
+
+    /** Compatibility/render descriptor retained for glTF/older translator paths. */
     public static JsonArray sidecarLights(List<BlockData> blocks, float[] center) {
         JsonArray lights = new JsonArray();
         for (LightSource source : resolve(blocks)) {
@@ -106,7 +127,6 @@ public final class MinecraftLightExporter {
             descriptor.addProperty("falloff", "minecraft_linear_smooth");
             descriptor.addProperty("invisibleSource", source.invisibleSource());
 
-            // Sidecar coordinates are Blender-native: X right, Y forward, Z up.
             JsonArray position = new JsonArray();
             position.add(source.x() - center[0]);
             position.add(-(source.z() - center[2]));
@@ -127,9 +147,7 @@ public final class MinecraftLightExporter {
         String id = block.blockId;
         if (id == null || id.isBlank()) return 0;
 
-        if ("minecraft:light".equals(id)) {
-            return clampLevel(parseInt(block.prop("level"), 15));
-        }
+        if ("minecraft:light".equals(id)) return clampLevel(parseInt(block.prop("level"), 15));
         if (LEVEL_15.contains(id)) return 15;
         if (LEVEL_14.contains(id)) return 14;
         if (LEVEL_10.contains(id)) return 10;
@@ -137,19 +155,12 @@ public final class MinecraftLightExporter {
         if ("minecraft:redstone_torch".equals(id) || "minecraft:redstone_wall_torch".equals(id)) {
             return isFalse(block.prop("lit")) ? 0 : 7;
         }
-        if ("minecraft:redstone_lamp".equals(id)) {
-            return isTrue(block.prop("lit")) ? 15 : 0;
-        }
-        if ("minecraft:furnace".equals(id) || "minecraft:blast_furnace".equals(id)
-            || "minecraft:smoker".equals(id)) {
+        if ("minecraft:redstone_lamp".equals(id)) return isTrue(block.prop("lit")) ? 15 : 0;
+        if ("minecraft:furnace".equals(id) || "minecraft:blast_furnace".equals(id) || "minecraft:smoker".equals(id)) {
             return isTrue(block.prop("lit")) ? 13 : 0;
         }
-        if ("minecraft:campfire".equals(id)) {
-            return isFalse(block.prop("lit")) ? 0 : 15;
-        }
-        if ("minecraft:soul_campfire".equals(id)) {
-            return isFalse(block.prop("lit")) ? 0 : 10;
-        }
+        if ("minecraft:campfire".equals(id)) return isFalse(block.prop("lit")) ? 0 : 15;
+        if ("minecraft:soul_campfire".equals(id)) return isFalse(block.prop("lit")) ? 0 : 10;
 
         boolean candle = "minecraft:candle".equals(id) || id.endsWith("_candle");
         boolean candleCake = "minecraft:candle_cake".equals(id) || id.endsWith("_candle_cake");
@@ -170,8 +181,6 @@ public final class MinecraftLightExporter {
         if ("minecraft:crying_obsidian".equals(id)) return 10;
         if ("minecraft:magma_block".equals(id)) return 3;
 
-        // Bridge/plugin adapters can expose a luminance property without teaching
-        // the core exporter every modded glowing block forever.
         String bridged = block.prop("minesport_light_level");
         if (!bridged.isBlank()) return clampLevel(parseInt(bridged, 0));
         bridged = block.prop("luminance");
@@ -184,7 +193,6 @@ public final class MinecraftLightExporter {
         double y = block.y + 0.5;
         double z = block.z + 0.5;
         String id = block.blockId;
-
         if (id.endsWith("torch") && !id.contains("wall_torch")) {
             y = block.y + 0.72;
         } else if (id.contains("wall_torch")) {
@@ -219,31 +227,14 @@ public final class MinecraftLightExporter {
         return new float[]{1.0f, 0.92f, 0.78f};
     }
 
-    private static boolean isTrue(String value) {
-        return "true".equalsIgnoreCase(value);
-    }
-
-    private static boolean isFalse(String value) {
-        return "false".equalsIgnoreCase(value);
-    }
-
+    private static boolean isTrue(String value) { return "true".equalsIgnoreCase(value); }
+    private static boolean isFalse(String value) { return "false".equalsIgnoreCase(value); }
     private static int parseInt(String value, int fallback) {
-        try {
-            return Integer.parseInt(value);
-        } catch (Exception ignored) {
-            return fallback;
-        }
+        try { return Integer.parseInt(value); } catch (Exception ignored) { return fallback; }
     }
-
-    private static int clampLevel(int value) {
-        return Math.max(0, Math.min(15, value));
-    }
-
+    private static int clampLevel(int value) { return Math.max(0, Math.min(15, value)); }
     private static String safeName(String value) {
         if (value == null || value.isBlank()) return "Minesport";
-        return value.toLowerCase(Locale.ROOT)
-            .replace(':', '_')
-            .replace('/', '_')
-            .replace('\\', '_');
+        return value.toLowerCase(Locale.ROOT).replace(':', '_').replace('/', '_').replace('\\', '_');
     }
 }
