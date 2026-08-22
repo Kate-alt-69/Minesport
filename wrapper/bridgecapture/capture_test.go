@@ -65,7 +65,6 @@ func TestCaptureWritesReusableRuntimeModelRegistry(t *testing.T) {
 				},
 			},
 		},
-		// Texture packets from an older bridge are intentionally ignored.
 		map[string]any{
 			"type":      "texture",
 			"textureId": "example:block/lamp",
@@ -99,13 +98,19 @@ func TestCaptureWritesReusableRuntimeModelRegistry(t *testing.T) {
 	if !validSnapshot(path, "1.21.10", fingerprint) {
 		t.Fatal("runtime model registry was not written")
 	}
+	if filepath.Base(path) != "registry.data" {
+		t.Fatalf("runtime registry path = %q, want registry.data", path)
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read runtime registry: %v", err)
 	}
-	var snapshot Snapshot
-	if err := json.Unmarshal(data, &snapshot); err != nil {
+	if !strings.HasPrefix(string(data), registryDataMagic) {
+		t.Fatalf("runtime registry is missing binary magic %q", registryDataMagic)
+	}
+	snapshot, err := readSnapshotFile(path)
+	if err != nil {
 		t.Fatalf("parse runtime registry: %v", err)
 	}
 	block, ok := snapshot.Blocks["example:lamp"]
@@ -145,20 +150,24 @@ func TestSnapshotLookupRejectsWrongVersionAndSchema(t *testing.T) {
 		t.Fatal("expected matching snapshot")
 	}
 
-	data, err := os.ReadFile(path)
+	wrongSchemaPath := filepath.Join(dir, "wrong-schema.data")
+	wrongSchemaFile, err := os.Create(wrongSchemaPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := writeSnapshotData(wrongSchemaFile, Snapshot{
+		Schema:           999,
+		MinecraftVersion: "1.21.10",
+		ModsFingerprint:  fingerprint,
+		Blocks:           map[string]RuntimeBlock{},
+	}); err != nil {
+		wrongSchemaFile.Close()
 		t.Fatal(err)
 	}
-	raw["schema"] = float64(999)
-	corrupt, _ := json.Marshal(raw)
-	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
+	if err := wrongSchemaFile.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if validSnapshot(path, "1.21.10", fingerprint) {
+	if validSnapshot(wrongSchemaPath, "1.21.10", fingerprint) {
 		t.Fatal("snapshot lookup should reject unsupported schema")
 	}
 }
