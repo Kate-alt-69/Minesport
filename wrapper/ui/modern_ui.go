@@ -31,8 +31,10 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	ms.engine = ipc.NewEngine(jarPath)
 	w.SetContent(ms.buildModernUI())
 	ms.installWorkbenchEnhancements()
+	ms.installProjectControls()
 	ms.installViewportShortcuts()
 	w.SetCloseIntercept(func() {
+		cleanupProjectControls(ms)
 		cleanupWorkbenchEnhancements(ms)
 		cleanupWorkbenchRuntimeV3(ms)
 		workbenchStates.Delete(ms)
@@ -217,6 +219,14 @@ func (ms *MinesportApp) startModernExport(outputPath string) {
 		"faceCulling":      "false",
 		"minecraftVersion": normalizedMinecraftVersion(ms.mcVersion),
 		"modLoader":        normalizedLoader(ms.loaderType),
+	}
+	if project := ms.currentProjectState(); project != nil {
+		if strings.TrimSpace(project.id) != "" {
+			options["projectId"] = project.id
+		}
+		if strings.TrimSpace(project.path) != "" {
+			options["projectPath"] = project.path
+		}
 	}
 	if ms.optimizeCheck.Checked {
 		options["optimize"] = "true"
