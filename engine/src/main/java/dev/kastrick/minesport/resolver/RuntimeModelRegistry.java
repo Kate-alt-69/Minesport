@@ -24,7 +24,7 @@ import java.util.function.Consumer;
  * Minesport resolver chain (resource packs -> mod JARs -> vanilla/Piston).
  */
 public final class RuntimeModelRegistry {
-    public static final int SNAPSHOT_SCHEMA = 2;
+    public static final int SNAPSHOT_SCHEMA = 3;
 
     private record RuntimeQuad(
         float[] vertices,
