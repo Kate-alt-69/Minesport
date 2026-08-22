@@ -26,6 +26,7 @@ var diagnosticsLogPath string
 
 func main() {
 	setupDiagnostics()
+	defer shutdownDesktopBridgeCapture()
 	defer func() {
 		if r := recover(); r != nil {
 			reportCrash(r)
