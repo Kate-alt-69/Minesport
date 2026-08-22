@@ -68,7 +68,10 @@ public final class BlockGeometryExtractor {
                             continue;
                         }
                         for (BakedQuad quad : baked) {
-                            emitter.fromBakedQuad(quad).emit();
+                            // BakedQuad stores its lighting direction, not the
+                            // getQuads(direction) bucket that controls culling.
+                            // Preserve that bucket explicitly before serializing.
+                            emitter.fromBakedQuad(quad).cullFace(direction).emit();
                         }
                     }
                 }
