@@ -1,5 +1,7 @@
 package dev.kastrick.minesport.region;
 
+import dev.kastrick.minesport.export.ExportWorldContext;
+
 import java.util.*;
 
 /**
@@ -102,6 +104,11 @@ public class MultipartResolver {
      * Mutates BlockData objects in place (sets connectN/S/E/W/Up flags).
      */
     public static void resolve(List<BlockData> blocks) {
+        // Publish the complete selected world before any geometry builder is
+        // created. Liquids, waterlogged hosts, transparent blocks and FLATTER
+        // therefore see the same neighbour map even when culling is disabled.
+        ExportWorldContext.set(blocks);
+
         // Build a spatial lookup map for O(1) neighbour access
         Map<Long, BlockData> blockMap = new HashMap<>(blocks.size());
         for (BlockData b : blocks) {
