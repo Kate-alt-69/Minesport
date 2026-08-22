@@ -8,6 +8,7 @@ $BridgeVersion = '0.2.0'
 $BuildNsisInstaller = $false
 $BuildInnoInstaller = $false
 $BuildMsiInstaller = $false
+$DesktopOnly = $false
 
 function Show-Help {
     @"
@@ -21,6 +22,11 @@ Default behavior:
   and the Rust + Slint Minesport desktop executable. The archived Go/Fyne UI
   is not part of the active build.
   No installer is built unless an installer flag is supplied.
+
+Fast development:
+  --desktop-only          Reuse the already-built engine + bundled Bridge and
+                          run only Rust/Slint tests + release build. This is the
+                          fast way to iterate on desktop/UI compiler errors.
 
 Installer options (Windows):
   --build-installer       Build the default NSIS .exe installer
@@ -44,6 +50,7 @@ foreach ($arg in $args) {
     switch ($arg) {
         '-h' { Show-Help; exit 0 }
         '--help' { Show-Help; exit 0 }
+        '--desktop-only' { $DesktopOnly = $true }
         '--build-installer' { $BuildNsisInstaller = $true }
         '--build-installer-all' { $BuildNsisInstaller = $true; $BuildMsiInstaller = $true }
         '--build-installer-exe' { $BuildNsisInstaller = $true }
@@ -62,6 +69,9 @@ Write-Host " Minesport $AppVersion Build Script" -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host 'Target: Windows / amd64' -ForegroundColor DarkGray
 Write-Host 'Desktop: Rust + Slint 1.17.1' -ForegroundColor DarkGray
+if ($DesktopOnly) {
+    Write-Host 'Mode: desktop-only (reuse Bridge + engine artifacts)' -ForegroundColor DarkGray
+}
 if (-not $BuildNsisInstaller -and -not $BuildInnoInstaller -and -not $BuildMsiInstaller) {
     Write-Host 'Packaging: disabled (executable only)' -ForegroundColor DarkGray
 } else {
@@ -73,42 +83,65 @@ if (-not $BuildNsisInstaller -and -not $BuildInnoInstaller -and -not $BuildMsiIn
 }
 Write-Host ''
 
-Write-Host '[1/3] Building bundled Minecraft 1.21.10 Fabric bridge...' -ForegroundColor Yellow
-Push-Location (Join-Path $Root 'bridge')
-try {
-    & .\gradlew.bat --no-daemon --stacktrace clean build
-    if ($LASTEXITCODE -ne 0) { throw 'Bridge build failed.' }
-    $bridgeJar = Get-ChildItem -Path 'build\libs\*.jar' -File |
-        Where-Object { $_.Name -notmatch 'sources' } |
-        Select-Object -First 1
-    if (-not $bridgeJar) { throw 'Bundled bridge JAR was not produced under bridge\build\libs.' }
-    $bridgeJar = $bridgeJar.FullName
-} finally {
-    Pop-Location
-}
 $bundledDir = Join-Path $Root 'dist\bundled-bridge'
-New-Item -ItemType Directory -Force -Path $bundledDir | Out-Null
 $bundledBridge = Join-Path $bundledDir "minesport-bridge-$BridgeVersion.jar"
-Copy-Item -Force $bridgeJar $bundledBridge
-Copy-Item -Force $bridgeJar (Join-Path $bundledDir 'minesport-bridge-0.1.0.jar')
-Write-Host "Bundled bridge staged: dist\bundled-bridge\minesport-bridge-$BridgeVersion.jar" -ForegroundColor Green
-Write-Host ''
+$engineJar = $null
 
-Write-Host '[2/3] Building Java engine...' -ForegroundColor Yellow
-Push-Location (Join-Path $Root 'engine')
-try {
-    & .\gradlew.bat --no-daemon --stacktrace clean build
-    if ($LASTEXITCODE -ne 0) { throw 'Java engine build failed.' }
-    $engineJar = Get-ChildItem -Path 'build\libs\minesport-engine-*.jar' -File |
+if (-not $DesktopOnly) {
+    Write-Host '[1/3] Building bundled Minecraft 1.21.10 Fabric bridge...' -ForegroundColor Yellow
+    Push-Location (Join-Path $Root 'bridge')
+    try {
+        & .\gradlew.bat --no-daemon --stacktrace clean build
+        if ($LASTEXITCODE -ne 0) { throw 'Bridge build failed.' }
+        $bridgeJar = Get-ChildItem -Path 'build\libs\*.jar' -File |
+            Where-Object { $_.Name -notmatch 'sources' } |
+            Select-Object -First 1
+        if (-not $bridgeJar) { throw 'Bundled bridge JAR was not produced under bridge\build\libs.' }
+        $bridgeJar = $bridgeJar.FullName
+    } finally {
+        Pop-Location
+    }
+    New-Item -ItemType Directory -Force -Path $bundledDir | Out-Null
+    Copy-Item -Force $bridgeJar $bundledBridge
+    Copy-Item -Force $bridgeJar (Join-Path $bundledDir 'minesport-bridge-0.1.0.jar')
+    Write-Host "Bundled bridge staged: dist\bundled-bridge\minesport-bridge-$BridgeVersion.jar" -ForegroundColor Green
+    Write-Host ''
+
+    Write-Host '[2/3] Building Java engine...' -ForegroundColor Yellow
+    Push-Location (Join-Path $Root 'engine')
+    try {
+        & .\gradlew.bat --no-daemon --stacktrace clean build
+        if ($LASTEXITCODE -ne 0) { throw 'Java engine build failed.' }
+        $engineJar = Get-ChildItem -Path 'build\libs\minesport-engine-*.jar' -File |
+            Where-Object { $_.Name -notmatch 'sources' } |
+            Select-Object -First 1
+        if (-not $engineJar) { throw 'Java engine JAR was not produced.' }
+        $engineJar = $engineJar.FullName
+    } finally {
+        Pop-Location
+    }
+    Write-Host "Java engine built: $engineJar" -ForegroundColor Green
+    Write-Host ''
+} else {
+    Write-Host '[1/3] Reusing bundled Minecraft Bridge...' -ForegroundColor Yellow
+    if (-not (Test-Path $bundledBridge)) {
+        throw "--desktop-only requires $bundledBridge. Run a normal build once first."
+    }
+    Write-Host "Bundled bridge: $bundledBridge" -ForegroundColor Green
+    Write-Host ''
+
+    Write-Host '[2/3] Reusing Java engine...' -ForegroundColor Yellow
+    $engineJar = Get-ChildItem -Path (Join-Path $Root 'engine\build\libs\minesport-engine-*.jar') -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notmatch 'sources' } |
+        Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
-    if (-not $engineJar) { throw 'Java engine JAR was not produced.' }
+    if (-not $engineJar) {
+        throw '--desktop-only requires an existing engine/build/libs/minesport-engine-*.jar. Run a normal build once first.'
+    }
     $engineJar = $engineJar.FullName
-} finally {
-    Pop-Location
+    Write-Host "Java engine: $engineJar" -ForegroundColor Green
+    Write-Host ''
 }
-Write-Host "Java engine built: $engineJar" -ForegroundColor Green
-Write-Host ''
 
 Write-Host '[3/3] Testing and building Rust + Slint desktop...' -ForegroundColor Yellow
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
@@ -119,7 +152,9 @@ if (-not (Get-Command rustc -ErrorAction SilentlyContinue)) {
 }
 
 $previousEngineJar = $env:MINESPORT_ENGINE_JAR
+$previousBridgeJar = $env:MINESPORT_BRIDGE_JAR
 $env:MINESPORT_ENGINE_JAR = $engineJar
+$env:MINESPORT_BRIDGE_JAR = $bundledBridge
 try {
     Push-Location (Join-Path $Root 'desktop')
     try {
@@ -149,11 +184,8 @@ try {
         Pop-Location
     }
 } finally {
-    if ($null -eq $previousEngineJar) {
-        Remove-Item Env:MINESPORT_ENGINE_JAR -ErrorAction SilentlyContinue
-    } else {
-        $env:MINESPORT_ENGINE_JAR = $previousEngineJar
-    }
+    if ($null -eq $previousEngineJar) { Remove-Item Env:MINESPORT_ENGINE_JAR -ErrorAction SilentlyContinue } else { $env:MINESPORT_ENGINE_JAR = $previousEngineJar }
+    if ($null -eq $previousBridgeJar) { Remove-Item Env:MINESPORT_BRIDGE_JAR -ErrorAction SilentlyContinue } else { $env:MINESPORT_BRIDGE_JAR = $previousBridgeJar }
 }
 
 Write-Host 'Minesport built: desktop\dist\minesport.exe' -ForegroundColor Green
@@ -234,4 +266,4 @@ if ($BuildNsisInstaller) { Write-Host " dist\installer\Minesport-$AppVersion-Set
 if ($BuildInnoInstaller) { Write-Host " dist\installer\Minesport-$AppVersion-Inno-Setup-x64.exe" -ForegroundColor Green }
 if ($BuildMsiInstaller) { Write-Host " dist\installer\Minesport-$AppVersion-x64.msi" -ForegroundColor Green }
 Write-Host ''
-Write-Host 'Run .\build.ps1 --help to see packaging options.' -ForegroundColor Cyan
+Write-Host 'Run .\build.ps1 --help to see build and packaging options.' -ForegroundColor Cyan
