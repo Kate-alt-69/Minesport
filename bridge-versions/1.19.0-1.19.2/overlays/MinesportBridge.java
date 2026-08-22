@@ -2,7 +2,6 @@ package dev.kastrick.minesport.bridge;
 
 import dev.kastrick.minesport.bridge.model.BridgeProtocol.*;
 import dev.kastrick.minesport.bridge.registry.BlockGeometryExtractor;
-import dev.kastrick.minesport.bridge.registry.TextureExtractor;
 import dev.kastrick.minesport.bridge.socket.BridgeSender;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -13,15 +12,17 @@ import net.minecraft.world.level.block.Block;
 
 import java.util.*;
 
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
 import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGHT;
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
 
 public class MinesportBridge implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        System.out.println("[MinesportBridge] Initializing...");
+        System.out.println("[MinesportBridge] Initializing 1.19 runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
-            System.out.println("[MinesportBridge] Client started — starting geometry dump");
+            System.out.println("[MinesportBridge] Client resources ready — starting registry/model dump");
             Thread t = new Thread(() -> runDump(client), "MinesportBridge-Dump");
             t.setDaemon(false);
             t.start();
@@ -31,7 +32,7 @@ public class MinesportBridge implements ClientModInitializer {
     private void runDump(Minecraft client) {
         try (BridgeSender sender = new BridgeSender()) {
             String modeEnv = System.getenv("MINESPORT_BRIDGE_MODE");
-            String mode = (modeEnv != null) ? modeEnv : "modded_only";
+            String mode = (modeEnv != null) ? modeEnv : "all";
 
             String nsEnv = System.getenv("MINESPORT_BRIDGE_NS");
             Set<String> targetNs = null;
@@ -61,22 +62,20 @@ public class MinesportBridge implements ClientModInitializer {
                 getLoadedMods()
             ));
 
-            System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " blocks...");
-            Set<String> textureIds = new LinkedHashSet<>();
-
+            System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " registered block types...");
             for (Block block : allBlocks) {
                 ResourceLocation id = Registry.BLOCK.getKey(block);
+                if (id == null) continue;
                 String blockId = id.toString();
                 String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
-                String loaderType = vanillaMapping != null ? "polymer" : "fabric";
+                String loaderType = vanillaMapping != null
+                    ? "polymer"
+                    : (id.getNamespace().equals("minecraft") ? "vanilla" : "fabric");
 
+                // Runtime cache stores baked geometry and texture identifiers only.
+                // Minesport resolves image bytes from packs/mod JARs/vanilla/Piston.
                 List<BlockVariant> variants = extractSafe(client, block);
-                for (var variant : variants)
-                    for (var quad : variant.quads())
-                        if (quad.textureId() != null && !quad.textureId().equals("missing"))
-                            textureIds.add(quad.textureId());
-
-                sender.send("block", new BlockEntry(blockId, vanillaMapping, loaderType, variants));
+                sender.send(TYPE_BLOCK_ENTRY, new BlockEntry(blockId, vanillaMapping, loaderType, variants));
 
                 List<LightState> lightStates = extractLightStates(block);
                 if (!lightStates.isEmpty()) {
@@ -84,14 +83,8 @@ public class MinesportBridge implements ClientModInitializer {
                 }
             }
 
-            System.out.println("[MinesportBridge] Dumping " + textureIds.size() + " textures...");
-            for (String texId : textureIds) {
-                TextureEntry tex = TextureExtractor.extractTexture(texId, client);
-                if (tex != null) sender.send("texture", tex);
-            }
-
-            sender.sendRaw(Map.of("type", "done", "blocks", allBlocks.size(), "textures", textureIds.size()));
-            System.out.println("[MinesportBridge] Dump complete. Exiting.");
+            sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
+            System.out.println("[MinesportBridge] Registry/model dump complete. Exiting worker.");
             Thread.sleep(500);
 
         } catch (Exception e) {
@@ -153,6 +146,7 @@ public class MinesportBridge implements ClientModInitializer {
                 getPolymerState.invoke(block, block.defaultBlockState(), null);
             if (vanillaState == null) return null;
             ResourceLocation vid = Registry.BLOCK.getKey(vanillaState.getBlock());
+            if (vid == null) return null;
             StringBuilder sb = new StringBuilder(vid.toString());
             if (!vanillaState.getValues().isEmpty()) {
                 sb.append("[");
@@ -176,6 +170,7 @@ public class MinesportBridge implements ClientModInitializer {
         var mods = new ArrayList<String>();
         net.fabricmc.loader.api.FabricLoader.getInstance().getAllMods().forEach(mod ->
             mods.add(mod.getMetadata().getId() + "@" + mod.getMetadata().getVersion().getFriendlyString()));
+        Collections.sort(mods);
         return mods;
     }
 }
