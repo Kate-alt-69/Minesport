@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-static BRIDGE_SOURCE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../bridge");
+static BRIDGE_SOURCE: Dir<'_> = include_dir!("$OUT_DIR/bridge-source");
 static BRIDGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../bridge-versions");
 const MANIFEST_JSON: &str = include_str!("../../bridge-versions/manifest.json");
 const MAX_NETWORK_TEXT: u64 = 8 * 1024 * 1024;
