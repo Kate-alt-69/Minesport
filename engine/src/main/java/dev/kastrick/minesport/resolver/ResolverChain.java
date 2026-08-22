@@ -8,6 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Chains multiple asset resolvers together in priority order. */
 public class ResolverChain {
+    private static final ThreadLocal<ResolverChain> CURRENT = new ThreadLocal<>();
     private static final Set<String> VIRTUAL_PARENTS = Set.of(
         "minecraft:block/block",
         "minecraft:builtin/generated",
@@ -22,6 +23,11 @@ public class ResolverChain {
     private final Map<String, String> blockStateSources = new ConcurrentHashMap<>();
     private final Map<String, String> modelSources = new ConcurrentHashMap<>();
     private final Map<String, String> textureSources = new ConcurrentHashMap<>();
+
+    public ResolverChain() { CURRENT.set(this); }
+
+    /** Resolver stack active on this export thread; used by DCC metadata only. */
+    public static ResolverChain current() { return CURRENT.get(); }
 
     public void addResolver(AssetResolver resolver) { resolvers.add(resolver); }
 
@@ -41,9 +47,7 @@ public class ResolverChain {
         return null;
     }
 
-    public BlockModel resolveModel(String modelPath) {
-        return resolveModel(modelPath, new HashSet<>());
-    }
+    public BlockModel resolveModel(String modelPath) { return resolveModel(modelPath, new HashSet<>()); }
 
     private BlockModel resolveModel(String modelPath, Set<String> visited) {
         String normalized = normalizeModelPath(modelPath);
@@ -54,25 +58,12 @@ public class ResolverChain {
 
         String ns = normalized.contains(":") ? normalized.substring(0, normalized.indexOf(':')) : "minecraft";
         String dummyId = ns + ":__model__";
-
         for (AssetResolver r : resolvers) {
             if (!r.canResolve(dummyId)) continue;
             BlockModel model = r.resolveModel(normalized);
             if (model == null) continue;
-
-            // Resolver implementations historically returned an empty model
-            // when an asset was absent. Treat that as a miss so a higher-priority
-            // resource pack can override a child while a lower-priority vanilla
-            // or mod resolver supplies the missing model. Virtual Minecraft
-            // parents are intentionally allowed to be empty.
             if (model.isEmpty() && (model.parentId == null || model.parentId.isBlank())
-                    && !VIRTUAL_PARENTS.contains(normalized)) {
-                continue;
-            }
-
-            // Model inheritance can cross resolver boundaries. A resource-pack
-            // model may inherit vanilla/mod geometry; resolve the parent through
-            // the whole chain rather than only the current resolver.
+                    && !VIRTUAL_PARENTS.contains(normalized)) continue;
             if (model.parentId != null && !model.parentId.isEmpty()) {
                 BlockModel parent = resolveModel(model.parentId, visited);
                 if (parent != null) {
@@ -83,11 +74,8 @@ public class ResolverChain {
             modelSources.put(normalized, r.name());
             return model;
         }
-
         modelSources.put(normalized, "missing");
-        if (missingModels.add(normalized)) {
-            System.err.println("[ResolverChain] No model found for: " + normalized);
-        }
+        if (missingModels.add(normalized)) System.err.println("[ResolverChain] No model found for: " + normalized);
         return null;
     }
 
@@ -105,20 +93,12 @@ public class ResolverChain {
         }
         textureSources.put(texturePath, CLASSIC_MISSING_SOURCE);
         if (missingTextures.add(texturePath)) {
-            System.err.println(
-                "[ResolverChain] No texture found for: " + texturePath
-                + " — using classic missing texture"
-            );
+            System.err.println("[ResolverChain] No texture found for: " + texturePath + " — using classic missing texture");
         }
         return MissingTexture.image();
     }
 
-    /**
-     * Resolve .png.mcmeta from the exact resolver that wins the PNG lookup.
-     * Metadata must never fall through independently: if a resource pack
-     * supplies a static PNG without .mcmeta, that override intentionally turns
-     * a lower-priority animated texture into a static one, matching Minecraft.
-     */
+    /** Resolve .png.mcmeta from the exact resolver that wins the PNG lookup. */
     public String resolveTextureMetadata(String texturePath) {
         String normalized = texturePath;
         String ns = normalized.contains(":") ? normalized.substring(0, normalized.indexOf(':')) : "minecraft";
@@ -133,29 +113,12 @@ public class ResolverChain {
         return null;
     }
 
-    public String blockStateSource(String blockId) {
-        return blockStateSources.getOrDefault(blockId, "");
-    }
-
-    public String modelSource(String modelPath) {
-        return modelSources.getOrDefault(normalizeModelPath(modelPath), "");
-    }
-
-    public String textureSource(String texturePath) {
-        return textureSources.getOrDefault(texturePath, "");
-    }
-
-    public Map<String, String> textureSourcesSnapshot() {
-        return Collections.unmodifiableMap(new TreeMap<>(textureSources));
-    }
-
-    public Map<String, String> modelSourcesSnapshot() {
-        return Collections.unmodifiableMap(new TreeMap<>(modelSources));
-    }
-
-    public Map<String, String> blockStateSourcesSnapshot() {
-        return Collections.unmodifiableMap(new TreeMap<>(blockStateSources));
-    }
+    public String blockStateSource(String blockId) { return blockStateSources.getOrDefault(blockId, ""); }
+    public String modelSource(String modelPath) { return modelSources.getOrDefault(normalizeModelPath(modelPath), ""); }
+    public String textureSource(String texturePath) { return textureSources.getOrDefault(texturePath, ""); }
+    public Map<String, String> textureSourcesSnapshot() { return Collections.unmodifiableMap(new TreeMap<>(textureSources)); }
+    public Map<String, String> modelSourcesSnapshot() { return Collections.unmodifiableMap(new TreeMap<>(modelSources)); }
+    public Map<String, String> blockStateSourcesSnapshot() { return Collections.unmodifiableMap(new TreeMap<>(blockStateSources)); }
 
     private static String normalizeModelPath(String path) {
         if (path == null || path.isBlank()) return "minecraft:";
