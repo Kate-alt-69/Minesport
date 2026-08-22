@@ -15,8 +15,6 @@ import java.util.*;
 
 public class BlockGeometryExtractor {
 
-    private static final RandomSource RAND = RandomSource.create(42L);
-
     private static final Direction[] DIRECTIONS = {
         null,
         Direction.DOWN, Direction.UP,
@@ -27,33 +25,41 @@ public class BlockGeometryExtractor {
     public static List<BlockVariant> extractBlock(Block block, Minecraft client) {
         var variants = new ArrayList<BlockVariant>();
         var shaper = client.getModelManager().getBlockModelShaper();
-        var seenModels = new java.util.IdentityHashMap<BlockStateModel, Boolean>();
 
+        // Every state remains addressable in the runtime registry. Multiple
+        // states are allowed to share identical baked geometry, but we must not
+        // erase their property keys merely because Minecraft reused one model
+        // object internally.
         for (BlockState state : block.getStateDefinition().getPossibleStates()) {
             BlockStateModel model = shaper.getBlockModel(state);
             if (model == null) continue;
-            if (seenModels.containsKey(model)) continue;
-            seenModels.put(model, true);
 
             Map<String, String> props = new LinkedHashMap<>();
             state.getValues().forEach((prop, val) ->
                 props.put(prop.getName(), val.toString()));
 
-            List<BakedQuadData> quads = extractQuads(model, state);
-            if (!quads.isEmpty()) {
-                variants.add(new BlockVariant(props, quads));
-            }
+            List<BakedQuadData> quads = extractQuads(model, stableSeed(block, state));
+            variants.add(new BlockVariant(props, quads));
         }
 
         return variants;
     }
 
-    private static List<BakedQuadData> extractQuads(BlockStateModel model, BlockState state) {
+    private static long stableSeed(Block block, BlockState state) {
+        long seed = 1469598103934665603L;
+        seed ^= System.identityHashCode(block);
+        seed *= 1099511628211L;
+        seed ^= state.toString().hashCode();
+        seed *= 1099511628211L;
+        return seed;
+    }
+
+    private static List<BakedQuadData> extractQuads(BlockStateModel model, long seed) {
         var quads = new ArrayList<BakedQuadData>();
         List<BlockModelPart> parts;
 
         try {
-            parts = model.collectParts(RandomSource.create(RAND.nextLong()));
+            parts = model.collectParts(RandomSource.create(seed));
         } catch (Exception e) {
             return quads;
         }
@@ -81,8 +87,11 @@ public class BlockGeometryExtractor {
     private static BakedQuadData convertQuad(BakedQuad quad, Direction dir) {
         try {
             int[] vertexData = quad.vertices();
-            // Each vertex: x, y, z, color, u, v, normal, misc (8 ints)
+            if (vertexData == null || vertexData.length < 24 || vertexData.length % 4 != 0) {
+                return null;
+            }
             int stride = vertexData.length / 4;
+            if (stride < 7) return null;
             float[] vertices = new float[4 * 8];
 
             for (int v = 0; v < 4; v++) {
@@ -94,9 +103,9 @@ public class BlockGeometryExtractor {
                 float wv = Float.intBitsToFloat(vertexData[base + 5]);
 
                 int normalInt = vertexData[base + 6];
-                float nx = ((normalInt & 0xFF) - 128) / 127f;
-                float ny = (((normalInt >> 8) & 0xFF) - 128) / 127f;
-                float nz = (((normalInt >> 16) & 0xFF) - 128) / 127f;
+                float nx = ((byte)(normalInt & 0xFF)) / 127f;
+                float ny = ((byte)((normalInt >> 8) & 0xFF)) / 127f;
+                float nz = ((byte)((normalInt >> 16) & 0xFF)) / 127f;
 
                 int vi = v * 8;
                 vertices[vi]   = x;  vertices[vi+1] = y;  vertices[vi+2] = z;
@@ -110,7 +119,6 @@ public class BlockGeometryExtractor {
                 : "missing";
 
             int faceIdx = dir != null ? dir.ordinal() : -1;
-
             return new BakedQuadData(
                 vertices, textureId, faceIdx,
                 quad.shade(), quad.tintIndex()
