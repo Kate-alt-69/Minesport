@@ -42,15 +42,15 @@ class MinesportProperties(bpy.types.PropertyGroup):
         description="How much of the virtual FLATTER voxel grid is drawn in the 3D viewport",
         items=(
             ("OFF", "Off", "Do not draw logical voxel wireframes"),
-            ("SELECTED", "Selected only", "Draw only the currently inspected logical block"),
-            ("FULL", "Full cell", "Draw the complete logical voxel grid for the active FLATTER cell"),
+            ("SELECTED", "Selected only", "Draw only the focused/selected logical block"),
+            ("FULL", "Full cell", "Diagnostic view of the complete logical voxel grid"),
         ),
-        default="FULL",
+        default="SELECTED",
     )
     flatter_overlay_opacity: FloatProperty(
         name="Overlay opacity",
         description="Opacity of the logical voxel wireframe overlay",
-        default=0.58,
+        default=0.32,
         min=0.05,
         max=1.0,
         subtype="FACTOR",
@@ -97,7 +97,7 @@ class MINESPORT_PT_properties(bpy.types.Panel):
             box.label(text=f"{props.flatter_block_count:,} logical Minecraft blocks")
             box.label(text=f"3D dimensions: {props.flatter_width} × {props.flatter_height} × {props.flatter_depth}")
             if props.flatter_selected:
-                box.label(text="Selected: " + props.flatter_selected)
+                box.label(text="Focused: " + props.flatter_selected)
             box.label(text="Render geometry is greedy; logical voxels remain addressable.", icon="INFO")
 
             controls = layout.box()
@@ -108,6 +108,11 @@ class MINESPORT_PT_properties(bpy.types.Panel):
                 controls.prop(props, "flatter_overlay_opacity")
                 controls.prop(props, "flatter_overlay_xray")
             controls.prop(props, "flatter_materialization_limit")
+            if props.flatter_overlay_mode == "FULL":
+                controls.label(
+                    text="Full cell is a diagnostic grid; selected blocks use a stronger outline.",
+                    icon="INFO",
+                )
 
         box = layout.box()
         box.label(text="Animation")
