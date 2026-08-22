@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -118,5 +119,79 @@ func TestSnapshotLookupRejectsWrongVersionAndSchema(t *testing.T) {
 	}
 	if _, ok := snapshotPathAt(dir, "1.21.10"); ok {
 		t.Fatal("snapshot lookup should reject unsupported schema")
+	}
+}
+
+func TestStageBridgeDoesNotChangeModsFingerprintAndCleansUp(t *testing.T) {
+	CleanupStaged()
+	defer CleanupStaged()
+
+	root := t.TempDir()
+	mods := filepath.Join(root, "mods")
+	if err := os.MkdirAll(mods, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mods, "example-mod.jar"), []byte("example mod"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bridge := filepath.Join(root, "minesport-bridge.jar")
+	if err := os.WriteFile(bridge, []byte("bridge"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := ModsFingerprint(mods)
+	if err != nil {
+		t.Fatalf("fingerprint before stage: %v", err)
+	}
+	staged, err := StageBridge(bridge, mods, "1.21.10")
+	if err != nil {
+		t.Fatalf("stage bridge: %v", err)
+	}
+	if _, err := os.Stat(staged); err != nil {
+		t.Fatalf("staged bridge missing: %v", err)
+	}
+	after, err := ModsFingerprint(mods)
+	if err != nil {
+		t.Fatalf("fingerprint after stage: %v", err)
+	}
+	if before != after {
+		t.Fatalf("temporary Minesport bridge changed mod fingerprint: %s != %s", before, after)
+	}
+
+	CleanupStaged()
+	if _, err := os.Stat(staged); !os.IsNotExist(err) {
+		t.Fatalf("staged bridge should be removed, stat err=%v", err)
+	}
+}
+
+func TestModsFingerprintChangesWhenModSetChanges(t *testing.T) {
+	mods := t.TempDir()
+	path := filepath.Join(mods, "lamp.jar")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, err := ModsFingerprint(mods)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("version-two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := ModsFingerprint(mods)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("mod fingerprint should change after a mod JAR changes")
+	}
+}
+
+func TestStageBridgeRejectsMissingModsPath(t *testing.T) {
+	bridge := filepath.Join(t.TempDir(), "bridge.jar")
+	if err := os.WriteFile(bridge, []byte("bridge"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StageBridge(bridge, "", "1.21.10"); err == nil {
+		t.Fatal("empty mods path should be rejected")
 	}
 }
