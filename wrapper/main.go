@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kastrick/minesport/appdirs"
 	"github.com/kastrick/minesport/blendertranslator"
 	"github.com/kastrick/minesport/bridgecompat"
 	"github.com/kastrick/minesport/launcher"
@@ -208,13 +209,10 @@ func buildDetectedFabricBridges() error {
 }
 
 func setupDiagnostics() {
-	base, err := os.UserCacheDir()
-	if err != nil || base == "" {
-		base = os.TempDir()
-	}
-	diagnosticsDir = filepath.Join(base, "kastrick_software", "minesport", "diagnostics")
+	diagnosticsDir = appdirs.DiagnosticsRoot()
 	if err := os.MkdirAll(diagnosticsDir, 0o755); err != nil {
-		diagnosticsDir = os.TempDir()
+		diagnosticsDir = filepath.Join(os.TempDir(), appdirs.VendorDir, appdirs.AppDir, "diagnostics")
+		_ = os.MkdirAll(diagnosticsDir, 0o755)
 	}
 
 	diagnosticsLogPath = filepath.Join(diagnosticsDir, "minesport.log")
