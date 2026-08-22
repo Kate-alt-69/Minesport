@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kastrick/minesport/appdirs"
 	"github.com/kastrick/minesport/processutil"
 )
 
@@ -409,16 +410,9 @@ func runtimeWorkerFabricModID(jarPath string) string {
 }
 
 func preserveRuntimeWorkerDiagnostics(workspace, version string) string {
-	base, err := os.UserCacheDir()
-	if err != nil || strings.TrimSpace(base) == "" {
-		base = os.TempDir()
-	}
 	stamp := time.Now().UTC().Format("20060102T150405.000Z")
 	destination := filepath.Join(
-		base,
-		"kastrick_software",
-		"minesport",
-		"diagnostics",
+		appdirs.DiagnosticsRoot(),
 		"runtime-workers",
 		safeVersion(version)+"-"+stamp,
 	)
