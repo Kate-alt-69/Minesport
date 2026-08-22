@@ -29,10 +29,13 @@ dependencies {
 
 test {
     useJUnitPlatform()
-    // Unit tests must never inherit the user's real Minesport GUI setting from
+    // Unit tests must never inherit the user's real Minesport GUI settings from
     // %APPDATA%/~/.config. Dedicated FLATTER tests explicitly enable it when
     // exercising exporter integration.
     systemProperty 'minesport.flatter', 'false'
+    // Cell size is user-configurable too. Pin the balanced default so a local
+    // 8/32/64 setting cannot make exporter regression tests machine-dependent.
+    systemProperty 'minesport.flatterCellSize', '16'
 }
 
 jar {
