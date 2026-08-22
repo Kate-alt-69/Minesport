@@ -315,6 +315,9 @@ func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg strin
 		}
 		exportedPath = filepath.Join(ms.outputPath, name+ext)
 	}
+	if err := ms.stampCurrentProjectMetadata(exportedPath); err != nil {
+		ms.appendLog("[WARN] Could not stamp Minesport project identity: " + err.Error())
+	}
 
 	ms.showModernExportComplete(exportedPath, resp)
 }
