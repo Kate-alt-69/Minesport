@@ -2,11 +2,13 @@
 
 mod ipc;
 mod runtime;
+mod settings;
 
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ipc::{Engine as JavaEngine, EngineEvent, Response};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
+use settings::DesktopSettings;
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
 use std::{
     fs,
@@ -48,52 +50,102 @@ const DOC_PAGES: &[DocPage] = &[
 ];
 
 fn main() -> Result<()> {
-    if handle_cli() {
+    if handle_cli()? {
         return Ok(());
     }
 
     let ui = MainWindow::new().context("create Minesport Slint window")?;
     ui.set_doc_total(DOC_PAGES.len() as i32);
 
-    let state: SharedState = Arc::new(Mutex::new(AppState::default()));
-    let engine_path = runtime::materialize_engine()?;
-    let (engine, events) = JavaEngine::start(&engine_path)?;
+    let saved = settings::load();
+    apply_saved_settings(&ui, &saved);
+    let state: SharedState = Arc::new(Mutex::new(AppState {
+        resource_packs: saved.resource_packs.clone(),
+        data_packs: saved.data_packs.clone(),
+    }));
+    refresh_asset_summaries(&ui, &state);
 
+    let (engine, events) = JavaEngine::start()?;
     pump_engine_events(ui.as_weak(), events);
     wire_file_pickers(&ui, engine.clone());
     wire_export(&ui, engine.clone(), state.clone());
     wire_preflight(&ui, engine.clone(), state.clone());
     wire_viewer(&ui, engine.clone(), state.clone());
     wire_cache_actions(&ui);
-    wire_asset_pickers(&ui, state);
+    wire_asset_pickers(&ui, state.clone());
     wire_docs(&ui);
     wire_blender(&ui);
 
-    append_diagnostic(&ui, &format!("Embedded engine: {}", engine_path.display()));
+    append_diagnostic(&ui, "Backend boundary: Minesport.exe --engine-worker → embedded Java engine");
     append_diagnostic(&ui, "Desktop: Rust + Slint · Fyne UI archived under /archive/go-fyne-ui");
     if let Err(error) = engine.ping() {
         ui.set_engine_status("ENGINE ERROR".into());
-        append_diagnostic(&ui, &format!("Could not ping Java engine: {error:#}"));
+        append_diagnostic(&ui, &format!("Could not ping Minesport backend: {error:#}"));
     }
 
     ui.run().context("run Minesport Slint event loop")?;
+    if let Err(error) = settings::save(&collect_settings(&ui, &state)) {
+        eprintln!("Could not save Minesport desktop settings: {error:#}");
+    }
     engine.shutdown();
     Ok(())
 }
 
-fn handle_cli() -> bool {
+fn handle_cli() -> Result<bool> {
     let mut args = std::env::args().skip(1);
-    let Some(arg) = args.next() else { return false; };
+    let Some(arg) = args.next() else { return Ok(false); };
     match arg.as_str() {
+        "--engine-worker" => {
+            let jar = runtime::materialize_engine()?;
+            ipc::run_engine_worker(&jar)?;
+            Ok(true)
+        }
         "-h" | "--help" => {
             println!("Minesport {VERSION}\nRust + Slint desktop by Kastrick\n\nUsage:\n  minesport                 Open the desktop app\n  minesport --version       Print version\n  minesport --help          Show this help");
-            true
+            Ok(true)
         }
         "-V" | "--version" => {
             println!("Minesport {VERSION}");
-            true
+            Ok(true)
         }
-        _ => false,
+        _ => Ok(false),
+    }
+}
+
+fn apply_saved_settings(ui: &MainWindow, saved: &DesktopSettings) {
+    ui.set_output_path(saved.output_path.clone().into());
+    ui.set_export_name(saved.export_name.clone().into());
+    ui.set_export_format_index(saved.export_format_index);
+    ui.set_export_mode_index(saved.export_mode_index);
+    ui.set_optimize(saved.optimize);
+    ui.set_face_culling(saved.face_culling);
+    ui.set_flatter_enabled(saved.flatter_enabled);
+    ui.set_flatter_cell_index(saved.flatter_cell_index.clamp(0, 3));
+    ui.set_hidden_culling(saved.hidden_culling);
+    ui.set_blender_export(saved.blender_export);
+    ui.set_select_by_model(saved.select_by_model);
+    ui.set_debug_mode(saved.debug_mode);
+    ui.set_blender_animation_index(saved.blender_animation_index.clamp(0, 1));
+}
+
+fn collect_settings(ui: &MainWindow, state: &SharedState) -> DesktopSettings {
+    let guard = state.lock().expect("settings state");
+    DesktopSettings {
+        output_path: ui.get_output_path().to_string(),
+        export_name: ui.get_export_name().to_string(),
+        export_format_index: ui.get_export_format_index(),
+        export_mode_index: ui.get_export_mode_index(),
+        optimize: ui.get_optimize(),
+        face_culling: ui.get_face_culling(),
+        flatter_enabled: ui.get_flatter_enabled(),
+        flatter_cell_index: ui.get_flatter_cell_index(),
+        hidden_culling: ui.get_hidden_culling(),
+        blender_export: ui.get_blender_export(),
+        select_by_model: ui.get_select_by_model(),
+        debug_mode: ui.get_debug_mode(),
+        blender_animation_index: ui.get_blender_animation_index(),
+        resource_packs: guard.resource_packs.clone(),
+        data_packs: guard.data_packs.clone(),
     }
 }
 
@@ -347,7 +399,6 @@ fn wire_cache_actions(ui: &MainWindow) {
             ui.set_task_title("RUNTIME CACHE".into());
             ui.set_task_detail("Rust runtime-registry backend migration is the next active module.".into());
             append_diagnostic(&ui, "Runtime registry requested from Slint Workbench.");
-            // Do not pretend a cache was generated. The UI makes the migration state explicit.
             ui.set_runtime_cache_busy(false);
             ui.set_task_active(false);
             ui.set_runtime_cache_status("BACKEND MIGRATION REQUIRED · no fake cache generated".into());
@@ -408,6 +459,22 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
     });
 }
 
+fn refresh_asset_summaries(ui: &MainWindow, state: &SharedState) {
+    let guard = state.lock().expect("asset state");
+    let resource = if guard.resource_packs.is_empty() {
+        "No resource-pack overrides".to_string()
+    } else {
+        format!("{} resource-pack override(s)", guard.resource_packs.len())
+    };
+    let data = if guard.data_packs.is_empty() {
+        "No data-pack overrides".to_string()
+    } else {
+        format!("{} data-pack override(s)", guard.data_packs.len())
+    };
+    ui.set_resource_pack_summary(resource.into());
+    ui.set_data_pack_summary(data.into());
+}
+
 fn wire_docs(ui: &MainWindow) {
     let weak = ui.as_weak();
     ui.on_open_docs(move || {
@@ -463,8 +530,8 @@ fn pump_engine_events(weak: slint::Weak<MainWindow>, events: Receiver<EngineEven
         let mut pending_logs: Vec<String> = Vec::with_capacity(64);
         loop {
             match events.recv_timeout(Duration::from_millis(100)) {
-                Ok(EngineEvent::Started { pid, java }) => pending_logs.push(format!("Started Java engine (PID {pid}) with {java}")),
-                Ok(EngineEvent::Stderr(line)) => pending_logs.push(format!("[java] {line}")),
+                Ok(EngineEvent::Started { pid, process }) => pending_logs.push(format!("Started Minesport backend (PID {pid}) with {process}")),
+                Ok(EngineEvent::Stderr(line)) => pending_logs.push(format!("[backend] {line}")),
                 Ok(EngineEvent::ReadEnded(message)) => {
                     flush_logs(&weak, &mut pending_logs);
                     let _ = weak.upgrade_in_event_loop(move |ui| {
@@ -531,12 +598,13 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response) {
     }
 
     let _ = weak.clone().upgrade_in_event_loop(move |ui| match response.kind.as_str() {
+        "workerInfo" => append_diagnostic(&ui, &format!("[backend] {}", response.message)),
         "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
         "pong" => {
             ui.set_engine_ready(true);
             ui.set_engine_status("ENGINE READY".into());
             ui.set_task_title("READY".into());
-            ui.set_task_detail("Java engine IPC online".into());
+            ui.set_task_detail("Isolated Minesport backend + Java engine IPC online".into());
             append_diagnostic(&ui, "IPC <- pong");
         }
         "progress" => {
