@@ -179,8 +179,8 @@ func (ms *MinesportApp) buildInspector() fyne.CanvasObject {
 	ms.minYRange = NewAxisRange("Y", -64, 320, func() { ms.updateMetaHUD(ms.selectionSizeText()) })
 	ms.minZRange = NewAxisRange("Z", -256, 256, func() { ms.updateMetaHUD(ms.selectionSizeText()) })
 	ms.minXEntry, ms.maxXEntry = ms.minXRange.Front, ms.minXRange.Back
-	ms.minYEntry, ms.maxYEntry = ms.minYRange.Front, ms.maxYRange.Back
-	ms.minZEntry, ms.maxZEntry = ms.minZRange.Front, ms.maxZRange.Back
+	ms.minYEntry, ms.maxYEntry = ms.minYRange.Front, ms.minYRange.Back
+	ms.minZEntry, ms.maxZEntry = ms.minZRange.Front, ms.minZRange.Back
 	ms.boxCoordGroup = container.NewVBox(ms.minXRange.Container, ms.minYRange.Container, ms.minZRange.Container)
 
 	ms.centerX = NewStepperEntry("0")
@@ -380,9 +380,6 @@ func (ms *MinesportApp) onSelectWorld() {
 			ms.autoDetectBtn.Enable()
 			ms.viewToggle3D.Enable()
 			ms.requireBridgeCompatibility(nil)
-			// Runtime capture is instance-wide and selection-independent. Start it
-			// immediately after the instance context is known so normal Export can
-			// usually consume a ready full registry instead of waiting later.
 			ms.precacheRuntimeModelsForSelectedWorld()
 			go ms.generateHeightmap(worldPath)
 		} else {
@@ -719,7 +716,7 @@ func (ms *MinesportApp) generateHeightmap(worldFolder string) {
 				if ms.worldPath != worldFolder {
 					return
 				}
-				ms.applyHeightmapImage(worldFolder, rgba, cached.MinX, cached.MinZ, cached.MaxX, cached.MaxZ, cached.Scale)
+				_ = ms.applyHeightmapImage(worldFolder, rgba, cached.MinX, cached.MinZ, cached.MaxX, cached.MaxZ, cached.Scale)
 				ms.statusLabel.SetText("Heightmap ready · cached")
 				ms.stateIcon.SetResource(theme.ConfirmIcon())
 				ms.setMapPreparing(false, "")
@@ -771,7 +768,7 @@ func (ms *MinesportApp) generateHeightmap(worldFolder string) {
 		if ms.worldPath != worldFolder {
 			return
 		}
-		ms.applyHeightmapImage(worldFolder, rgba, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ, resp.Scale)
+		_ = ms.applyHeightmapImage(worldFolder, rgba, resp.MinX, resp.MinZ, resp.MaxX, resp.MaxZ, resp.Scale)
 		ms.setMapPreparing(false, "")
 		ms.statusLabel.SetText("Heightmap ready")
 		ms.stateIcon.SetResource(theme.ConfirmIcon())
@@ -928,6 +925,7 @@ func (ms *MinesportApp) detectWorldMeta(path string) string {
 				}
 				return fmt.Sprintf("MC %s · %s%s", i.Version, i.Loader, poly)
 			}
+		}
 	}
 	return "Minecraft world"
 }
