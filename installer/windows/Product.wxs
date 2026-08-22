@@ -5,7 +5,7 @@
   <Package
       Name="Minesport"
       Language="1033"
-      Version="0.1.1"
+      Version="0.2.0"
       Manufacturer="Kastrick"
       UpgradeCode="28E176EA-1E29-4EA0-B22A-BB77A9865AA8"
       InstallerVersion="500"
@@ -24,44 +24,25 @@
                 Source="$(var.SourceDir)\dist\source\Minesport.exe"
                 Name="minesport.exe"
                 KeyPath="yes">
-              <Shortcut
-                  Id="StartMenuShortcut"
-                  Directory="ProgramMenuFolder"
-                  Name="Minesport"
-                  WorkingDirectory="INSTALLFOLDER"
-                  Advertise="yes" />
-              <Shortcut
-                  Id="DesktopShortcut"
-                  Directory="DesktopFolder"
-                  Name="Minesport"
-                  WorkingDirectory="INSTALLFOLDER"
-                  Advertise="yes" />
+              <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="Minesport" WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
+              <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="Minesport" WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
             </File>
           </Component>
 
           <Directory Id="TOOLS" Name="tools">
             <Component Id="BlenderInstallerHelper" Guid="F4D2A087-3E68-4B31-A7D0-2F60F23D9C6B">
-              <File
-                  Id="BlenderInstallScript"
-                  Source="$(var.SourceDir)\installer\windows\install-blender.ps1"
-                  KeyPath="yes" />
+              <File Id="BlenderInstallScript" Source="$(var.SourceDir)\installer\windows\install-blender.ps1" KeyPath="yes" />
             </Component>
           </Directory>
 
           <Directory Id="BridgeDataDir" Name="bridge-data">
             <Component Id="BridgeManifest" Guid="*">
-              <File
-                  Id="BridgeManifestFile"
-                  Source="$(var.SourceDir)\bridge-versions\manifest.json"
-                  KeyPath="yes" />
+              <File Id="BridgeManifestFile" Source="$(var.SourceDir)\bridge-versions\manifest.json" KeyPath="yes" />
             </Component>
             <Directory Id="BundledBridgeRoot" Name="bundled">
               <Directory Id="BundledBridge12110" Name="1.21.10">
                 <Component Id="BundledBridge" Guid="*">
-                  <File
-                      Id="BundledBridgeJar"
-                      Source="$(var.SourceDir)\dist\bundled-bridge\minesport-bridge-0.1.0.jar"
-                      KeyPath="yes" />
+                  <File Id="BundledBridgeJar" Source="$(var.SourceDir)\dist\bundled-bridge\minesport-bridge-0.2.0.jar" KeyPath="yes" />
                 </Component>
               </Directory>
             </Directory>
@@ -80,26 +61,18 @@
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
 
-    <Feature Id="CoreFeature" Title="Minesport" Level="1" AllowAbsent="no">
+    <Feature Id="CoreFeature" Title="Minesport 0.2.0" Level="1" AllowAbsent="no">
       <ComponentRef Id="MainExecutable" />
       <ComponentRef Id="BridgeManifest" />
       <ComponentRef Id="BundledBridge" />
       <ComponentRef Id="CompiledBridgeCache" />
     </Feature>
 
-    <Feature
-        Id="BlenderFeature"
-        Title="Install Blender 5.2 LTS"
-        Description="Downloads Blender from the official Blender Foundation mirror and verifies its SHA-256 checksum."
-        Level="2">
+    <Feature Id="BlenderFeature" Title="Install Blender 5.2 LTS" Description="Downloads Blender from the official Blender Foundation mirror and verifies its SHA-256 checksum." Level="2">
       <ComponentRef Id="BlenderInstallerHelper" />
     </Feature>
 
-    <Feature
-        Id="TranslatorFeature"
-        Title="Minesport Blender translator"
-        Description="Installs the one-shot Minesport translator into detected Blender 4.3+ profiles."
-        Level="2">
+    <Feature Id="TranslatorFeature" Title="Minesport 0.2.0 Blender translator" Description="Installs the Minesport 0.2.0 translator into detected Blender 4.3+ profiles." Level="2">
       <ComponentRef Id="MainExecutable" />
     </Feature>
 
@@ -124,14 +97,8 @@
         Return="ignore" />
 
     <InstallExecuteSequence>
-      <Custom
-          Action="InstallBlender"
-          After="InstallFiles"
-          Condition="NOT Installed AND (&amp;BlenderFeature=3)" />
-      <Custom
-          Action="InstallTranslator"
-          After="InstallBlender"
-          Condition="NOT Installed AND (&amp;TranslatorFeature=3)" />
+      <Custom Action="InstallBlender" After="InstallFiles" Condition="NOT Installed AND (&amp;BlenderFeature=3)" />
+      <Custom Action="InstallTranslator" After="InstallBlender" Condition="NOT Installed AND (&amp;TranslatorFeature=3)" />
     </InstallExecuteSequence>
   </Package>
 </Wix>
