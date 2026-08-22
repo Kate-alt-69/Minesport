@@ -93,6 +93,7 @@ public class BlockGeometryExtractor {
             int stride = vertexData.length / 4;
             if (stride < 7) return null;
             float[] vertices = new float[4 * 8];
+            TextureAtlasSprite sprite = quad.sprite();
 
             for (int v = 0; v < 4; v++) {
                 int base = v * stride;
@@ -101,6 +102,14 @@ public class BlockGeometryExtractor {
                 float z  = Float.intBitsToFloat(vertexData[base + 2]);
                 float u  = Float.intBitsToFloat(vertexData[base + 4]);
                 float wv = Float.intBitsToFloat(vertexData[base + 5]);
+
+                // BakedQuad UVs address Minecraft's stitched block atlas. The
+                // runtime registry stores the sprite's standalone PNG path, so
+                // convert those atlas coordinates back to sprite-local UVs.
+                if (sprite != null) {
+                    u = SpriteUv.local(u, sprite.getU0(), sprite.getU1());
+                    wv = SpriteUv.local(wv, sprite.getV0(), sprite.getV1());
+                }
 
                 int normalInt = vertexData[base + 6];
                 float nx = ((byte)(normalInt & 0xFF)) / 127f;
@@ -113,7 +122,6 @@ public class BlockGeometryExtractor {
                 vertices[vi+6] = u;  vertices[vi+7] = wv;
             }
 
-            TextureAtlasSprite sprite = quad.sprite();
             String textureId = sprite != null
                 ? sprite.contents().name().toString()
                 : "missing";
