@@ -50,6 +50,34 @@ def _active_flatter(context=None):
     return obj
 
 
+def _target_area(context):
+    area = getattr(context, "area", None)
+    if area is not None and area.type == "VIEW_3D":
+        return area
+    window = getattr(context, "window", None)
+    screen = getattr(window, "screen", None) if window is not None else None
+    if screen is None:
+        return None
+    return next((item for item in screen.areas if item.type == "VIEW_3D"), None)
+
+
+def _area_from_session(window):
+    screen = getattr(window, "screen", None)
+    if screen is None or not _SESSION:
+        return None
+    pointer = _SESSION.get("area")
+    return next(
+        (area for area in screen.areas if area.as_pointer() == pointer),
+        None,
+    )
+
+
+def _window_region(area):
+    if area is None:
+        return None
+    return next((region for region in area.regions if region.type == "WINDOW"), None)
+
+
 def _rect(x, y, w, h, color, outline=None, outline_width=1.0):
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     verts = ((x, y), (x + w, y), (x + w, y + h), (x, y + h))
@@ -71,11 +99,7 @@ def _line(x1, y1, x2, y2, color, width=1.0):
     gpu.state.line_width_set(width)
     shader.bind()
     shader.uniform_float("color", color)
-    batch_for_shader(
-        shader,
-        "LINES",
-        {"pos": ((x1, y1), (x2, y2))},
-    ).draw(shader)
+    batch_for_shader(shader, "LINES", {"pos": ((x1, y1), (x2, y2))}).draw(shader)
     gpu.state.line_width_set(1.0)
     gpu.state.blend_set("NONE")
 
@@ -109,12 +133,7 @@ def _payload_bounds(parent):
         xs = [xyz[0] for xyz in grid]
         ys = [xyz[1] for xyz in grid]
         zs = [xyz[2] for xyz in grid]
-        return (
-            min(xs), max(xs),
-            min(ys), max(ys),
-            min(zs), max(zs),
-            payload,
-        )
+        return min(xs), max(xs), min(ys), max(ys), min(zs), max(zs), payload
     return (
         origin[0], origin[0] + sx - 1,
         origin[1], origin[1] + sy - 1,
@@ -158,7 +177,6 @@ def _layout(region, parent):
     min_x, max_x, min_y, max_y, min_z, max_z, payload = bounds
     panel_x = float(_SESSION["x"])
     panel_y = float(_SESSION["y"])
-
     map_x = panel_x + _MARGIN
     map_y = panel_y + _FOOTER_H + _MARGIN
     map_w = _PANEL_W - _MARGIN * 2
@@ -171,6 +189,7 @@ def _layout(region, parent):
     draw_h = cell * rows
     grid_x = map_x + (map_w - draw_w) * 0.5
     grid_y = map_y + (map_h - draw_h) * 0.5
+    toolbar_y = panel_y + _PANEL_H - _HEADER_H - _TOOLBAR_H
 
     return {
         "bounds": bounds,
@@ -181,42 +200,12 @@ def _layout(region, parent):
         "draw_w": draw_w,
         "draw_h": draw_h,
         "map_rect": (map_x, map_y, map_w, map_h),
-        "header_rect": (
-            panel_x,
-            panel_y + _PANEL_H - _HEADER_H,
-            _PANEL_W,
-            _HEADER_H,
-        ),
-        "toolbar_rect": (
-            panel_x,
-            panel_y + _PANEL_H - _HEADER_H - _TOOLBAR_H,
-            _PANEL_W,
-            _TOOLBAR_H,
-        ),
-        "live_rect": (
-            panel_x + 10,
-            panel_y + _PANEL_H - _HEADER_H - _TOOLBAR_H + 5,
-            108,
-            22,
-        ),
-        "yminus_rect": (
-            panel_x + 142,
-            panel_y + _PANEL_H - _HEADER_H - _TOOLBAR_H + 5,
-            24,
-            22,
-        ),
-        "yplus_rect": (
-            panel_x + 228,
-            panel_y + _PANEL_H - _HEADER_H - _TOOLBAR_H + 5,
-            24,
-            22,
-        ),
-        "clear_rect": (
-            panel_x + _PANEL_W - 82,
-            panel_y + _PANEL_H - _HEADER_H - _TOOLBAR_H + 5,
-            70,
-            22,
-        ),
+        "header_rect": (panel_x, panel_y + _PANEL_H - _HEADER_H, _PANEL_W, _HEADER_H),
+        "toolbar_rect": (panel_x, toolbar_y, _PANEL_W, _TOOLBAR_H),
+        "live_rect": (panel_x + 10, toolbar_y + 5, 108, 22),
+        "yminus_rect": (panel_x + 142, toolbar_y + 5, 24, 22),
+        "yplus_rect": (panel_x + 228, toolbar_y + 5, 24, 22),
+        "clear_rect": (panel_x + _PANEL_W - 82, toolbar_y + 5, 70, 22),
         "panel_rect": (panel_x, panel_y, _PANEL_W, _PANEL_H),
     }
 
@@ -230,9 +219,7 @@ def _cell_from_mouse(layout, mx, my):
     gx = layout["grid_x"]
     gy = layout["grid_y"]
     cell = layout["cell"]
-    if cell <= 0:
-        return None
-    if not _inside(mx, my, (gx, gy, layout["draw_w"], layout["draw_h"])):
+    if cell <= 0 or not _inside(mx, my, (gx, gy, layout["draw_w"], layout["draw_h"])):
         return None
     min_x, max_x, _min_y, _max_y, min_z, max_z, _payload = layout["bounds"]
     col = int((mx - gx) // cell)
@@ -264,39 +251,22 @@ def _selection_for_box(parent, first, second):
     y = int(_SESSION["slice_y"])
     return {
         xyz for xyz in grid
-        if xyz[1] == y
-        and min_x <= xyz[0] <= max_x
-        and min_z <= xyz[2] <= max_z
+        if xyz[1] == y and min_x <= xyz[0] <= max_x and min_z <= xyz[2] <= max_z
     }
 
 
 def _focus(parent, xyz):
     if xyz is None:
         return
-    parent[flatter._SELECTED_KEY] = json.dumps(
-        list(map(int, xyz)),
-        separators=(",", ":"),
-    )
+    parent[flatter._SELECTED_KEY] = json.dumps(list(map(int, xyz)), separators=(",", ":"))
     payload = flatter._load_payload(parent)
     grid = flatter._decode_grid(payload) if payload else {}
     palette_index = grid.get(tuple(xyz))
-    entry = (
-        flatter._palette(payload, palette_index)
-        if palette_index is not None
-        else None
-    )
-    block_id = (
-        str(entry.get("id") or "minecraft:unknown")
-        if isinstance(entry, dict)
-        else "minecraft:unknown"
-    )
-    parent["minesport_logical_selection_label"] = (
-        f"Minecraft block: {block_id} @ {xyz[0]}, {xyz[1]}, {xyz[2]}"
-    )
+    entry = flatter._palette(payload, palette_index) if palette_index is not None else None
+    block_id = str(entry.get("id") or "minecraft:unknown") if isinstance(entry, dict) else "minecraft:unknown"
+    parent["minesport_logical_selection_label"] = f"Minecraft block: {block_id} @ {xyz[0]}, {xyz[1]}, {xyz[2]}"
     if hasattr(parent, "minesport"):
-        parent.minesport.flatter_selected = (
-            f"{block_id} @ {xyz[0]}, {xyz[1]}, {xyz[2]}"
-        )
+        parent.minesport.flatter_selected = f"{block_id} @ {xyz[0]}, {xyz[1]}, {xyz[2]}"
 
 
 def _materialization_limit(parent):
@@ -339,8 +309,7 @@ def _apply_drag(parent, force=False):
     live = bool(_SESSION.get("live"))
     if live and len(desired) > _materialization_limit(parent):
         _SESSION["message"] = (
-            f"Live geometry paused: {len(desired):,} selected "
-            f"> {_materialization_limit(parent):,} safety limit"
+            f"Live geometry paused: {len(desired):,} selected > {_materialization_limit(parent):,} safety limit"
         )
         liquid_merge._set_merge_state(parent, True, apply=True)
     elif live:
@@ -388,6 +357,8 @@ def _draw_map():
         return
     if area.as_pointer() != _SESSION.get("area"):
         return
+    if region.type != "WINDOW" or region.as_pointer() != _SESSION.get("region"):
+        return
 
     parent = _session_parent()
     if parent is None:
@@ -398,37 +369,12 @@ def _draw_map():
 
     px, py, _, _ = layout["panel_rect"]
     _rect(px, py, _PANEL_W, _PANEL_H, _BG, _BORDER, 1.0)
-    _rect(
-        px,
-        py + _PANEL_H - _HEADER_H,
-        _PANEL_W,
-        _HEADER_H,
-        _HEADER,
-    )
-    _rect(
-        px,
-        py + _PANEL_H - _HEADER_H - _TOOLBAR_H,
-        _PANEL_W,
-        _TOOLBAR_H,
-        _TOOLBAR,
-    )
-    _line(
-        px,
-        py + _PANEL_H - 3,
-        px + _PANEL_W,
-        py + _PANEL_H - 3,
-        _ACCENT,
-        3.0,
-    )
+    _rect(px, py + _PANEL_H - _HEADER_H, _PANEL_W, _HEADER_H, _HEADER)
+    _rect(px, py + _PANEL_H - _HEADER_H - _TOOLBAR_H, _PANEL_W, _TOOLBAR_H, _TOOLBAR)
+    _line(px, py + _PANEL_H - 3, px + _PANEL_W, py + _PANEL_H - 3, _ACCENT, 3.0)
 
     _text(px + 14, py + _PANEL_H - 25, "MINESPORT · FLATTER 2D", 13)
-    _text(
-        px + _PANEL_W - 22,
-        py + _PANEL_H - 25,
-        "×",
-        15,
-        _MUTED,
-    )
+    _text(px + _PANEL_W - 22, py + _PANEL_H - 25, "×", 15, _MUTED)
 
     live = bool(_SESSION.get("live"))
     _rect(
@@ -448,13 +394,7 @@ def _draw_map():
     _rect(*layout["yplus_rect"], (0.08, 0.10, 0.09, 0.96), _BORDER, 1.0)
     _text(layout["yminus_rect"][0] + 8, layout["yminus_rect"][1] + 5, "−", 12, _TEXT)
     _text(layout["yplus_rect"][0] + 8, layout["yplus_rect"][1] + 5, "+", 12, _TEXT)
-    _text(
-        px + 178,
-        py + _PANEL_H - _HEADER_H - 21,
-        f"Y {_SESSION['slice_y']}",
-        11,
-        _TEXT,
-    )
+    _text(px + 178, py + _PANEL_H - _HEADER_H - 21, f"Y {_SESSION['slice_y']}", 11, _TEXT)
     _rect(*layout["clear_rect"], (0.08, 0.10, 0.09, 0.96), _BORDER, 1.0)
     _text(layout["clear_rect"][0] + 16, layout["clear_rect"][1] + 6, "CLEAR", 9, _MUTED)
 
@@ -486,22 +426,17 @@ def _draw_map():
         min_dz, max_dz = sorted((first[2], current[2]))
         a = _cell_rect(layout, (min_dx, y, min_dz))
         b = _cell_rect(layout, (max_dx, y, max_dz))
-        x = a[0]
-        yy = a[1]
-        w = (b[0] + b[2]) - a[0]
-        h = (b[1] + b[3]) - a[1]
-        _rect(x, yy, w, h, _PREVIEW, _ACCENT, 1.5)
+        _rect(
+            a[0], a[1], (b[0] + b[2]) - a[0], (b[1] + b[3]) - a[1],
+            _PREVIEW, _ACCENT, 1.5,
+        )
 
     focus = _focused_xyz(parent)
     if focus is not None and focus[1] == y:
-        r = _cell_rect(layout, focus)
-        _rect(*r, (0, 0, 0, 0), _ACCENT, 2.4)
+        _rect(*_cell_rect(layout, focus), (0, 0, 0, 0), _ACCENT, 2.4)
 
     count = len(selected)
-    state = (
-        f"{count:,} selected · "
-        f"{'real proxy geometry' if not merged and count else 'greedy FLATTER'}"
-    )
+    state = f"{count:,} selected · {'real proxy geometry' if not merged and count else 'greedy FLATTER'}"
     _text(px + 14, py + 24, state, 11, _TEXT)
     _text(
         px + 14,
@@ -526,8 +461,7 @@ class MINESPORT_OT_flatter_map(bpy.types.Operator):
     bl_idname = "minesport.flatter_map"
     bl_label = "Open 2D FLATTER Selector"
     bl_description = (
-        "Open a floating top-down FLATTER selector; drag cells while watching "
-        "the main 3D viewport update through Liquid Merge"
+        "Open a floating top-down FLATTER selector; drag cells while watching the main 3D viewport update through Liquid Merge"
     )
 
     def invoke(self, context, event):
@@ -536,8 +470,11 @@ class MINESPORT_OT_flatter_map(bpy.types.Operator):
         if parent is None:
             self.report({"ERROR"}, "Select a FLATTER object first")
             return {"CANCELLED"}
-        if context.area is None or context.area.type != "VIEW_3D":
-            self.report({"ERROR"}, "Open the FLATTER selector from a 3D View")
+
+        area = _target_area(context)
+        window_region = _window_region(area)
+        if area is None or window_region is None:
+            self.report({"ERROR"}, "A 3D View is required for the floating selector")
             return {"CANCELLED"}
 
         bounds = _payload_bounds(parent)
@@ -547,11 +484,12 @@ class MINESPORT_OT_flatter_map(bpy.types.Operator):
 
         focus = _focused_xyz(parent)
         default_y = focus[1] if focus is not None else bounds[3]
-        x = max(18, context.region.width - _PANEL_W - 22)
-        y = max(52, context.region.height - _PANEL_H - 72)
+        x = max(18, window_region.width - _PANEL_W - 22)
+        y = max(52, window_region.height - _PANEL_H - 72)
         _SESSION = {
             "parent": parent.name,
-            "area": context.area.as_pointer(),
+            "area": area.as_pointer(),
+            "region": window_region.as_pointer(),
             "window": context.window.as_pointer(),
             "x": x,
             "y": y,
@@ -568,12 +506,7 @@ class MINESPORT_OT_flatter_map(bpy.types.Operator):
             "message": "Drag cells · Shift add · Ctrl remove · wheel changes Y",
         }
         if _DRAW_HANDLE is None:
-            _DRAW_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
-                _draw_map,
-                (),
-                "WINDOW",
-                "POST_PIXEL",
-            )
+            _DRAW_HANDLE = bpy.types.SpaceView3D.draw_handler_add(_draw_map, (), "WINDOW", "POST_PIXEL")
         context.window_manager.modal_handler_add(self)
         _tag_redraw()
         return {"RUNNING_MODAL"}
@@ -594,22 +527,25 @@ class MINESPORT_OT_flatter_map(bpy.types.Operator):
             self._finish(context)
             return {"FINISHED"}
 
-        layout = _layout(context.region, parent)
+        area = _area_from_session(context.window)
+        window_region = _window_region(area)
+        if area is None or window_region is None:
+            self._finish(context)
+            return {"CANCELLED"}
+
+        layout = _layout(window_region, parent)
         if layout is None:
             self._finish(context)
             return {"CANCELLED"}
 
-        mx = float(event.mouse_region_x)
-        my = float(event.mouse_region_y)
+        mx = float(event.mouse_x - window_region.x)
+        my = float(event.mouse_y - window_region.y)
         inside_panel = _inside(mx, my, layout["panel_rect"])
 
         if event.type in {"WHEELUPMOUSE", "WHEELDOWNMOUSE"} and inside_panel:
             min_y, max_y = layout["bounds"][2], layout["bounds"][3]
             step = 1 if event.type == "WHEELUPMOUSE" else -1
-            _SESSION["slice_y"] = max(
-                min_y,
-                min(max_y, int(_SESSION["slice_y"]) + step),
-            )
+            _SESSION["slice_y"] = max(min_y, min(max_y, int(_SESSION["slice_y"]) + step))
             _SESSION["message"] = f"Y slice {_SESSION['slice_y']}"
             _tag_redraw()
             return {"RUNNING_MODAL"}
@@ -634,34 +570,24 @@ class MINESPORT_OT_flatter_map(bpy.types.Operator):
             if _inside(mx, my, close_rect):
                 self._finish(context)
                 return {"FINISHED"}
-
             if _inside(mx, my, layout["live_rect"]):
                 _toggle_live(parent)
                 _tag_redraw()
                 return {"RUNNING_MODAL"}
-
             if _inside(mx, my, layout["clear_rect"]):
                 _clear(parent)
                 _tag_redraw()
                 return {"RUNNING_MODAL"}
-
             if _inside(mx, my, layout["yminus_rect"]) or _inside(mx, my, layout["yplus_rect"]):
                 min_y, max_y = layout["bounds"][2], layout["bounds"][3]
                 step = 1 if _inside(mx, my, layout["yplus_rect"]) else -1
-                _SESSION["slice_y"] = max(
-                    min_y,
-                    min(max_y, int(_SESSION["slice_y"]) + step),
-                )
+                _SESSION["slice_y"] = max(min_y, min(max_y, int(_SESSION["slice_y"]) + step))
                 _SESSION["message"] = f"Y slice {_SESSION['slice_y']}"
                 _tag_redraw()
                 return {"RUNNING_MODAL"}
-
             if _inside(mx, my, layout["header_rect"]):
                 _SESSION["drag_panel"] = True
-                _SESSION["panel_offset"] = (
-                    mx - float(_SESSION["x"]),
-                    my - float(_SESSION["y"]),
-                )
+                _SESSION["panel_offset"] = (mx - float(_SESSION["x"]), my - float(_SESSION["y"]))
                 return {"RUNNING_MODAL"}
 
             cell = _cell_from_mouse(layout, mx, my)
@@ -669,11 +595,7 @@ class MINESPORT_OT_flatter_map(bpy.types.Operator):
                 _SESSION["drag_start"] = cell
                 _SESSION["drag_current"] = cell
                 _SESSION["drag_base"] = set(liquid_merge._selection(parent))
-                _SESSION["drag_mode"] = (
-                    "REMOVE" if event.ctrl
-                    else "ADD" if event.shift
-                    else "REPLACE"
-                )
+                _SESSION["drag_mode"] = "REMOVE" if event.ctrl else "ADD" if event.shift else "REPLACE"
                 _focus(parent, cell)
                 _apply_drag(parent, force=True)
                 _tag_redraw()
@@ -682,14 +604,8 @@ class MINESPORT_OT_flatter_map(bpy.types.Operator):
         if event.type == "MOUSEMOVE":
             if _SESSION.get("drag_panel"):
                 ox, oy = _SESSION.get("panel_offset", (0, 0))
-                _SESSION["x"] = max(
-                    0,
-                    min(context.region.width - _PANEL_W, mx - ox),
-                )
-                _SESSION["y"] = max(
-                    0,
-                    min(context.region.height - _PANEL_H, my - oy),
-                )
+                _SESSION["x"] = max(0, min(max(0, window_region.width - _PANEL_W), mx - ox))
+                _SESSION["y"] = max(0, min(max(0, window_region.height - _PANEL_H), my - oy))
                 _tag_redraw()
                 return {"RUNNING_MODAL"}
 
@@ -746,18 +662,9 @@ class MINESPORT_PT_flatter_map(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator(
-            MINESPORT_OT_flatter_map.bl_idname,
-            icon="UV",
-        )
-        layout.label(
-            text="Drag a top-down slice while the 3D scene stays visible.",
-            icon="INFO",
-        )
-        layout.label(
-            text="Wheel = Y slice · L = live geometry · C = clear",
-            icon="MOUSE_LMB",
-        )
+        layout.operator(MINESPORT_OT_flatter_map.bl_idname, icon="UV")
+        layout.label(text="Drag a top-down slice while the 3D scene stays visible.", icon="INFO")
+        layout.label(text="Wheel = Y slice · L = live geometry · C = clear", icon="MOUSE_LMB")
 
 
 class MINESPORT_PT_flatter_map_properties(bpy.types.Panel):
