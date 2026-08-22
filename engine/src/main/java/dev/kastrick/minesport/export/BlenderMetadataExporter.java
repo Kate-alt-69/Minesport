@@ -3,30 +3,37 @@ package dev.kastrick.minesport.export;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import dev.kastrick.minesport.region.BlockData;
 
 import java.io.*;
 import java.util.List;
 
-/**
- * Writes DCC-neutral Minesport translation metadata next to an export.
- *
- * The sidecar deliberately stores capabilities, lights and animation descriptors.
- * When FLATTER is active, its lossless logical block grid is preserved from the
- * geometry export and merged into this same sidecar.
- */
+/** Writes DCC-neutral Minesport translation metadata next to an export. */
 public final class BlenderMetadataExporter {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     private BlenderMetadataExporter() {}
 
+    /** Compatibility overload for older tools that do not provide a geometry builder. */
     public static File write(
         File exportFile,
         List<BlockData> blocks,
         ObjExporter.ExportMode mode,
         String format,
         String animationMode
+    ) throws IOException {
+        return write(exportFile, blocks, mode, format, animationMode, null);
+    }
+
+    public static File write(
+        File exportFile,
+        List<BlockData> blocks,
+        ObjExporter.ExportMode mode,
+        String format,
+        String animationMode,
+        GeometryBuilder geometry
     ) throws IOException {
         String baseName = exportFile.getName().replaceFirst("(?i)\\.(gltf|obj)$", "");
         File sidecar = new File(exportFile.getParentFile(), baseName + ".minesport.json");
@@ -39,54 +46,68 @@ public final class BlenderMetadataExporter {
         root.addProperty("objectMode", mode.name());
         root.addProperty("linearUnit", "metre");
         root.addProperty("metresPerBlock", 1.0);
-        root.addProperty("animationMode", animationMode == null ? "animate_export" : animationMode);
+        String resolvedAnimationMode = animationMode == null ? "animate_export" : animationMode;
+        root.addProperty("animationMode", resolvedAnimationMode);
 
         int solidBlocks = 0;
-        for (BlockData block : blocks) {
-            if (!block.isAir()) solidBlocks++;
-        }
+        for (BlockData block : blocks) if (!block.isAir()) solidBlocks++;
         root.addProperty("blockCount", solidBlocks);
 
-        // Geometry exporters write FLATTER first. Preserve that lossless logical
-        // grid when Blender animation metadata is layered on afterward.
         FlatterMetadataExporter.copyExistingFlatter(sidecar, root);
 
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
+        JsonArray logicalLightBlocks = MinecraftLightExporter.sidecarLightBlocks(blocks, center);
         JsonArray lights = MinecraftLightExporter.sidecarLights(blocks, center);
+        // LIGHT_BLOCK is deliberately uppercase and explicit: it is the logical
+        // Minecraft source-of-truth array. `lights` remains a derived DCC render
+        // descriptor for compatibility with older add-on builds and other tools.
+        root.add("LIGHT_BLOCK", logicalLightBlocks);
         root.add("lights", lights);
 
         JsonObject lightModel = new JsonObject();
+        lightModel.addProperty("source", "LIGHT_BLOCK");
         lightModel.addProperty("logicalLevels", 15);
         lightModel.addProperty("decay", "one_level_per_block");
         lightModel.addProperty("renderFalloff", "smooth");
         lightModel.addProperty("defaultHelpersVisible", false);
         root.add("lightModel", lightModel);
 
-        JsonObject capabilities = new JsonObject();
-        capabilities.addProperty("dynamicDescriptors", true);
-        capabilities.addProperty("bridgeDescriptorSchema", 1);
-        capabilities.addProperty("stateAnimations", !"animate_static".equals(animationMode));
-        capabilities.addProperty("continuousTextureAnimations", true);
-        capabilities.addProperty("flatter", root.has("flatterObjects"));
-        capabilities.addProperty("flatterMaterialization", root.has("flatterObjects"));
-        capabilities.addProperty("minecraftLights", !lights.isEmpty());
-        capabilities.addProperty("minecraftLightLevels", true);
-        capabilities.addProperty("flatterLightPlacement", root.has("flatterObjects"));
-        root.add("capabilities", capabilities);
-
         JsonArray animations = new JsonArray();
-        if (!"animate_static".equals(animationMode)) {
+        if (!"animate_static".equals(resolvedAnimationMode)) {
             for (BlockData block : blocks) {
-                if (!isVanillaChest(block)) continue;
-                animations.add(chestLidDescriptor(block, center));
+                if (isVanillaChest(block)) animations.add(chestLidDescriptor(block, center));
+            }
+            if (geometry != null) {
+                JsonArray textureAnimations = TextureAnimationExporter.describe(blocks, geometry, true);
+                for (JsonElement descriptor : textureAnimations) animations.add(descriptor);
             }
         }
         root.add("animations", animations);
 
-        // OBJ relies on this sidecar because the format has no scene-light
-        // primitive. glTF carries its native KHR_lights_punctual data directly
-        // from GltfExporter; the sidecar adds Minecraft level/falloff semantics
-        // for Blender editing and round-trip updates without modifying glTF twice.
+        int textureAnimationCount = 0;
+        for (JsonElement descriptor : animations) {
+            if (descriptor.isJsonObject()
+                && "texture_frames".equals(descriptor.getAsJsonObject().has("kind")
+                    ? descriptor.getAsJsonObject().get("kind").getAsString()
+                    : "")) {
+                textureAnimationCount++;
+            }
+        }
+
+        JsonObject capabilities = new JsonObject();
+        capabilities.addProperty("dynamicDescriptors", true);
+        capabilities.addProperty("bridgeDescriptorSchema", 1);
+        capabilities.addProperty("stateAnimations", !"animate_static".equals(resolvedAnimationMode));
+        capabilities.addProperty("continuousTextureAnimations", textureAnimationCount > 0);
+        capabilities.addProperty("textureTimelineMarkers", textureAnimationCount > 0);
+        capabilities.addProperty("flatter", root.has("flatterObjects"));
+        capabilities.addProperty("flatterMaterialization", root.has("flatterObjects"));
+        capabilities.addProperty("minecraftLights", !logicalLightBlocks.isEmpty());
+        capabilities.addProperty("minecraftLightLevels", true);
+        capabilities.addProperty("logicalLightBlocks", !logicalLightBlocks.isEmpty());
+        capabilities.addProperty("flatterLightPlacement", root.has("flatterObjects"));
+        root.add("capabilities", capabilities);
+
         try (Writer writer = new BufferedWriter(new FileWriter(sidecar))) {
             GSON.toJson(root, writer);
         }
@@ -99,15 +120,9 @@ public final class BlenderMetadataExporter {
     }
 
     private static boolean isVanillaChest(BlockData block) {
-        return block.blockId.equals("minecraft:chest")
-            || block.blockId.equals("minecraft:trapped_chest");
+        return block.blockId.equals("minecraft:chest") || block.blockId.equals("minecraft:trapped_chest");
     }
 
-    /**
-     * Blender receives both glTF and OBJ in its X/right, Y/forward, Z/up
-     * coordinate system. Minesport exports Minecraft X/east, Y/up, Z/south,
-     * so a point becomes (X, -Z, Y) in the sidecar.
-     */
     private static JsonObject chestLidDescriptor(BlockData block, float[] center) {
         String facing = block.prop("facing");
         float localX = .5f;
@@ -115,16 +130,8 @@ public final class BlenderMetadataExporter {
         String axis = "X";
         switch (facing) {
             case "south" -> localZ = .0625f;
-            case "east" -> {
-                localX = .0625f;
-                localZ = .5f;
-                axis = "Y";
-            }
-            case "west" -> {
-                localX = .9375f;
-                localZ = .5f;
-                axis = "Y";
-            }
+            case "east" -> { localX = .0625f; localZ = .5f; axis = "Y"; }
+            case "west" -> { localX = .9375f; localZ = .5f; axis = "Y"; }
             default -> { }
         }
 
