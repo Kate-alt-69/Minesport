@@ -128,6 +128,7 @@ func (ms *MinesportApp) buildWorkbenchAssetSettingsSection(status *widget.Label)
 		widget.NewLabelWithStyle("RESOLUTION ORDER", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		chain,
 		workbenchHelp("Piston recovery stays lazy and SHA-1 verified. Runtime model geometry stores texture IDs only; image bytes continue to resolve from packs, mod JARs, vanilla assets or Piston."),
+		ms.buildDocumentationSettingsSection(),
 	)
 }
 
