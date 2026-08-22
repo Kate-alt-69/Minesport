@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "version": "0.2.0",
+  "repository": "Kate-alt-69/Minesport",
+  "pages": [
+    {"id":"01","title":"Start Here","summary":"What Minesport does and the shortest path from a Minecraft world to Blender.","path":"doc/page/01.md","video_url":""},
+    {"id":"02","title":"Minesport Main App","summary":"Open a world, select an area, choose export settings, and export without the removed Project system.","path":"doc/page/02.md","video_url":""},
+    {"id":"10","title":"Blender Beginner Basics","summary":"The few Blender controls and words you need before using the Minesport addon.","path":"doc/page/10.md","video_url":""},
+    {"id":"11","title":"Find the Minesport Panel","summary":"Exactly where the Minesport sidebar lives in Blender and how to make it appear.","path":"doc/page/11.md","video_url":""},
+    {"id":"12","title":"FLATTER for Blender Beginners","summary":"What a FLATTER object actually is, why it exists, how to select logical blocks, and when to materialize them.","path":"doc/page/12.md","video_url":""},
+    {"id":"13","title":"Minecraft Light Blocks in Blender","summary":"Create, place, show, hide, and understand Minesport 1×1×1 light-block helpers and Blender point lights.","path":"doc/page/13.md","video_url":""},
+    {"id":"20","title":"Troubleshooting","summary":"Common beginner mistakes, missing green outlines, missing panels, cache issues, and what logs to collect.","path":"doc/page/20.md","video_url":""},
+    {"id":"90","title":"Runtime Model Cache","summary":"What the automatic Minecraft/Fabric registry worker does and when manual rebuild controls are useful.","path":"doc/page/90.md","video_url":""},
+    {"id":"200","title":"Minesport 0.2.0 Release Notes","summary":"The 0.2.0 bug-free* release notes and the meaning of the asterisk.","path":"doc/releases/0.2.0.md","video_url":""}
+  ]
+}
