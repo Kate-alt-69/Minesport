@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/kastrick/minesport/blendertranslator"
+	"github.com/kastrick/minesport/cacheclean"
 )
 
 func infoButton(_ fyne.Window, title, body string) fyne.CanvasObject {
@@ -180,11 +181,48 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 		func(p []string) { working.DataPackPaths = p },
 	)
 
+	cacheInfo := widget.NewLabel(
+		"Deletes all regenerable Minesport cache: runtime model registries, heightmaps, downloaded toolchains, Bridge build workspaces and compiled compatibility Bridge JARs. Settings, diagnostics, worlds, projects, exports and the installer-bundled Bridge seed are not deleted.",
+	)
+	cacheInfo.Wrapping = fyne.TextWrapWord
+	removeCache := widget.NewButtonWithIcon("Remove all Minesport cache", theme.DeleteIcon(), func() {
+		dialog.ShowConfirm(
+			"Remove all Minesport cache?",
+			"This deletes every regenerable cache created by Minesport. Runtime models, downloaded build toolchains and compiled compatibility Bridge JARs will be downloaded or rebuilt the next time they are needed. Your worlds, projects, exports and settings are not touched.",
+			func(confirm bool) {
+				if !confirm {
+					return
+				}
+				result, err := cacheclean.RemoveAll()
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("cache cleanup was incomplete: %w", err), parent)
+					return
+				}
+				if len(result.RemovedPaths) == 0 {
+					dialog.ShowInformation("Minesport cache", "There was no Minesport cache to remove.", parent)
+					return
+				}
+				dialog.ShowInformation(
+					"Minesport cache removed",
+					"All regenerable Minesport cache was removed. Runtime registries and compiled compatibility Bridge JARs will be rebuilt automatically when needed.",
+					parent,
+				)
+			},
+			parent,
+		)
+	})
+	diagnostics := widget.NewCard(
+		"DIAGNOSTICS",
+		"",
+		container.NewVBox(cacheInfo, removeCache),
+	)
+
 	advanced := container.NewVBox(
 		general,
 		blenderCard,
 		widget.NewCard("RESOURCE PACKS", "", rp),
 		widget.NewCard("DATA PACKS", "", dp),
+		diagnostics,
 	)
 
 	tabs := container.NewAppTabs(
