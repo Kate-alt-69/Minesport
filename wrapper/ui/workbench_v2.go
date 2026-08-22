@@ -23,8 +23,6 @@ const (
 // idea of an activity rail/context sidebar/workbench/status area, but uses a
 // restrained Minecraft visual language and Minesport-specific workflows.
 func (ms *MinesportApp) buildWorkbenchUIV2() fyne.CanvasObject {
-	// Force the production workbench to stay visually consistent instead of
-	// turning into a bright system-theme window around a dark Minecraft map.
 	ms.fyneApp.Settings().SetTheme(newMinesportTheme())
 
 	wb := &workbenchState{
@@ -214,14 +212,14 @@ func (ms *MinesportApp) buildWorkbenchWorldExportPanes() (fyne.CanvasObject, fyn
 		changeOutput,
 		widget.NewSeparator(),
 		container.NewPadded(ms.exportBtn),
-		workbenchHelp("Export progress appears in the bottom task shelf. The world viewport stays open and interactive."),
+		workbenchHelp("Export automatically prepares a matching Fabric runtime-model cache when needed. Progress appears in the bottom task shelf."),
 	)))
 
 	return worldPane, exportPane
 }
 
 func (ms *MinesportApp) buildWorkbenchSettingsPane() fyne.CanvasObject {
-	status := widget.NewLabel("Changes save immediately to the existing Minesport settings file.")
+	status := widget.NewLabel("Changes save immediately.")
 	status.Wrapping = fyne.TextWrapWord
 
 	newToggle := func(label, description string, initial bool, change func(*Settings, bool)) fyne.CanvasObject {
@@ -239,8 +237,7 @@ func (ms *MinesportApp) buildWorkbenchSettingsPane() fyne.CanvasObject {
 				ms.statusLabel.SetText("Settings saved")
 			}
 		}
-		help := workbenchHelp(description)
-		return container.NewVBox(check, help)
+		return container.NewVBox(check, workbenchHelp(description))
 	}
 
 	face := newToggle(
@@ -251,9 +248,30 @@ func (ms *MinesportApp) buildWorkbenchSettingsPane() fyne.CanvasObject {
 	)
 	flatter := newToggle(
 		"FLATTER geometry · Experimental",
-		"Virtualize reconstructable Minecraft blocks into greedy 3D surfaces while preserving logical voxels for the Blender translator.",
+		"Virtualize reconstructable Minecraft blocks into greedy 3D surfaces while preserving logical voxels for Blender editing.",
 		ms.settings.FlatterOptimizationEnabled,
 		func(s *Settings, value bool) { s.FlatterOptimizationEnabled = value },
+	)
+	flatterSize := widget.NewSelect([]string{"8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"}, func(value string) {
+		next := ms.settings
+		switch value {
+		case "8 × 8 × 8":
+			next.FlatterCellSize = 8
+		case "32 × 32 × 32":
+			next.FlatterCellSize = 32
+		case "64 × 64 × 64":
+			next.FlatterCellSize = 64
+		default:
+			next.FlatterCellSize = 16
+		}
+		ms.applySettings(next)
+		status.SetText(fmt.Sprintf("FLATTER object size updated to %d³ · saved", next.FlatterCellSize))
+	})
+	cell := normalizeFlatterCellSize(ms.settings.FlatterCellSize)
+	flatterSize.SetSelected(fmt.Sprintf("%d × %d × %d", cell, cell, cell))
+	flatterSizeRow := container.NewVBox(
+		container.NewBorder(nil, nil, widget.NewLabel("FLATTER object size"), nil, flatterSize),
+		workbenchHelp("Controls the spatial FLATTER cell. Smaller cells rebuild more locally; larger cells create fewer objects and broader greedy surfaces."),
 	)
 	hidden := newToggle(
 		"Hidden block culling · Experimental",
@@ -272,7 +290,7 @@ func (ms *MinesportApp) buildWorkbenchSettingsPane() fyne.CanvasObject {
 	)
 	debug := newToggle(
 		"Debug engine console",
-		"Keep the detailed engine/IPC console available for experimental features and compatibility debugging.",
+		"Keep detailed engine/IPC diagnostics available for compatibility debugging.",
 		ms.settings.DebugMode,
 		func(s *Settings, value bool) { s.DebugMode = value },
 	)
@@ -283,11 +301,10 @@ func (ms *MinesportApp) buildWorkbenchSettingsPane() fyne.CanvasObject {
 		func(s *Settings, value bool) { s.SelectByModel = value },
 	)
 
-	packs := widget.NewLabel(fmt.Sprintf(
-		"Resource packs: %d   ·   Data packs: %d",
-		len(ms.settings.ResourcePackPaths), len(ms.settings.DataPackPaths),
-	))
-	advanced := widget.NewButtonWithIcon("Advanced settings / packs / translator…", theme.SettingsIcon(), ms.openWorkbenchAdvancedSettings)
+	assets := ms.buildWorkbenchAssetSettingsSection(status)
+	advancedTools := ms.buildAdvancedPipelineTools()
+	dataPackSummary := widget.NewLabel(fmt.Sprintf("Data packs configured: %d", len(ms.settings.DataPackPaths)))
+	legacyAdvanced := widget.NewButtonWithIcon("Translator / data packs / additional settings…", theme.SettingsIcon(), ms.openWorkbenchAdvancedSettings)
 
 	return container.NewVScroll(container.NewPadded(container.NewVBox(
 		widget.NewLabelWithStyle("SETTINGS", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -295,16 +312,17 @@ func (ms *MinesportApp) buildWorkbenchSettingsPane() fyne.CanvasObject {
 		workbenchSection("GEOMETRY"),
 		face,
 		flatter,
+		flatterSizeRow,
 		hidden,
 		workbenchSection("PIPELINE"),
 		blender,
 		selectByModel,
-		workbenchSection("APPLICATION"),
+		assets,
+		workbenchSection("ADVANCED"),
 		debug,
-		workbenchSection("PACKS & ADVANCED"),
-		packs,
-		advanced,
-		workbenchHelp("The advanced dialog remains available while resource/data-pack editors and translator management move into the workbench."),
+		advancedTools,
+		dataPackSummary,
+		legacyAdvanced,
 	)))
 }
 
@@ -374,8 +392,6 @@ func (ms *MinesportApp) setWorkbenchPaneV2(key string) {
 	}
 }
 
-// Default output paths are deliberately resolved lazily by the existing export
-// code. This helper is only used by future workbench project/preset surfaces.
 func defaultWorkbenchOutputPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
