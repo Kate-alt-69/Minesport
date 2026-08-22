@@ -11,6 +11,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
 import org.lwjgl.glfw.GLFW;
 
+import java.lang.reflect.Method;
 import java.util.*;
 
 import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
@@ -31,17 +32,36 @@ public class MinesportBridge implements ClientModInitializer {
         });
     }
 
+    /**
+     * Mojang renamed Window's native-handle accessor across supported versions
+     * (getWindow -> handle, with getHandle used by some mapping sets). Keep the
+     * optional worker-window hiding out of the compile-time compatibility
+     * surface so one cosmetic optimization cannot break the Bridge matrix.
+     */
     private void hideWorkerWindow(Minecraft client) {
         if (!"1".equals(System.getenv("MINESPORT_BRIDGE_WORKER"))) return;
         try {
-            long handle = client.getWindow().getWindow();
-            if (handle != 0L) {
-                GLFW.glfwHideWindow(handle);
-            }
+            Object window = client.getWindow();
+            long handle = findWindowHandle(window);
+            if (handle != 0L) GLFW.glfwHideWindow(handle);
         } catch (Throwable ignored) {
-            // Window hiding is an optimization only. Registry capture must still
-            // work on compatibility targets where GLFW/window APIs differ.
+            // Hiding is best-effort only. Registry/model capture is still valid
+            // if a compatibility target exposes the handle under another name.
         }
+    }
+
+    private long findWindowHandle(Object window) {
+        if (window == null) return 0L;
+        for (String methodName : List.of("handle", "getWindow", "getHandle")) {
+            try {
+                Method method = window.getClass().getMethod(methodName);
+                Object value = method.invoke(window);
+                if (value instanceof Number number) return number.longValue();
+            } catch (ReflectiveOperationException ignored) {
+                // Try the next mapping-era name.
+            }
+        }
+        return 0L;
     }
 
     private void runDump(Minecraft client) {
