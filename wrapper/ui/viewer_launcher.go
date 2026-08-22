@@ -243,96 +243,112 @@ func (ms *MinesportApp) onExplore3D() {
 		ms.showEmbedded3D()
 		return
 	}
+
+	// Snapshot every value owned by Fyne before crossing into the worker
+	// goroutine. The worker must not read widget/select/entry state directly.
+	p := ipc.ListBlocksParams{WorldPath: ms.worldPath, ModsPath: ms.modsPath, ModLoader: ms.loaderType}
+	if ms.selectionModeSelect.Selected == "Bubble selection" {
+		cx, cy, cz := ms.centerX.Int(0), ms.centerY.Int(64), ms.centerZ.Int(0)
+		rx, ry, rz := ms.radiusX.Int(32), ms.radiusY.Int(32), ms.radiusZ.Int(32)
+		p.MinX, p.MaxX = cx-rx, cx+rx
+		p.MinY, p.MaxY = cy-ry, cy+ry
+		p.MinZ, p.MaxZ = cz-rz, cz+rz
+	} else {
+		p.MinX, p.MaxX = ms.minXRange.Bounds()
+		p.MinY, p.MaxY = ms.minYRange.Bounds()
+		p.MinZ, p.MaxZ = ms.minZRange.Bounds()
+	}
+	selectedMin := [3]int{p.MinX, p.MinY, p.MinZ}
+	selectedMax := [3]int{p.MaxX, p.MaxY, p.MaxZ}
+	previewParams := addPreviewContext(p)
+
 	ms.statusLabel.SetText("Loading 3D preview…")
 	ms.appendLog("Live 3D renderer: requesting blocks from engine")
 	ms.stateIcon.SetResource(theme.ViewRefreshIcon())
 	ms.viewToggle3D.Disable()
+
 	go func() {
-		p := ipc.ListBlocksParams{WorldPath: ms.worldPath, ModsPath: ms.modsPath, ModLoader: ms.loaderType}
-		var selectedMin, selectedMax [3]int
-		if ms.selectionModeSelect.Selected == "Bubble selection" {
-			cx, cy, cz := ms.centerX.Int(0), ms.centerY.Int(64), ms.centerZ.Int(0)
-			rx, ry, rz := ms.radiusX.Int(32), ms.radiusY.Int(32), ms.radiusZ.Int(32)
-			p.MinX, p.MaxX = cx-rx, cx+rx
-			p.MinY, p.MaxY = cy-ry, cy+ry
-			p.MinZ, p.MaxZ = cz-rz, cz+rz
-		} else {
-			p.MinX, p.MaxX = ms.minXRange.Bounds()
-			p.MinY, p.MaxY = ms.minYRange.Bounds()
-			p.MinZ, p.MaxZ = ms.minZRange.Bounds()
-		}
-		selectedMin = [3]int{p.MinX, p.MinY, p.MinZ}
-		selectedMax = [3]int{p.MaxX, p.MaxY, p.MaxZ}
-		previewParams := addPreviewContext(p)
 		if previewParams.MinX != p.MinX || previewParams.MinY != p.MinY || previewParams.MinZ != p.MinZ {
-			ms.appendLog(fmt.Sprintf(
+			ms.appendLogAsync(fmt.Sprintf(
 				"3D context bounds: X %d..%d, Y %d..%d, Z %d..%d (selection remains highlighted)",
 				previewParams.MinX, previewParams.MaxX, previewParams.MinY, previewParams.MaxY, previewParams.MinZ, previewParams.MaxZ,
 			))
 		}
 		path, count, err := ms.engine.ListBlocks(previewParams)
 		if err != nil {
-			ms.appendLog("3D block request failed: " + err.Error())
-			ms.explore3DFailed(err.Error())
+			ms.appendLogAsync("3D block request failed: " + err.Error())
+			ms.dispatchUI(func() { ms.explore3DFailed(err.Error()) })
 			return
 		}
-		ms.appendLog(fmt.Sprintf("3D block response: %d blocks in %s", count, path))
+		ms.appendLogAsync(fmt.Sprintf("3D block response: %d blocks in %s", count, path))
 		if count == 0 {
-			ms.explore3DFailed("No solid blocks were found in the current selection.")
+			ms.dispatchUI(func() { ms.explore3DFailed("No solid blocks were found in the current selection.") })
 			return
 		}
 		executable, err := os.Executable()
 		if err != nil {
 			_ = os.Remove(path)
-			ms.explore3DFailed("Could not locate the Minesport executable: " + err.Error())
+			ms.dispatchUI(func() { ms.explore3DFailed("Could not locate the Minesport executable: " + err.Error()) })
 			return
 		}
 		parentHandle := nativeWindowHandle(ms.window)
 		if parentHandle == 0 {
 			_ = os.Remove(path)
-			ms.explore3DFailed("Could not obtain the Minesport window handle needed to host the live 3D renderer.")
+			ms.dispatchUI(func() { ms.explore3DFailed("Could not obtain the Minesport window handle needed to host the live 3D renderer.") })
 			return
 		}
 		session, err := LaunchViewer(executable, path)
 		if err != nil {
 			_ = os.Remove(path)
-			ms.explore3DFailed("Could not start the original 3D renderer: " + err.Error())
+			ms.dispatchUI(func() { ms.explore3DFailed("Could not start the original 3D renderer: " + err.Error()) })
 			return
 		}
-		preview := NewEmbeddedViewer(session, parentHandle, ms.previewHost)
+
+		// Viewer stdout/process callbacks execute on background goroutines. They
+		// may send lightweight IPC back to the viewer, but every Fyne mutation is
+		// marshalled onto the main window's ordered event queue.
 		session.OnReady = func(readyCount int) {
-			ms.viewerSession = session
-			ms.embeddedViewer = preview
-			ms.showEmbedded3D()
-			ms.statusLabel.SetText(fmt.Sprintf("3D ready · %s blocks", formatCount(readyCount)))
-			ms.stateIcon.SetResource(theme.ConfirmIcon())
-			ms.viewToggle3D.Enable()
-			ms.appendLog(fmt.Sprintf("Original OpenGL 3D renderer embedded: %d blocks", readyCount))
-			session.HighlightBox(selectedMin, selectedMax)
+			ms.dispatchUI(func() {
+				preview := NewEmbeddedViewer(session, parentHandle, ms.previewHost)
+				ms.viewerSession = session
+				ms.embeddedViewer = preview
+				ms.showEmbedded3D()
+				ms.statusLabel.SetText(fmt.Sprintf("3D ready · %s blocks", formatCount(readyCount)))
+				ms.stateIcon.SetResource(theme.ConfirmIcon())
+				ms.viewToggle3D.Enable()
+				ms.appendLog(fmt.Sprintf("Original OpenGL 3D renderer embedded: %d blocks", readyCount))
+				session.HighlightBox(selectedMin, selectedMax)
+			})
 		}
 		session.OnError = func(message string) {
-			ms.appendLog("Live 3D renderer error: " + message)
-			ms.explore3DFailed(message)
+			ms.appendLogAsync("Live 3D renderer error: " + message)
+			ms.dispatchUI(func() { ms.explore3DFailed(message) })
 		}
-		session.OnPick = func(x, y, z int) { ms.showSelectionPopup(x, y, z) }
+		session.OnPick = func(x, y, z int) {
+			ms.dispatchUI(func() { ms.showSelectionPopup(x, y, z) })
+		}
 		session.OnBoxSelected = func(min, max [3]int, selectedCount int) {
-			ms.applyBoxSelectionFromViewer(min, max, selectedCount)
+			ms.dispatchUI(func() { ms.applyBoxSelectionFromViewer(min, max, selectedCount) })
 		}
 		session.OnScreenshot = func(path string) {
-			ms.statusLabel.SetText("3D screenshot saved")
-			ms.appendLog("3D screenshot saved: " + path)
+			ms.dispatchUI(func() {
+				ms.statusLabel.SetText("3D screenshot saved")
+				ms.appendLog("3D screenshot saved: " + path)
+			})
 		}
 		session.OnClosed = func() {
 			_ = os.Remove(path)
-			if ms.viewerSession != session {
-				return
-			}
-			ms.viewerSession = nil
-			ms.embeddedViewer = nil
-			ms.show2DPreview()
-			ms.statusLabel.SetText("3D preview closed")
-			ms.viewToggle3D.Enable()
-			ms.appendLog("Live 3D renderer closed")
+			ms.dispatchUI(func() {
+				if ms.viewerSession != session {
+					return
+				}
+				ms.viewerSession = nil
+				ms.embeddedViewer = nil
+				ms.show2DPreview()
+				ms.statusLabel.SetText("3D preview closed")
+				ms.viewToggle3D.Enable()
+				ms.appendLog("Live 3D renderer closed")
+			})
 		}
 		session.replayLifecycle()
 	}()
