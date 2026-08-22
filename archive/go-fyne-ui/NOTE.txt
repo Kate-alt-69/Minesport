@@ -1,0 +1,1 @@
+All live desktop UI work now belongs in /desktop. The archived files are intentionally frozen.
