@@ -171,7 +171,6 @@ type workbenchTaskRuntimeV3 struct {
 	activity     *widget.Activity
 	overlayAdded bool
 	visible      bool
-	animation    *fyne.Animation
 	hideTimer    *time.Timer
 	kind         string
 	detail       string
@@ -216,6 +215,9 @@ func (ms *MinesportApp) buildWorkbenchTaskDrawerV3() fyne.CanvasObject {
 	return drawer
 }
 
+// Task drawer methods are called from the Fyne UI queue. The only background
+// component is the expiry timer, and that timer is forbidden from touching any
+// Fyne object directly; it can only enqueue a hide request through dispatchUI.
 func (ms *MinesportApp) beginWorkbenchTaskV3(kind, message string, determinate bool) {
 	state := ms.taskRuntimeV3()
 	if state == nil {
@@ -230,10 +232,6 @@ func (ms *MinesportApp) beginWorkbenchTaskV3(kind, message string, determinate b
 	if state.hideTimer != nil {
 		state.hideTimer.Stop()
 		state.hideTimer = nil
-	}
-	if state.animation != nil {
-		state.animation.Stop()
-		state.animation = nil
 	}
 	state.kind = strings.ToUpper(strings.TrimSpace(kind))
 	if state.kind == "" {
@@ -298,7 +296,9 @@ func (ms *MinesportApp) finishWorkbenchTaskV3(ok bool, message, detail string) {
 	if !ok {
 		delay = 3 * time.Second
 	}
-	state.hideTimer = time.AfterFunc(delay, func() { ms.hideWorkbenchTaskDrawerV3() })
+	state.hideTimer = time.AfterFunc(delay, func() {
+		ms.dispatchUI(func() { ms.hideWorkbenchTaskDrawerV3() })
+	})
 	state.mu.Unlock()
 
 	ms.showWorkbenchTaskDrawerV3(false)
@@ -307,7 +307,7 @@ func (ms *MinesportApp) finishWorkbenchTaskV3(ok bool, message, detail string) {
 	}
 }
 
-func (ms *MinesportApp) showWorkbenchTaskDrawerV3(animateIn bool) {
+func (ms *MinesportApp) showWorkbenchTaskDrawerV3(_ bool) {
 	state := ms.taskRuntimeV3()
 	if state == nil || ms.window == nil {
 		return
@@ -341,58 +341,26 @@ func (ms *MinesportApp) showWorkbenchTaskDrawerV3(animateIn bool) {
 		windowCanvas.Overlays().Add(state.drawer)
 		state.overlayAdded = true
 	}
-	wasVisible := state.visible
+	state.drawer.Move(end)
 	state.drawer.Show()
 	state.visible = true
-	if state.animation != nil {
-		state.animation.Stop()
-	}
-
-	if animateIn && !wasVisible {
-		start := fyne.NewPos(end.X, canvasSize.Height+4)
-		state.drawer.Move(start)
-		animation := canvas.NewPositionAnimation(start, end, 180*time.Millisecond, state.drawer.Move)
-		animation.Curve = fyne.AnimationEaseOut
-		state.animation = animation
-		state.mu.Unlock()
-		animation.Start()
-		return
-	}
-	state.drawer.Move(end)
 	state.mu.Unlock()
 }
 
 func (ms *MinesportApp) hideWorkbenchTaskDrawerV3() {
 	state := ms.taskRuntimeV3()
-	if state == nil || ms.window == nil {
+	if state == nil {
 		return
 	}
-	windowCanvas := ms.window.Canvas()
-	canvasSize := windowCanvas.Size()
-
 	state.mu.Lock()
 	if !state.visible {
 		state.mu.Unlock()
 		return
 	}
-	if state.animation != nil {
-		state.animation.Stop()
-	}
-	start := state.drawer.Position()
-	end := fyne.NewPos(start.X, canvasSize.Height+4)
-	animation := canvas.NewPositionAnimation(start, end, 170*time.Millisecond, state.drawer.Move)
-	animation.Curve = fyne.AnimationEaseIn
-	state.animation = animation
+	state.drawer.Hide()
+	state.visible = false
+	state.hideTimer = nil
 	state.mu.Unlock()
-	animation.Start()
-
-	time.AfterFunc(190*time.Millisecond, func() {
-		state.mu.Lock()
-		state.drawer.Hide()
-		state.visible = false
-		state.animation = nil
-		state.mu.Unlock()
-	})
 }
 
 func cleanupWorkbenchRuntimeV3(ms *MinesportApp) {
@@ -405,11 +373,9 @@ func cleanupWorkbenchRuntimeV3(ms *MinesportApp) {
 		return
 	}
 	state.mu.Lock()
-	if state.animation != nil {
-		state.animation.Stop()
-	}
 	if state.hideTimer != nil {
 		state.hideTimer.Stop()
+		state.hideTimer = nil
 	}
 	state.activity.Stop()
 	state.mu.Unlock()
