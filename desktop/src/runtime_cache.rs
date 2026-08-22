@@ -1,0 +1,184 @@
+use crate::runtime_worker::{self, CacheResult, Progress};
+use anyhow::{Result, anyhow};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    thread,
+};
+
+type Listener = Box<dyn Fn(RuntimeCacheEvent) + Send + 'static>;
+
+#[derive(Debug, Clone)]
+pub enum RuntimeCacheEvent {
+    Progress(Progress),
+    Complete(Result<CacheResult, String>),
+}
+
+#[derive(Default)]
+struct State {
+    running: bool,
+    version: String,
+    mods_path: PathBuf,
+    fingerprint: String,
+    ready_path: PathBuf,
+    cancel: Option<Arc<AtomicBool>>,
+    listeners: Vec<Listener>,
+}
+
+#[derive(Clone, Default)]
+pub struct RuntimeCacheManager {
+    state: Arc<Mutex<State>>,
+}
+
+impl RuntimeCacheManager {
+    pub fn start<F>(&self, version: String, mods_path: PathBuf, force: bool, listener: F) -> Result<bool>
+    where
+        F: Fn(RuntimeCacheEvent) + Send + 'static,
+    {
+        let mut state = self.state.lock().map_err(|_| anyhow!("runtime cache state is poisoned"))?;
+        if state.running {
+            if state.version != version || !same_path(&state.mods_path, &mods_path) {
+                return Err(anyhow!("another runtime registry worker is already running for a different Minecraft instance"));
+            }
+            state.listeners.push(Box::new(listener));
+            return Ok(false);
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        state.running = true;
+        state.version = version.clone();
+        state.mods_path = mods_path.clone();
+        state.cancel = Some(cancel.clone());
+        state.listeners.clear();
+        state.listeners.push(Box::new(listener));
+        if force {
+            state.fingerprint.clear();
+            state.ready_path = PathBuf::new();
+        }
+        drop(state);
+
+        let manager = self.clone();
+        thread::spawn(move || {
+            let result = runtime_worker::prepare_full_registry_cancellable(
+                &version,
+                &mods_path,
+                force,
+                cancel,
+                |progress| manager.emit(RuntimeCacheEvent::Progress(progress)),
+            );
+
+            let completed = result.map_err(|error| format!("{error:#}"));
+            manager.finish(completed);
+        });
+        Ok(true)
+    }
+
+    pub fn cancel(&self) -> bool {
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return false,
+        };
+        if !state.running {
+            return false;
+        }
+        if let Some(cancel) = &state.cancel {
+            cancel.store(true, Ordering::Relaxed);
+            return true;
+        }
+        false
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.state.lock().map(|state| state.running).unwrap_or(false)
+    }
+
+    pub fn is_running_for(&self, version: &str, mods_path: &Path) -> bool {
+        self.state.lock().map(|state| {
+            state.running && state.version == version && same_path(&state.mods_path, mods_path)
+        }).unwrap_or(false)
+    }
+
+    pub fn ready_path(&self, version: &str, mods_path: &Path) -> Option<PathBuf> {
+        let state = self.state.lock().ok()?;
+        if state.version != version || !same_path(&state.mods_path, mods_path) || state.ready_path.as_os_str().is_empty() {
+            return None;
+        }
+        state.ready_path.is_file().then(|| state.ready_path.clone())
+    }
+
+    pub fn fingerprint(&self, version: &str, mods_path: &Path) -> Option<String> {
+        let state = self.state.lock().ok()?;
+        if state.version != version || !same_path(&state.mods_path, mods_path) || state.fingerprint.is_empty() {
+            return None;
+        }
+        Some(state.fingerprint.clone())
+    }
+
+    pub fn invalidate(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.fingerprint.clear();
+            state.ready_path = PathBuf::new();
+        }
+    }
+
+    fn emit(&self, event: RuntimeCacheEvent) {
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+        for listener in &state.listeners {
+            listener(event.clone());
+        }
+    }
+
+    fn finish(&self, result: Result<CacheResult, String>) {
+        let listeners = {
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            if let Ok(cache) = &result {
+                state.fingerprint = cache.fingerprint.clone();
+                state.ready_path = cache.registry_path.clone();
+            }
+            state.running = false;
+            state.cancel = None;
+            std::mem::take(&mut state.listeners)
+        };
+        let event = RuntimeCacheEvent::Complete(result);
+        for listener in listeners {
+            listener(event.clone());
+        }
+    }
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+    } else {
+        a == b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_identity_is_case_insensitive_on_windows_only() {
+        let a = Path::new("C:/Minecraft/mods");
+        let b = Path::new("c:/minecraft/MODS");
+        if cfg!(windows) {
+            assert!(same_path(a, b));
+        } else {
+            assert!(!same_path(a, b));
+        }
+    }
+
+    #[test]
+    fn idle_manager_has_no_ready_registry() {
+        let manager = RuntimeCacheManager::default();
+        assert!(!manager.is_running());
+        assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
+    }
+}
