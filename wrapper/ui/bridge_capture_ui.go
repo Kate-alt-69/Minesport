@@ -28,6 +28,7 @@ type runtimeCacheJobState struct {
 	version     string
 	modsPath    string
 	fingerprint string
+	readyPath   string
 	worker      *bridgecompat.RuntimeWorker
 	callbacks   []runtimeCacheCompletion
 	listeners   []runtimeCacheProgress
@@ -73,9 +74,9 @@ func (ms *MinesportApp) finishRuntimeCacheJob(err error) {
 	state.worker = nil
 	state.callbacks = nil
 	state.listeners = nil
-	// Keep version/modsPath/fingerprint as the last verified instance identity.
-	// READY checks can then be cheap and never re-hash the mod directory on the
-	// Fyne event thread. A new cache job replaces this identity synchronously.
+	// Keep the last verified version/mod-set/fingerprint/path identity. Settings
+	// and Export can then answer READY without parsing the full registry.data on
+	// Fyne's event thread. A later job replaces this identity synchronously.
 	state.mu.Unlock()
 	if len(callbacks) == 0 {
 		return
@@ -121,6 +122,7 @@ func (ms *MinesportApp) generateRuntimeModelCache(
 	state.version = version
 	state.modsPath = modsPath
 	state.fingerprint = ""
+	state.readyPath = ""
 	state.worker = nil
 	state.callbacks = nil
 	state.listeners = nil
@@ -136,6 +138,15 @@ func (ms *MinesportApp) generateRuntimeModelCache(
 	// never in a button callback or Settings renderer.
 	go ms.runRuntimeModelCacheJob(version, modsPath, force)
 	return true, nil
+}
+
+func (ms *MinesportApp) setRuntimeCacheReadyPath(version, modsPath, fingerprint, path string) {
+	state := runtimeCacheJob(ms)
+	state.mu.Lock()
+	if state.version == version && strings.EqualFold(state.modsPath, modsPath) && state.fingerprint == fingerprint {
+		state.readyPath = path
+	}
+	state.mu.Unlock()
 }
 
 func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string, force bool) {
@@ -163,6 +174,7 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string, force 
 	ms.appendLogAsync("Runtime model cache fingerprint: " + fingerprint)
 	if !force {
 		if path, ok := bridgecapture.SnapshotPathForFingerprint(version, fingerprint); ok {
+			ms.setRuntimeCacheReadyPath(version, modsPath, fingerprint, path)
 			ms.appendLogAsync("Full runtime model registry already ready: " + path)
 			ms.emitRuntimeCacheProgress(100, "Full runtime model registry already ready")
 			ms.finishRuntimeCacheJob(nil)
@@ -220,6 +232,7 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string, force 
 			// The Bridge publishes a reusable instance-wide registry only after its
 			// complete all-registry packet has been received. Selection bounds are
 			// never involved in this capture.
+			ms.setRuntimeCacheReadyPath(version, modsPath, fingerprint, path)
 			ms.emitRuntimeCacheProgress(98, "Full registry received · shutting down disposable worker")
 			_ = worker.Stop()
 			bridgecapture.CancelSession(version)
@@ -233,7 +246,8 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string, force 
 		case <-worker.Done():
 			waitErr := worker.Wait()
 			bridgecapture.CancelSession(version)
-			if _, ok := bridgecapture.SnapshotPathForFingerprint(version, fingerprint); ok && waitErr == nil {
+			if path, ok := bridgecapture.SnapshotPathForFingerprint(version, fingerprint); ok && waitErr == nil {
+				ms.setRuntimeCacheReadyPath(version, modsPath, fingerprint, path)
 				ms.emitRuntimeCacheProgress(100, "Full runtime model registry ready")
 				ms.finishRuntimeCacheJob(nil)
 				return
@@ -298,14 +312,21 @@ func (ms *MinesportApp) runtimeCacheFingerprintForCurrentWorld() (string, bool) 
 }
 
 func (ms *MinesportApp) runtimeCacheReadyForCurrentWorld() (string, bool) {
-	fingerprint, ok := ms.runtimeCacheFingerprintForCurrentWorld()
-	if !ok {
+	if ms == nil {
 		return "", false
 	}
-	return bridgecapture.SnapshotPathForFingerprint(
-		bridgecompat.NormalizeVersion(ms.mcVersion),
-		fingerprint,
-	)
+	version := bridgecompat.NormalizeVersion(ms.mcVersion)
+	modsPath := ms.modsPath
+	state := runtimeCacheJob(ms)
+	state.mu.Lock()
+	if state.version != version || !strings.EqualFold(state.modsPath, modsPath) || state.fingerprint == "" || state.readyPath == "" {
+		state.mu.Unlock()
+		return "", false
+	}
+	path := state.readyPath
+	state.mu.Unlock()
+	info, err := os.Stat(path)
+	return path, err == nil && !info.IsDir()
 }
 
 // ensureRuntimeModelCacheForExport returns true when Export has been deferred
