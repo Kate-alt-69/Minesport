@@ -31,7 +31,7 @@ class RuntimeModelRegistryTest {
         snapshot.deleteOnExit();
         Files.writeString(snapshot.toPath(), """
             {
-              "schema": 2,
+              "schema": 3,
               "minecraftVersion": "1.21.10",
               "modsFingerprint": "test",
               "blocks": {
@@ -90,12 +90,34 @@ class RuntimeModelRegistryTest {
     }
 
     @Test
+    void rejectsPreLocalUvSchemaTwoSnapshot() throws Exception {
+        File snapshot = File.createTempFile("minesport-runtime-models-old-uv-", ".json");
+        snapshot.deleteOnExit();
+        Files.writeString(snapshot.toPath(), """
+            {
+              "schema": 2,
+              "minecraftVersion": "1.21.10",
+              "modsFingerprint": "test",
+              "blocks": {
+                "minecraft:grass_block": {
+                  "loaderType": "vanilla",
+                  "variants": [{"properties": {"snowy": "false"}, "quads": [%s]}]
+                }
+              }
+            }
+            """.formatted(QUAD));
+
+        assertNull(RuntimeModelRegistry.load(snapshot, "1.21.10", null),
+            "schema 2 stored atlas-space UVs and must never be reused");
+    }
+
+    @Test
     void rejectsRuntimeSnapshotFromWrongMinecraftVersion() throws Exception {
         File snapshot = File.createTempFile("minesport-runtime-models-", ".json");
         snapshot.deleteOnExit();
         Files.writeString(snapshot.toPath(), """
             {
-              "schema": 2,
+              "schema": 3,
               "minecraftVersion": "1.21.11",
               "modsFingerprint": "test",
               "blocks": {
