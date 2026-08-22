@@ -3,10 +3,11 @@
 **.exe
 /**/.gradle
 /wrapper/embedded_engine_generated.go
-/**/build
 **.log
 **.tmp
 /**/go.mod
 /**/go.sum
 /dist/**
 /wrapper/dist/**
+/desktop/target/
+/desktop/dist/
