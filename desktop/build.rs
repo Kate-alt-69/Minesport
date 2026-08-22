@@ -44,6 +44,8 @@ fn main() {
     let ui = manifest.join("ui").join("main.slint");
     let engine_libs = root.join("engine").join("build").join("libs");
     let bridge_staged = root.join("dist").join("bundled-bridge").join("minesport-bridge-0.2.0.jar");
+    let bridge_source = root.join("bridge");
+    let bridge_versions = root.join("bridge-versions");
     let blender_addon = root.join("wrapper").join("blendertranslator").join("minesport_translator");
 
     println!("cargo:rerun-if-changed={}", ui.display());
@@ -51,11 +53,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MINESPORT_BRIDGE_JAR");
     println!("cargo:rerun-if-changed={}", engine_libs.display());
     println!("cargo:rerun-if-changed={}", bridge_staged.display());
+    println!("cargo:rerun-if-changed={}", bridge_source.display());
+    println!("cargo:rerun-if-changed={}", bridge_versions.display());
     println!("cargo:rerun-if-changed={}", blender_addon.display());
-    println!("cargo:rerun-if-changed={}", root.join("bridge/gradlew").display());
-    println!("cargo:rerun-if-changed={}", root.join("bridge/gradlew.bat").display());
-    println!("cargo:rerun-if-changed={}", root.join("bridge/gradle/wrapper/gradle-wrapper.jar").display());
-    println!("cargo:rerun-if-changed={}", root.join("bridge/gradle/wrapper/gradle-wrapper.properties").display());
 
     slint_build::compile(ui).expect("compile Minesport Slint UI");
 
