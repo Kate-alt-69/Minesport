@@ -13,6 +13,10 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.*;
 
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGHT;
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
+
 public class MinesportBridge implements ClientModInitializer {
 
     @Override
