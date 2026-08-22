@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Minesport Dynamic Translator",
     "author": "Kastrick / Minesport",
-    "version": (0, 1, 7),
+    "version": (0, 1, 8),
     "blender": (4, 3, 0),
     "location": "File > Import / Object Properties / Node Editor / 3D View > Minesport",
     "description": "Imports/translates Minesport exports and FLATTER logical block geometry into Blender-native data.",
@@ -67,28 +67,34 @@ def register():
     flatter.register()
 
     _register_optional("flatter_runtime")
+    _register_optional("incremental_refresh")
     _register_optional("liquid_merge")
     _register_optional("selection_sets")
     _register_optional("liquid_ui")
     _register_optional("viewport_interaction")
+    _register_optional("edit_mode")
     _register_optional("flatter_overlay")
     _register_optional("flatter_map")
     _register_optional("obj_import")
     _register_optional("gltf_import")
     _register_optional("roundtrip")
+    _register_optional("roundtrip_incremental")
 
 
 def unregister():
     for name in (
+        "roundtrip_incremental",
         "roundtrip",
         "gltf_import",
         "obj_import",
         "flatter_map",
         "flatter_overlay",
+        "edit_mode",
         "viewport_interaction",
         "liquid_ui",
         "selection_sets",
         "liquid_merge",
+        "incremental_refresh",
         "flatter_runtime",
     ):
         module = _OPTIONAL_MODULES.pop(name, None)

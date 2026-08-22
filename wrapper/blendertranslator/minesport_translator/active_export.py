@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ACTIVE_TAG = "minesport_v1.5_active_export"
-ACTIVE_EXPORT_VERSION = "0.1.7"
+ACTIVE_EXPORT_VERSION = "0.1.8"
 PROJECT_ID_KEY = "minesport_project_id"
 PROJECT_PATH_KEY = "minesport_project_path"
 SOURCE_ASSET_KEY = "minesport_source_asset"
