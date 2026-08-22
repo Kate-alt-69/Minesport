@@ -1,5 +1,9 @@
 use std::{env, fs, path::{Path, PathBuf}};
 
+fn manifest_dir() -> PathBuf {
+    PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+}
+
 fn find_engine_jar() -> Option<PathBuf> {
     if let Ok(path) = env::var("MINESPORT_ENGINE_JAR") {
         let path = PathBuf::from(path);
@@ -8,7 +12,12 @@ fn find_engine_jar() -> Option<PathBuf> {
         }
     }
 
-    let root = Path::new("..").join("engine").join("build").join("libs");
+    let root = manifest_dir()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("engine")
+        .join("build")
+        .join("libs");
     let entries = fs::read_dir(root).ok()?;
     let mut candidates: Vec<PathBuf> = entries
         .filter_map(Result::ok)
@@ -26,11 +35,15 @@ fn find_engine_jar() -> Option<PathBuf> {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=ui/main.slint");
-    println!("cargo:rerun-if-env-changed=MINESPORT_ENGINE_JAR");
-    println!("cargo:rerun-if-changed=../engine/build/libs");
+    let manifest = manifest_dir();
+    let ui = manifest.join("ui").join("main.slint");
+    let engine_libs = manifest.parent().unwrap_or_else(|| Path::new(".")).join("engine").join("build").join("libs");
 
-    slint_build::compile("ui/main.slint").expect("compile Minesport Slint UI");
+    println!("cargo:rerun-if-changed={}", ui.display());
+    println!("cargo:rerun-if-env-changed=MINESPORT_ENGINE_JAR");
+    println!("cargo:rerun-if-changed={}", engine_libs.display());
+
+    slint_build::compile(ui).expect("compile Minesport Slint UI");
 
     let engine = find_engine_jar().expect(
         "Minesport engine JAR not found. Build /engine first or set MINESPORT_ENGINE_JAR.",
