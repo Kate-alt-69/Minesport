@@ -5,6 +5,8 @@ Object Properties, and logical block selection feedback without duplicating
 the runtime/geometry implementation.
 """
 
+import json
+
 import bpy
 
 from . import flatter
@@ -37,10 +39,12 @@ def _block_label(obj, xyz):
 
 
 def _set_block_feedback(obj, xyz):
+    xyz = tuple(map(int, xyz))
     label = _block_label(obj, xyz)
+    obj[flatter._SELECTED_KEY] = json.dumps(list(xyz), separators=(",", ":"))
     obj["minesport_logical_selection_type"] = "Minecraft block"
     obj["minesport_logical_selection_label"] = label
-    obj["minesport_logical_selection_xyz"] = list(map(int, xyz))
+    obj["minesport_logical_selection_xyz"] = list(xyz)
     if hasattr(obj, "minesport"):
         obj.minesport.flatter_selected = label.removeprefix("Minecraft block: ")
     try:
@@ -57,6 +61,7 @@ def _click_wrapper(parent, xyz, event):
 
 def _box_wrapper(parent, first, second, event):
     _ORIGINAL_BOX(parent, first, second, event)
+    _set_block_feedback(parent, second)
     count = len(liquid_merge._selection(parent))
     label = (
         f"Minecraft blocks: {count:,} selected · "
