@@ -1,0 +1,311 @@
+import { Button, CheckBox, LineEdit, ProgressIndicator, ScrollView, SpinBox } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    title: "Minesport 0.2.0 — by Kastrick";
+    width: 1280px;
+    height: 800px;
+    min-width: 980px;
+    min-height: 640px;
+    background: #0d1117;
+
+    in-out property <int> active-page: 0;
+    in-out property <string> world-path: "No world selected";
+    in-out property <string> world-name: "NO WORLD";
+    in-out property <string> minecraft-version: "1.21.10";
+    in-out property <string> loader-type: "Fabric";
+    in-out property <string> output-path: "";
+    in-out property <string> export-name: "Minesport_Export";
+    in-out property <string> export-format: "GLTF";
+    in-out property <string> export-mode: "Grouped";
+    in-out property <bool> optimize: true;
+    in-out property <int> min-x: -32;
+    in-out property <int> min-y: -64;
+    in-out property <int> min-z: -32;
+    in-out property <int> max-x: 32;
+    in-out property <int> max-y: 320;
+    in-out property <int> max-z: 32;
+
+    in-out property <string> engine-status: "STARTING";
+    in-out property <bool> engine-ready: false;
+    in-out property <string> runtime-cache-status: "WAITING FOR WORLD";
+    in-out property <string> task-title: "Idle";
+    in-out property <string> task-detail: "Ready";
+    in-out property <float> task-progress: 0.0;
+    in-out property <bool> task-active: false;
+    in-out property <string> diagnostics: "Minesport Rust/Slint desktop initialized.";
+
+    callback pick-world();
+    callback pick-output();
+    callback export-requested();
+    callback rebuild-runtime-cache();
+    callback remove-cache();
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 66px;
+            background: #111820;
+            border-width: 1px;
+            border-color: #26313d;
+
+            HorizontalLayout {
+                padding: 16px;
+                spacing: 14px;
+
+                Text {
+                    text: "MINESPORT";
+                    color: #f3f6f9;
+                    font-size: 22px;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: "0.2.0  ·  KASTRICK";
+                    color: #8191a2;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: 126px;
+                    height: 32px;
+                    border-radius: 6px;
+                    background: root.engine-ready ? #173b2d : #3b2424;
+                    border-width: 1px;
+                    border-color: root.engine-ready ? #2c7b58 : #7a3b3b;
+                    Text {
+                        text: root.engine-status;
+                        color: root.engine-ready ? #89e6b7 : #ffaaaa;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        font-size: 11px;
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 0px;
+            vertical-stretch: 1;
+
+            Rectangle {
+                width: 210px;
+                background: #0f151c;
+                border-width: 1px;
+                border-color: #202b36;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+
+                    Text { text: "WORKSPACE"; color: #718096; font-size: 10px; }
+                    Button { text: "Workbench"; enabled: root.active-page != 0; clicked => { root.active-page = 0; } }
+                    Button { text: "Settings"; enabled: root.active-page != 1; clicked => { root.active-page = 1; } }
+                    Button { text: "Diagnostics"; enabled: root.active-page != 2; clicked => { root.active-page = 2; } }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+
+                    Text { text: "RUNTIME CACHE"; color: #718096; font-size: 10px; }
+                    Text {
+                        text: root.runtime-cache-status;
+                        color: #bdc8d4;
+                        wrap: word-wrap;
+                        font-size: 11px;
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #0d1117;
+
+                if root.active-page == 0: HorizontalLayout {
+                    padding: 18px;
+                    spacing: 18px;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+
+                        Rectangle {
+                            height: 82px;
+                            background: #121922;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #283544;
+                            HorizontalLayout {
+                                padding: 14px;
+                                spacing: 12px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+                                    Text { text: root.world-name; color: #f0f4f8; font-size: 16px; }
+                                    Text { text: root.world-path; color: #8393a5; font-size: 11px; overflow: elide; }
+                                    Text { text: root.minecraft-version + "  ·  " + root.loader-type; color: #6fa8dc; font-size: 11px; }
+                                }
+                                Button { text: "SELECT WORLD"; clicked => { root.pick-world(); } }
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                            background: #10161d;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #26313d;
+
+                            VerticalLayout {
+                                padding: 18px;
+                                spacing: 10px;
+                                Text { text: "WORLD VIEW"; color: #dfe7ef; font-size: 14px; }
+                                Rectangle {
+                                    vertical-stretch: 1;
+                                    background: #151d26;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: #293746;
+                                    VerticalLayout {
+                                        padding: 18px;
+                                        Text {
+                                            text: root.world-path == "No world selected"
+                                                ? "Select a Minecraft world to load the map."
+                                                : "Rust/Slint map renderer comes next.\nThe UI event loop is already independent from Java/Gradle/cache work.";
+                                            color: #7f91a4;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 330px;
+                        background: #111820;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #293746;
+
+                        ScrollView {
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 10px;
+
+                                Text { text: "EXPORT"; color: #f0f4f8; font-size: 15px; }
+                                Text { text: "Name"; color: #8191a2; font-size: 10px; }
+                                LineEdit { text <=> root.export-name; }
+
+                                Text { text: "Output"; color: #8191a2; font-size: 10px; }
+                                Button { text: root.output-path == "" ? "Choose output folder" : root.output-path; clicked => { root.pick-output(); } }
+
+                                Text { text: "Format"; color: #8191a2; font-size: 10px; }
+                                Button {
+                                    text: root.export-format;
+                                    clicked => { root.export-format = root.export-format == "GLTF" ? "OBJ" : "GLTF"; }
+                                }
+
+                                Text { text: "Object mode"; color: #8191a2; font-size: 10px; }
+                                Button {
+                                    text: root.export-mode;
+                                    clicked => {
+                                        root.export-mode = root.export-mode == "Grouped"
+                                            ? "Individual blocks"
+                                            : root.export-mode == "Individual blocks" ? "Merged" : "Grouped";
+                                    }
+                                }
+
+                                CheckBox { text: "Optimize / face culling"; checked <=> root.optimize; }
+
+                                Text { text: "Selection bounds"; color: #8191a2; font-size: 10px; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    VerticalLayout { Text { text: "Min X"; color: #718096; font-size: 9px; } SpinBox { minimum: -30000000; maximum: 30000000; value <=> root.min-x; } }
+                                    VerticalLayout { Text { text: "Max X"; color: #718096; font-size: 9px; } SpinBox { minimum: -30000000; maximum: 30000000; value <=> root.max-x; } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    VerticalLayout { Text { text: "Min Y"; color: #718096; font-size: 9px; } SpinBox { minimum: -2048; maximum: 4096; value <=> root.min-y; } }
+                                    VerticalLayout { Text { text: "Max Y"; color: #718096; font-size: 9px; } SpinBox { minimum: -2048; maximum: 4096; value <=> root.max-y; } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    VerticalLayout { Text { text: "Min Z"; color: #718096; font-size: 9px; } SpinBox { minimum: -30000000; maximum: 30000000; value <=> root.min-z; } }
+                                    VerticalLayout { Text { text: "Max Z"; color: #718096; font-size: 9px; } SpinBox { minimum: -30000000; maximum: 30000000; value <=> root.max-z; } }
+                                }
+
+                                Button { text: root.task-active ? "WORKING…" : "EXPORT"; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.export-requested(); } }
+                            }
+                        }
+                    }
+                }
+
+                if root.active-page == 1: ScrollView {
+                    VerticalLayout {
+                        padding: 22px;
+                        spacing: 12px;
+                        Text { text: "SETTINGS"; color: #f0f4f8; font-size: 18px; }
+                        Text { text: "Minecraft runtime registry"; color: #c9d4df; font-size: 13px; }
+                        Text {
+                            text: "The runtime cache is instance-wide. It caches the full registered Minecraft block/state/model registry and is independent from export selection bounds.";
+                            color: #8191a2;
+                            wrap: word-wrap;
+                        }
+                        Button { text: "REBUILD FULL RUNTIME REGISTRY"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.rebuild-runtime-cache(); } }
+                        Button { text: "REMOVE ALL MINESPORT CACHE"; enabled: !root.task-active; clicked => { root.remove-cache(); } }
+                        Rectangle { height: 1px; background: #293746; }
+                        Text { text: "Desktop runtime"; color: #c9d4df; font-size: 13px; }
+                        Text { text: "Rust  ·  Slint 1.17.1  ·  no Fyne event queue"; color: #6fa8dc; }
+                    }
+                }
+
+                if root.active-page == 2: VerticalLayout {
+                    padding: 22px;
+                    spacing: 12px;
+                    Text { text: "DIAGNOSTICS"; color: #f0f4f8; font-size: 18px; }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: #080c10;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: #26313d;
+                        ScrollView {
+                            Text {
+                                x: 12px;
+                                y: 12px;
+                                width: parent.width - 24px;
+                                text: root.diagnostics;
+                                color: #9eb0c1;
+                                wrap: word-wrap;
+                                font-size: 11px;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: root.task-active ? 72px : 34px;
+            background: #101820;
+            border-width: 1px;
+            border-color: #26313d;
+
+            VerticalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 7px;
+                padding-bottom: 7px;
+                spacing: 4px;
+                HorizontalLayout {
+                    Text { text: root.task-title; color: #dfe7ef; font-size: 11px; }
+                    Text { horizontal-stretch: 1; text: root.task-detail; color: #718096; font-size: 10px; horizontal-alignment: right; overflow: elide; }
+                }
+                if root.task-active: ProgressIndicator { progress: root.task-progress; }
+            }
+        }
+    }
+}
