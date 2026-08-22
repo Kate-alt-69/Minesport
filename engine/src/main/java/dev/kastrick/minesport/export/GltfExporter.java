@@ -222,6 +222,11 @@ public class GltfExporter {
             writer.println(gson.toJson(root));
         }
 
+        // Native glTF lighting is part of the format export itself, not a Blender
+        // special case. Any glTF consumer that supports KHR_lights_punctual now
+        // receives Minecraft emitters; Blender sidecars only add extra semantics.
+        GltfPostProcessor.addMinecraftLights(outputFile, blocks);
+
         if (!flatter.isEmpty()) {
             FlatterMetadataExporter.write(outputFile, flatter, mode, "gltf", center);
         }
