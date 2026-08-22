@@ -5,9 +5,7 @@ import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockLightEntry;
 import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockVariant;
 import dev.kastrick.minesport.bridge.model.BridgeProtocol.Hello;
 import dev.kastrick.minesport.bridge.model.BridgeProtocol.LightState;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.TextureEntry;
 import dev.kastrick.minesport.bridge.registry.BlockGeometryExtractor;
-import dev.kastrick.minesport.bridge.registry.TextureExtractor;
 import dev.kastrick.minesport.bridge.socket.BridgeSender;
 
 import net.fabricmc.api.ClientModInitializer;
@@ -21,33 +19,66 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
+import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGHT;
+import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
+
 public final class MinesportBridge implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
-        System.out.println("[MinesportBridge] Initializing 26.x bridge...");
+        System.out.println("[MinesportBridge] Initializing 26.x runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
+            hideWorkerWindow(client);
             Thread dumpThread = new Thread(() -> runDump(client), "MinesportBridge-Dump");
             dumpThread.setDaemon(false);
             dumpThread.start();
         });
     }
 
+    private void hideWorkerWindow(Minecraft client) {
+        if (!"1".equals(System.getenv("MINESPORT_BRIDGE_WORKER"))) return;
+        try {
+            Object window = invokeFirstNoArg(client, "getWindow", "window");
+            if (window == null) return;
+            Object handleValue = invokeFirstNoArg(window, "handle", "getWindow", "getHandle");
+            if (handleValue instanceof Number number && number.longValue() != 0L) {
+                GLFW.glfwHideWindow(number.longValue());
+            }
+        } catch (Throwable ignored) {
+            // Window suppression is best-effort. Registry capture remains valid.
+        }
+    }
+
+    private static Object invokeFirstNoArg(Object target, String... names) {
+        if (target == null) return null;
+        for (String name : names) {
+            try {
+                Method method = target.getClass().getMethod(name);
+                return method.invoke(target);
+            } catch (ReflectiveOperationException ignored) {
+                // Try the next mapping-era name.
+            }
+        }
+        return null;
+    }
+
     private void runDump(Minecraft client) {
         try (BridgeSender sender = new BridgeSender()) {
             String mode = System.getenv("MINESPORT_BRIDGE_MODE");
             if (mode == null || mode.isBlank()) {
-                mode = "modded_only";
+                mode = "all";
             }
 
             Set<String> targetNamespaces = null;
@@ -59,16 +90,10 @@ public final class MinesportBridge implements ClientModInitializer {
             var blocks = new ArrayList<Block>();
             for (Block block : BuiltInRegistries.BLOCK) {
                 Identifier id = BuiltInRegistries.BLOCK.getKey(block);
-                if (id == null) {
-                    continue;
-                }
+                if (id == null) continue;
                 String namespace = id.getNamespace();
-                if ("modded_only".equals(mode) && "minecraft".equals(namespace)) {
-                    continue;
-                }
-                if (targetNamespaces != null && !targetNamespaces.contains(namespace)) {
-                    continue;
-                }
+                if ("modded_only".equals(mode) && "minecraft".equals(namespace)) continue;
+                if (targetNamespaces != null && !targetNamespaces.contains(namespace)) continue;
                 blocks.add(block);
             }
 
@@ -84,49 +109,34 @@ public final class MinesportBridge implements ClientModInitializer {
                 loadedMods()
             ));
 
-            Set<String> textureIds = new LinkedHashSet<>();
+            System.out.println("[MinesportBridge] Dumping " + blocks.size() + " registered block types...");
             for (Block block : blocks) {
                 Identifier id = BuiltInRegistries.BLOCK.getKey(block);
-                if (id == null) {
-                    continue;
-                }
+                if (id == null) continue;
 
                 List<BlockVariant> variants = extractSafe(client, block);
-                for (BlockVariant variant : variants) {
-                    variant.quads().forEach(quad -> {
-                        if (quad.textureId() != null && !"missing".equals(quad.textureId())) {
-                            textureIds.add(quad.textureId());
-                        }
-                    });
-                }
-
                 String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
-                sender.send("block", new BlockEntry(
+                String loaderType = vanillaMapping != null
+                    ? "polymer"
+                    : ("minecraft".equals(id.getNamespace()) ? "vanilla" : "fabric");
+
+                // Cache baked quads plus texture identifiers only. Image bytes are
+                // resolved later by Minesport from packs, mod JARs, vanilla/Piston.
+                sender.send(TYPE_BLOCK_ENTRY, new BlockEntry(
                     id.toString(),
                     vanillaMapping,
-                    vanillaMapping == null ? "fabric" : "polymer",
+                    loaderType,
                     variants
                 ));
 
                 List<LightState> lightStates = extractLightStates(block);
                 if (!lightStates.isEmpty()) {
-                    sender.send("block_light", new BlockLightEntry(id.toString(), lightStates));
+                    sender.send(TYPE_BLOCK_LIGHT, new BlockLightEntry(id.toString(), lightStates));
                 }
             }
 
-            for (String textureId : textureIds) {
-                TextureEntry texture = TextureExtractor.extractTexture(textureId, client);
-                if (texture != null) {
-                    sender.send("texture", texture);
-                }
-            }
-
-            sender.sendRaw(Map.of(
-                "type", "done",
-                "blocks", blocks.size(),
-                "textures", textureIds.size()
-            ));
-            System.out.println("[MinesportBridge] Dump complete.");
+            sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", blocks.size()));
+            System.out.println("[MinesportBridge] Registry/model dump complete.");
         } catch (Exception exception) {
             System.err.println("[MinesportBridge] Fatal: " + exception.getMessage());
             exception.printStackTrace();
@@ -160,9 +170,7 @@ public final class MinesportBridge implements ClientModInitializer {
             } catch (Exception ignored) {
                 continue;
             }
-            if (level <= 0) {
-                continue;
-            }
+            if (level <= 0) continue;
 
             Map<String, String> properties = new LinkedHashMap<>();
             for (Property<?> property : state.getProperties()) {
@@ -178,16 +186,11 @@ public final class MinesportBridge implements ClientModInitializer {
         return String.valueOf(state.getValue((Property) property));
     }
 
-    /**
-     * Polymer remains optional: discover its method dynamically so the bridge
-     * does not require a particular Polymer build just to compile.
-     */
+    /** Polymer remains optional; resolve its API dynamically. */
     private String tryGetPolymerMapping(Block block) {
         try {
             Class<?> polymerBlock = Class.forName("eu.pb4.polymer.core.api.block.PolymerBlock");
-            if (!polymerBlock.isInstance(block)) {
-                return null;
-            }
+            if (!polymerBlock.isInstance(block)) return null;
 
             Method method = Arrays.stream(polymerBlock.getMethods())
                 .filter(candidate ->
@@ -197,25 +200,17 @@ public final class MinesportBridge implements ClientModInitializer {
                 )
                 .findFirst()
                 .orElse(null);
-            if (method == null) {
-                return null;
-            }
+            if (method == null) return null;
 
             Object[] args = new Object[method.getParameterCount()];
             args[0] = block.defaultBlockState();
-            for (int i = 1; i < args.length; i++) {
-                args[i] = null;
-            }
+            for (int i = 1; i < args.length; i++) args[i] = null;
 
             Object result = method.invoke(block, args);
-            if (!(result instanceof BlockState vanillaState)) {
-                return null;
-            }
+            if (!(result instanceof BlockState vanillaState)) return null;
 
             Identifier vanillaId = BuiltInRegistries.BLOCK.getKey(vanillaState.getBlock());
-            if (vanillaId == null) {
-                return null;
-            }
+            if (vanillaId == null) return null;
 
             StringBuilder text = new StringBuilder(vanillaId.toString());
             var values = new ArrayList<String>();
@@ -244,6 +239,7 @@ public final class MinesportBridge implements ClientModInitializer {
                 + mod.getMetadata().getVersion().getFriendlyString()
             )
         );
+        Collections.sort(mods);
         return mods;
     }
 }
