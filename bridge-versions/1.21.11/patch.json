@@ -12,7 +12,6 @@
     {"op": "overlay", "source": "bridge-versions/shared/build-java21.gradle", "target": "build.gradle"},
     {"op": "overlay", "source": "bridge-versions/shared/fabric-mod-java21.json", "target": "src/main/resources/fabric.mod.json"},
     {"op": "overlay", "source": "bridge-versions/shared/BridgeProtocolAnimated.java", "target": "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java"},
-    {"op": "overlay", "source": "bridge-versions/1.21.11/overlays/BlockGeometryExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"},
-    {"op": "overlay", "source": "bridge-versions/1.21.11/overlays/TextureExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/TextureExtractor.java"}
+    {"op": "overlay", "source": "bridge-versions/1.21.11/overlays/BlockGeometryExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"}
   ]
 }
