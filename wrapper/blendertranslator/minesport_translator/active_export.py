@@ -13,6 +13,7 @@ ACTIVE_TAG = "minesport_v1.5_active_export"
 ACTIVE_EXPORT_VERSION = "0.1.6"
 PROJECT_ID_KEY = "minesport_project_id"
 PROJECT_PATH_KEY = "minesport_project_path"
+SOURCE_ASSET_KEY = "minesport_source_asset"
 
 
 def detect(asset_path, metadata=None):
@@ -69,7 +70,8 @@ def activate(asset_path, metadata=None, objects=None):
     """Activate richer export features and persist Minesport project identity."""
     active = detect(asset_path, metadata)
     project_id, project_path = _project_identity(metadata)
-    if not active and not project_id:
+    source_asset = str(Path(asset_path).resolve()) if asset_path else ""
+    if not active and not project_id and not source_asset:
         return False
 
     try:
@@ -90,6 +92,8 @@ def activate(asset_path, metadata=None, objects=None):
             obj[PROJECT_ID_KEY] = project_id
             if project_path:
                 obj[PROJECT_PATH_KEY] = project_path
+        if source_asset:
+            obj[SOURCE_ASSET_KEY] = source_asset
 
     if active:
         bpy.context.scene[ACTIVE_TAG] = True
@@ -100,4 +104,6 @@ def activate(asset_path, metadata=None, objects=None):
         if project_path:
             bpy.context.scene[PROJECT_PATH_KEY] = project_path
         print(f"[Minesport Translator] project identity: {project_id[:8]}")
+    if source_asset:
+        bpy.context.scene[SOURCE_ASSET_KEY] = source_asset
     return active
