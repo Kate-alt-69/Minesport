@@ -95,6 +95,69 @@ class FlatterOptimizerTest {
     }
 
     @Test
+    void repeatedDirtPathsBecomeTheirOwnShapeFlatterObject() {
+        ResolverChain chain = new ResolverChain();
+        chain.addResolver(new ShapeResolver());
+        List<BlockData> blocks = List.of(
+            new BlockData(0, 64, 0, "minecraft:dirt_path", Map.of()),
+            new BlockData(1, 64, 0, "minecraft:dirt_path", Map.of()),
+            new BlockData(2, 64, 0, "minecraft:dirt_path", Map.of())
+        );
+
+        FlatterOptimizer.Result result = FlatterOptimizer.compile(blocks, chain, 16);
+
+        assertFalse(result.isEmpty());
+        assertEquals(3, result.blockCount());
+        assertEquals(1, result.objects().size());
+        FlatterOptimizer.FlatterObject object = result.objects().getFirst();
+        assertTrue(object.id().startsWith("FLATTER_SHAPE_minecraft_dirt_path_"));
+        assertEquals(3, object.blockCount());
+        assertEquals(1, object.palette().size());
+        assertTrue(object.quads().size() < 18,
+            "unit-sized path top/bottom surfaces should still be greedily combined");
+        for (BlockData block : blocks) assertTrue(result.contains(block));
+    }
+
+    @Test
+    void solidsAndRepeatedShapesStayInSeparateFlatterObjects() {
+        ResolverChain chain = new ResolverChain();
+        chain.addResolver(new ShapeResolver());
+        List<BlockData> blocks = List.of(
+            new BlockData(0, 64, 0, "minecraft:stone", Map.of()),
+            new BlockData(1, 64, 0, "minecraft:stone", Map.of()),
+            new BlockData(0, 65, 0, "minecraft:dirt_path", Map.of()),
+            new BlockData(1, 65, 0, "minecraft:dirt_path", Map.of())
+        );
+
+        FlatterOptimizer.Result result = FlatterOptimizer.compile(blocks, chain, 16);
+
+        assertEquals(4, result.blockCount());
+        assertEquals(2, result.objects().size());
+        assertTrue(result.objects().stream().anyMatch(o -> o.id().startsWith("FLATTER_SHAPE_")));
+        assertTrue(result.objects().stream().anyMatch(o -> !o.id().startsWith("FLATTER_SHAPE_")));
+    }
+
+    @Test
+    void configuredCellSizeControlsFlatterObjectPartitioning() {
+        ResolverChain chain = new ResolverChain();
+        chain.addResolver(new CubeResolver());
+        List<BlockData> blocks = List.of(
+            new BlockData(0, 64, 0, "minecraft:stone", Map.of()),
+            new BlockData(1, 64, 0, "minecraft:stone", Map.of()),
+            new BlockData(8, 64, 0, "minecraft:stone", Map.of()),
+            new BlockData(9, 64, 0, "minecraft:stone", Map.of())
+        );
+
+        FlatterOptimizer.Result small = FlatterOptimizer.compile(blocks, chain, 8);
+        FlatterOptimizer.Result balanced = FlatterOptimizer.compile(blocks, chain, 16);
+
+        assertEquals(2, small.objects().size(), "8³ cells should split the two pairs");
+        assertEquals(1, balanced.objects().size(), "16³ cells should keep all four blocks together");
+        assertEquals(4, small.blockCount());
+        assertEquals(4, balanced.blockCount());
+    }
+
+    @Test
     void flatterRunsBeforeEveryObjAndGltfGroupingMode() throws Exception {
         ResolverChain chain = new ResolverChain();
         chain.addResolver(new CubeResolver());
@@ -127,6 +190,7 @@ class FlatterOptimizerTest {
                 assertTrue(Files.isRegularFile(sidecar));
                 String sidecarText = Files.readString(sidecar);
                 assertTrue(sidecarText.contains("\"flatterVersion\": \"0.1.0\""));
+                assertTrue(sidecarText.contains("\"flatterCellSize\": 16"));
                 assertTrue(sidecarText.contains("\"minesport_v1.5_active_export\": true"));
 
                 File gltf = temp.resolve(stem + ".gltf").toFile();
@@ -150,22 +214,26 @@ class FlatterOptimizerTest {
         }
     }
 
-    private static BlockModel.Element cube(String texture, boolean allFaces, boolean sidesOnly) {
-        BlockModel.Element cube = new BlockModel.Element();
-        cube.from = new float[]{0f, 0f, 0f};
-        cube.to = new float[]{16f, 16f, 16f};
+    private static BlockModel.Element box(String texture, float height, boolean allFaces, boolean sidesOnly) {
+        BlockModel.Element box = new BlockModel.Element();
+        box.from = new float[]{0f, 0f, 0f};
+        box.to = new float[]{16f, height, 16f};
         for (String direction : List.of("north", "south", "east", "west", "up", "down")) {
             if (sidesOnly && (direction.equals("up") || direction.equals("down"))) continue;
             if (!allFaces && !sidesOnly) continue;
             BlockModel.Face face = new BlockModel.Face();
             face.texture = texture;
             face.cullface = direction;
-            cube.faces.put(direction, face);
+            box.faces.put(direction, face);
         }
-        return cube;
+        return box;
     }
 
-    private static final class CubeResolver implements AssetResolver {
+    private static BlockModel.Element cube(String texture, boolean allFaces, boolean sidesOnly) {
+        return box(texture, 16f, allFaces, sidesOnly);
+    }
+
+    private static class CubeResolver implements AssetResolver {
         @Override public boolean canResolve(String blockId) { return blockId.startsWith("minecraft:"); }
 
         @Override
@@ -191,6 +259,31 @@ class FlatterOptimizerTest {
         }
 
         @Override public String name() { return "FLATTER test resolver"; }
+    }
+
+    private static final class ShapeResolver extends CubeResolver {
+        @Override
+        public BlockState resolveBlockState(String blockId) {
+            BlockState state = new BlockState();
+            state.format = BlockState.Format.VARIANTS;
+            BlockState.ModelApplication app = new BlockState.ModelApplication();
+            app.modelPath = blockId.equals("minecraft:dirt_path")
+                ? "minecraft:block/dirt_path"
+                : "minecraft:block/stone";
+            state.variants.put("", List.of(app));
+            return state;
+        }
+
+        @Override
+        public BlockModel resolveModel(String modelPath) {
+            BlockModel model = new BlockModel();
+            if (modelPath.endsWith("/dirt_path")) {
+                model.elements.add(box("minecraft:block/dirt_path_top", 15f, true, false));
+            } else {
+                model.elements.add(cube("minecraft:block/stone", true, false));
+            }
+            return model;
+        }
     }
 
     private static final class LayeredCubeResolver implements AssetResolver {
