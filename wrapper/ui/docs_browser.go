@@ -25,9 +25,9 @@ const (
 )
 
 type documentationIndex struct {
-	Schema   int                 `json:"schema"`
-	Version  string              `json:"version"`
-	Pages    []documentationPage `json:"pages"`
+	Schema  int                 `json:"schema"`
+	Version string              `json:"version"`
+	Pages   []documentationPage `json:"pages"`
 }
 
 type documentationPage struct {
@@ -139,7 +139,7 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 	summary.Wrapping = fyne.TextWrapWord
 	pageHost := container.NewMax(widget.NewLabel("Choose a page from the list."))
 
-	openGitHub := widget.NewButtonWithIcon("Open page on GitHub", theme.ComputerIcon(), func() {})
+	openGitHub := widget.NewButtonWithIcon("Open page on GitHub", theme.FileIcon(), func() {})
 	watchVideo := widget.NewButtonWithIcon("Watch tutorial video", theme.MediaVideoIcon(), func() {})
 	watchVideo.Disable()
 
@@ -187,9 +187,9 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 			return
 		}
 
-		go func(expectedPath string) {
+		go func(expectedIndex int, expectedPath string) {
 			data, err := fetchDocumentationBytes(rawURL)
-			if selected != index || pages[index].Path != expectedPath {
+			if selected != expectedIndex || expectedIndex < 0 || expectedIndex >= len(pages) || pages[expectedIndex].Path != expectedPath {
 				return
 			}
 			loading.Stop()
@@ -205,7 +205,7 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 			rich.Wrapping = fyne.TextWrapWord
 			pageHost.Add(container.NewVScroll(container.NewPadded(rich)))
 			status.SetText("Loaded from GitHub · " + expectedPath)
-		}(page.Path)
+		}(index, page.Path)
 	}
 
 	list = widget.NewList(
@@ -215,29 +215,29 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 			id.TextStyle = fyne.TextStyle{Monospace: true, Bold: true}
 			name := widget.NewLabel("Documentation page")
 			name.Truncation = fyne.TextTruncateEllipsis
-			return container.NewBorder(nil, nil, id, nil, name)
+			return container.NewVBox(id, name)
 		},
 		func(item widget.ListItemID, object fyne.CanvasObject) {
-			if item < 0 || item >= len(pages) {
+			if int(item) < 0 || int(item) >= len(pages) {
 				return
 			}
 			row := object.(*fyne.Container)
 			id := row.Objects[0].(*widget.Label)
 			name := row.Objects[1].(*widget.Label)
-			id.SetText(pages[item].ID)
-			name.SetText(pages[item].Title)
+			id.SetText(pages[int(item)].ID)
+			name.SetText(pages[int(item)].Title)
 		},
 	)
-	list.OnSelected = func(item widget.ListItemID) { showPage(item) }
+	list.OnSelected = func(item widget.ListItemID) { showPage(int(item)) }
 
 	previous := widget.NewButtonWithIcon("Previous", theme.NavigateBackIcon(), func() {
 		if selected > 0 {
-			list.Select(selected - 1)
+			list.Select(widget.ListItemID(selected - 1))
 		}
 	})
 	next := widget.NewButtonWithIcon("Next", theme.NavigateNextIcon(), func() {
 		if selected+1 < len(pages) {
-			list.Select(selected + 1)
+			list.Select(widget.ListItemID(selected + 1))
 		}
 	})
 
@@ -246,14 +246,14 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 		nil, nil, nil,
 		list,
 	)
-	left.SetMinSize(fyne.NewSize(285, 520))
+	leftSized := container.NewGridWrap(fyne.NewSize(285, 520), left)
 	right := container.NewBorder(
 		container.NewVBox(title, summary, widget.NewSeparator()),
 		container.NewVBox(widget.NewSeparator(), status, container.NewHBox(previous, next, openGitHub, watchVideo)),
 		nil, nil,
 		pageHost,
 	)
-	split := container.NewHSplit(left, right)
+	split := container.NewHSplit(leftSized, right)
 	split.SetOffset(0.30)
 
 	d := dialog.NewCustom("Minesport Documentation · 0.2.x", "Close", split, ms.window)
@@ -292,6 +292,6 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 		if selected >= len(pages) {
 			selected = 0
 		}
-		list.Select(selected)
+		list.Select(widget.ListItemID(selected))
 	}()
 }
