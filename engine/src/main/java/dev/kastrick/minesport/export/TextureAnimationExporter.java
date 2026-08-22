@@ -11,7 +11,6 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -92,10 +91,16 @@ public final class TextureAnimationExporter {
             if (!root.has("animation") || !root.get("animation").isJsonObject()) return null;
             JsonObject animation = root.getAsJsonObject("animation");
 
-            int frameWidth = positiveInt(animation, "width", image.getWidth());
+            int imageWidth = image.getWidth();
+            int imageHeight = image.getHeight();
+            int frameWidth = positiveInt(animation, "width", imageWidth);
             int frameHeight = positiveInt(animation, "height", frameWidth);
-            if (frameHeight <= 0 || image.getHeight() % frameHeight != 0) return null;
-            int frameCount = image.getHeight() / frameHeight;
+            if (frameWidth <= 0 || frameHeight <= 0) return null;
+            if (imageWidth % frameWidth != 0 || imageHeight % frameHeight != 0) return null;
+
+            int columns = imageWidth / frameWidth;
+            int rows = imageHeight / frameHeight;
+            int frameCount = columns * rows;
             if (frameCount <= 1) return null;
 
             int defaultTicks = positiveInt(animation, "frametime", 1);
@@ -125,6 +130,12 @@ public final class TextureAnimationExporter {
             descriptor.addProperty("kind", "texture_frames");
             descriptor.addProperty("material", material.materialName());
             descriptor.addProperty("texture", material.texturePath());
+            descriptor.addProperty("imageWidth", imageWidth);
+            descriptor.addProperty("imageHeight", imageHeight);
+            descriptor.addProperty("frameWidth", frameWidth);
+            descriptor.addProperty("frameHeight", frameHeight);
+            descriptor.addProperty("columns", columns);
+            descriptor.addProperty("rows", rows);
             descriptor.addProperty("frameCount", frameCount);
             // Expanded sequence uses one Minecraft tick per entry. This keeps
             // Blender's driver tiny while preserving custom per-frame durations.
