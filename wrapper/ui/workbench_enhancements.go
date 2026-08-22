@@ -227,28 +227,28 @@ func (ms *MinesportApp) runQuickPreflight(status *widget.Label, run *widget.Butt
 	ms.beginWorkbenchTaskV3("PREFLIGHT", "Scanning selected blocks…", false)
 
 	go func() {
-		defer run.Enable()
 		file, count, err := ms.engine.ListBlocks(params)
 		if err != nil {
-			status.SetText("Preflight: failed · see task/debug log")
-			ms.finishWorkbenchTaskV3(false, "Preflight failed", err.Error())
+			ms.dispatchUI(func() {
+				run.Enable()
+				status.SetText("Preflight: failed · see task/debug log")
+				ms.finishWorkbenchTaskV3(false, "Preflight failed", err.Error())
+			})
 			return
 		}
 		defer os.Remove(file)
 
 		analysis, err := analyzePreviewBlockFile(file)
 		if err != nil {
-			status.SetText("Preflight: diagnostics could not read the preview list")
-			ms.finishWorkbenchTaskV3(false, "Preflight diagnostics failed", err.Error())
+			ms.dispatchUI(func() {
+				run.Enable()
+				status.SetText("Preflight: diagnostics could not read the preview list")
+				ms.finishWorkbenchTaskV3(false, "Preflight diagnostics failed", err.Error())
+			})
 			return
 		}
 		if analysis.Blocks == 0 && count > 0 {
 			analysis.Blocks = count
-		}
-		if stateValue, ok := exportPreflightStates.Load(ms); ok {
-			if state, _ := stateValue.(*exportPreflightState); state != nil {
-				state.lastAnalysis = &analysis
-			}
 		}
 
 		short := fmt.Sprintf(
@@ -257,9 +257,21 @@ func (ms *MinesportApp) runQuickPreflight(status *widget.Label, run *widget.Butt
 			formatCount(analysis.UniqueTypes),
 			formatCount(analysis.UnresolvedTextures),
 		)
-		status.SetText("Preflight: " + short)
-		ms.finishWorkbenchTaskV3(true, "Preflight ready", short)
-		ms.appendLog("Preflight diagnostics:\n" + ms.quickPreflightText(analysis) + "\n" + ms.optimizationAnalysisText(analysis))
+		diagnostics := ms.quickPreflightText(analysis) + "\n" + ms.optimizationAnalysisText(analysis)
+
+		// The worker goroutine owns file/JSON work only. Every Fyne mutation is
+		// performed on the ordered UI queue in one compact completion callback.
+		ms.dispatchUI(func() {
+			run.Enable()
+			if stateValue, ok := exportPreflightStates.Load(ms); ok {
+				if state, _ := stateValue.(*exportPreflightState); state != nil {
+					state.lastAnalysis = &analysis
+				}
+			}
+			status.SetText("Preflight: " + short)
+			ms.finishWorkbenchTaskV3(true, "Preflight ready", short)
+			ms.appendLog("Preflight diagnostics:\n" + diagnostics)
+		})
 	}()
 }
 
