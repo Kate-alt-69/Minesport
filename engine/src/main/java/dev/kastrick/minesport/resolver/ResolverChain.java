@@ -25,8 +25,6 @@ public class ResolverChain {
     private final Map<String, String> textureSources = new ConcurrentHashMap<>();
 
     public ResolverChain() { CURRENT.set(this); }
-
-    /** Resolver stack active on this export thread; used by DCC metadata only. */
     public static ResolverChain current() { return CURRENT.get(); }
 
     public void addResolver(AssetResolver resolver) { resolvers.add(resolver); }
@@ -41,9 +39,7 @@ public class ResolverChain {
             }
         }
         blockStateSources.put(blockId, "missing");
-        if (missingBlockStates.add(blockId)) {
-            System.err.println("[ResolverChain] No blockstate found for: " + blockId);
-        }
+        if (missingBlockStates.add(blockId)) System.err.println("[ResolverChain] No blockstate found for: " + blockId);
         return null;
     }
 
@@ -55,7 +51,6 @@ public class ResolverChain {
             System.err.println("[ResolverChain] Model inheritance cycle: " + normalized);
             return null;
         }
-
         String ns = normalized.contains(":") ? normalized.substring(0, normalized.indexOf(':')) : "minecraft";
         String dummyId = ns + ":__model__";
         for (AssetResolver r : resolvers) {
@@ -108,7 +103,13 @@ public class ResolverChain {
             BufferedImage img = r.resolveTexture(normalized);
             if (img == null) continue;
             textureSources.put(texturePath, r.name());
-            return r.resolveTextureMetadata(normalized);
+            String metadata = r.resolveTextureMetadata(normalized);
+            if (metadata == null && r instanceof VanillaResolver vanilla) {
+                metadata = AnimationAwareVanillaResolver.readFrom(vanilla, normalized);
+            }
+            // The winning PNG owns the animation decision. Null means static;
+            // never continue into a lower-priority resolver after this point.
+            return metadata;
         }
         return null;
     }
