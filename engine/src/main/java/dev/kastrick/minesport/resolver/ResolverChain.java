@@ -13,11 +13,15 @@ public class ResolverChain {
         "minecraft:builtin/generated",
         "minecraft:builtin/entity"
     );
+    public static final String CLASSIC_MISSING_SOURCE = "Classic Missing Texture";
 
     private final List<AssetResolver> resolvers = new ArrayList<>();
     private final Set<String> missingBlockStates = ConcurrentHashMap.newKeySet();
     private final Set<String> missingModels = ConcurrentHashMap.newKeySet();
     private final Set<String> missingTextures = ConcurrentHashMap.newKeySet();
+    private final Map<String, String> blockStateSources = new ConcurrentHashMap<>();
+    private final Map<String, String> modelSources = new ConcurrentHashMap<>();
+    private final Map<String, String> textureSources = new ConcurrentHashMap<>();
 
     public void addResolver(AssetResolver resolver) { resolvers.add(resolver); }
 
@@ -25,8 +29,12 @@ public class ResolverChain {
         for (AssetResolver r : resolvers) {
             if (!r.canResolve(blockId)) continue;
             BlockState bs = r.resolveBlockState(blockId);
-            if (bs != null) return bs;
+            if (bs != null) {
+                blockStateSources.put(blockId, r.name());
+                return bs;
+            }
         }
+        blockStateSources.put(blockId, "missing");
         if (missingBlockStates.add(blockId)) {
             System.err.println("[ResolverChain] No blockstate found for: " + blockId);
         }
@@ -72,9 +80,11 @@ public class ResolverChain {
                     model.mergeTextures(parent.textures);
                 }
             }
+            modelSources.put(normalized, r.name());
             return model;
         }
 
+        modelSources.put(normalized, "missing");
         if (missingModels.add(normalized)) {
             System.err.println("[ResolverChain] No model found for: " + normalized);
         }
@@ -88,8 +98,12 @@ public class ResolverChain {
         for (AssetResolver r : resolvers) {
             if (!r.canResolve(dummyId)) continue;
             BufferedImage img = r.resolveTexture(normalized);
-            if (img != null) return img;
+            if (img != null) {
+                textureSources.put(texturePath, r.name());
+                return img;
+            }
         }
+        textureSources.put(texturePath, CLASSIC_MISSING_SOURCE);
         if (missingTextures.add(texturePath)) {
             System.err.println(
                 "[ResolverChain] No texture found for: " + texturePath
@@ -97,6 +111,30 @@ public class ResolverChain {
             );
         }
         return MissingTexture.image();
+    }
+
+    public String blockStateSource(String blockId) {
+        return blockStateSources.getOrDefault(blockId, "");
+    }
+
+    public String modelSource(String modelPath) {
+        return modelSources.getOrDefault(normalizeModelPath(modelPath), "");
+    }
+
+    public String textureSource(String texturePath) {
+        return textureSources.getOrDefault(texturePath, "");
+    }
+
+    public Map<String, String> textureSourcesSnapshot() {
+        return Collections.unmodifiableMap(new TreeMap<>(textureSources));
+    }
+
+    public Map<String, String> modelSourcesSnapshot() {
+        return Collections.unmodifiableMap(new TreeMap<>(modelSources));
+    }
+
+    public Map<String, String> blockStateSourcesSnapshot() {
+        return Collections.unmodifiableMap(new TreeMap<>(blockStateSources));
     }
 
     private static String normalizeModelPath(String path) {

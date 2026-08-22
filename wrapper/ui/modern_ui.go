@@ -32,8 +32,10 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	w.SetContent(ms.buildModernUI())
 	ms.installWorkbenchEnhancements()
 	ms.installProjectControls()
+	installWorkbenchAssetCenter(ms)
 	ms.installViewportShortcuts()
 	w.SetCloseIntercept(func() {
+		cleanupWorkbenchAssetCenter(ms)
 		cleanupProjectControls(ms)
 		cleanupWorkbenchEnhancements(ms)
 		cleanupWorkbenchRuntimeV3(ms)
