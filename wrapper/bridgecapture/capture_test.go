@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -120,7 +121,7 @@ func TestCaptureWritesReusableRuntimeModelRegistry(t *testing.T) {
 	if len(block.Lights) != 1 || block.Lights[0].LightLevel != 12 || block.Lights[0].Properties["lit"] != "true" {
 		t.Fatalf("unexpected light state: %#v", block.Lights)
 	}
-	if string(data) == "do-not-cache-me" {
+	if strings.Contains(string(data), "do-not-cache-me") {
 		t.Fatal("texture image payload must not be cached")
 	}
 }
