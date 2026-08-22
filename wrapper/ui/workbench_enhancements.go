@@ -18,11 +18,9 @@ import (
 )
 
 type exportPreflightState struct {
-	result       *widget.Label
-	run          *widget.Button
 	preset       *widget.Select
 	lastPreset   string
-	optimizer    *widget.Label
+	summary      *widget.Label
 	lastAnalysis *previewBlockAnalysis
 }
 
@@ -36,9 +34,9 @@ var builtInExportPresets = []string{
 	"Modded Accurate",
 }
 
-// installWorkbenchEnhancements decorates the existing Export activity instead
-// of creating another copy of the workbench shell. Future workflow tools can
-// use the same pattern to extend an activity holder in place.
+// installWorkbenchEnhancements keeps the normal export workflow compact.
+// Expensive diagnostics belong in Settings/Advanced and report through the
+// bottom task shelf instead of permanently occupying the Export sidebar.
 func (ms *MinesportApp) installWorkbenchEnhancements() {
 	wb := ms.workbenchState()
 	if wb == nil {
@@ -55,7 +53,6 @@ func (ms *MinesportApp) installWorkbenchEnhancements() {
 
 	base := holder.Objects[0]
 	state := &exportPreflightState{}
-
 	state.preset = widget.NewSelect(builtInExportPresets, func(choice string) {
 		if strings.TrimSpace(choice) == "" || choice == "Custom" {
 			state.lastPreset = "Custom"
@@ -63,26 +60,19 @@ func (ms *MinesportApp) installWorkbenchEnhancements() {
 		}
 		ms.applyBuiltInExportPreset(choice)
 		state.lastPreset = choice
-		if state.lastAnalysis != nil && state.optimizer != nil {
-			state.optimizer.SetText(ms.optimizationAnalysisText(*state.lastAnalysis))
+		if state.summary != nil {
+			state.summary.SetText(ms.optimizationSummaryText())
 		}
 	})
 	state.preset.SetSelected("Custom")
 
-	state.run = widget.NewButtonWithIcon("Run quick preflight", theme.SearchIcon(), func() {
-		ms.runQuickPreflight()
-	})
-	state.result = widget.NewLabel("")
-	state.result.Wrapping = fyne.TextWrapWord
-	state.result.Hide()
-	state.optimizer = widget.NewLabel("Run Quick Preflight to populate the optimization analyzer.")
-	state.optimizer.Wrapping = fyne.TextWrapWord
-
-	presetHint := widget.NewLabel("Presets configure the current export controls; Advanced settings remain available underneath.")
+	presetHint := widget.NewLabel("Presets configure the current export controls; Advanced contains diagnostics and manual cache tools.")
 	presetHint.Wrapping = fyne.TextWrapWord
 	presetCard := widget.NewCard("PRESET", "", container.NewVBox(state.preset, presetHint))
 
-	optimizeMore := widget.NewButton("Apply safe optimization", func() {
+	state.summary = widget.NewLabel(ms.optimizationSummaryText())
+	state.summary.Truncation = fyne.TextTruncateEllipsis
+	applySafe := widget.NewButton("Apply safe optimization", func() {
 		ms.settings.OptimizeOutputEnabled = true
 		ms.settings.FlatterOptimizationEnabled = true
 		ms.settings.HiddenBlockCullingEnabled = false
@@ -91,42 +81,17 @@ func (ms *MinesportApp) installWorkbenchEnhancements() {
 		}
 		ms.applySettings(ms.settings)
 		ms.refreshWorkbenchSettingsActivity()
-		if state.lastAnalysis != nil {
-			state.optimizer.SetText(ms.optimizationAnalysisText(*state.lastAnalysis))
-		}
-		ms.appendLog("Optimization analyzer applied safe optimization: face culling + FLATTER")
+		state.summary.SetText(ms.optimizationSummaryText())
+		ms.beginWorkbenchTaskV3("OPTIMIZATION", "Applying safe optimization…", false)
+		ms.finishWorkbenchTaskV3(true, "Safe optimization applied", "Face culling + FLATTER enabled · hidden-block culling disabled")
+		ms.appendLog("Safe optimization applied: face culling + FLATTER; hidden-block culling disabled")
 	})
-	optimizerCard := widget.NewCard(
-		"OPTIMIZATION ANALYZER",
-		"Logical pressure before final geometry compilation",
-		container.NewVBox(state.optimizer, optimizeMore),
-	)
-	optimizerHolder := container.NewVBox(optimizerCard)
-	optimizerHolder.Hide()
-	analysisToggle := widget.NewButton("Show optimization analysis", nil)
-	analysisToggle.OnTapped = func() {
-		if optimizerHolder.Visible() {
-			optimizerHolder.Hide()
-			analysisToggle.SetText("Show optimization analysis")
-			return
-		}
-		optimizerHolder.Show()
-		analysisToggle.SetText("Hide optimization analysis")
-	}
+	compactOptimization := container.NewVBox(state.summary, applySafe)
 
-	preflightCard := widget.NewCard(
-		"QUICK PREFLIGHT",
-		"",
-		container.NewVBox(state.run, state.result, analysisToggle, optimizerHolder),
-	)
-
-	// Keep diagnostics compact around the real export pane. The analyzer is
-	// collapsed by default so its multiline text can never consume the sidebar
-	// and push the actual Export button out of view.
 	holder.RemoveAll()
 	holder.Add(container.NewBorder(
 		presetCard,
-		preflightCard,
+		container.NewPadded(compactOptimization),
 		nil,
 		nil,
 		base,
@@ -136,6 +101,16 @@ func (ms *MinesportApp) installWorkbenchEnhancements() {
 
 func cleanupWorkbenchEnhancements(ms *MinesportApp) {
 	exportPreflightStates.Delete(ms)
+}
+
+func (ms *MinesportApp) optimizationSummaryText() string {
+	face := ms.settings.OptimizeOutputEnabled || (ms.optimizeCheck != nil && ms.optimizeCheck.Checked)
+	return fmt.Sprintf(
+		"Optimization: face culling %s · FLATTER %s · hidden culling %s",
+		enabledText(face),
+		enabledText(ms.settings.FlatterOptimizationEnabled),
+		enabledText(ms.settings.HiddenBlockCullingEnabled),
+	)
 }
 
 func (ms *MinesportApp) applyBuiltInExportPreset(name string) {
@@ -197,44 +172,40 @@ func (ms *MinesportApp) refreshWorkbenchSettingsActivity() {
 	}
 	holder.RemoveAll()
 	holder.Add(ms.buildWorkbenchSettingsPane())
-	// Reattach workbench decorators that live above the base Settings pane.
 	workbenchAssetCenterStates.Delete(ms)
 	installWorkbenchAssetCenter(ms)
 }
 
-func (ms *MinesportApp) setPreflightBusy(state *exportPreflightState, busy bool) {
-	if state != nil && state.run != nil {
-		if busy {
-			state.run.Disable()
-		} else {
-			state.run.Enable()
-		}
-	}
-	if ms.exportBtn != nil {
-		if busy {
-			ms.exportBtn.Disable()
-		} else if ms.worldPath != "" && ms.isEngineAvailable() {
-			ms.exportBtn.Enable()
-		}
-	}
+// buildAdvancedPreflightCard keeps heavyweight preview analysis out of the
+// Export activity. Results are summarized here and reported in the task shelf;
+// the full diagnostic text is written to the debug log.
+func (ms *MinesportApp) buildAdvancedPreflightCard() fyne.CanvasObject {
+	status := widget.NewLabel("Preflight: not run for the current selection.")
+	status.Truncation = fyne.TextTruncateEllipsis
+	run := widget.NewButtonWithIcon("Run manual preflight", theme.SearchIcon(), nil)
+	run.OnTapped = func() { ms.runQuickPreflight(status, run) }
+	return widget.NewCard(
+		"MANUAL PREFLIGHT",
+		"Diagnostic only · normal export does not require this step",
+		container.NewVBox(status, run),
+	)
 }
 
-func (ms *MinesportApp) runQuickPreflight() {
-	stateValue, ok := exportPreflightStates.Load(ms)
-	if !ok {
-		return
-	}
-	state, _ := stateValue.(*exportPreflightState)
-	if state == nil || state.run == nil || state.result == nil {
-		return
-	}
-	state.result.Show()
+func (ms *MinesportApp) buildAdvancedPipelineTools() fyne.CanvasObject {
+	return container.NewVBox(
+		workbenchSection("ADVANCED EXPORT TOOLS"),
+		ms.buildAdvancedPreflightCard(),
+		ms.buildBridgeRuntimeAdvancedCard(),
+	)
+}
+
+func (ms *MinesportApp) runQuickPreflight(status *widget.Label, run *widget.Button) {
 	if ms.worldPath == "" {
-		state.result.SetText("Select a Minecraft world before running preflight.")
+		status.SetText("Preflight: select a Minecraft world first.")
 		return
 	}
 	if !ms.isEngineAvailable() {
-		state.result.SetText("The core engine is unavailable. See the debug console for startup details.")
+		status.SetText("Preflight: core engine unavailable.")
 		return
 	}
 
@@ -253,37 +224,44 @@ func (ms *MinesportApp) runQuickPreflight() {
 		params.MinZ, params.MaxZ = ms.minZRange.Bounds()
 	}
 
-	ms.setPreflightBusy(state, true)
-	state.result.SetText("Scanning the selected world region…")
+	run.Disable()
+	status.SetText("Preflight: scanning selected region…")
 	ms.beginWorkbenchTaskV3("PREFLIGHT", "Scanning selected blocks…", false)
 
 	go func() {
+		defer run.Enable()
 		file, count, err := ms.engine.ListBlocks(params)
 		if err != nil {
-			ms.setPreflightBusy(state, false)
-			state.result.SetText("Preflight failed. See the debug console for details.")
+			status.SetText("Preflight: failed · see task/debug log")
 			ms.finishWorkbenchTaskV3(false, "Preflight failed", err.Error())
 			return
 		}
+		defer os.Remove(file)
 
 		analysis, err := analyzePreviewBlockFile(file)
 		if err != nil {
-			ms.setPreflightBusy(state, false)
-			state.result.SetText(fmt.Sprintf("%s solid blocks found, but diagnostics could not read the preview list.", formatCount(count)))
+			status.SetText("Preflight: diagnostics could not read the preview list")
 			ms.finishWorkbenchTaskV3(false, "Preflight diagnostics failed", err.Error())
 			return
 		}
 		if analysis.Blocks == 0 && count > 0 {
 			analysis.Blocks = count
 		}
-
-		state.lastAnalysis = &analysis
-		ms.setPreflightBusy(state, false)
-		state.result.SetText(ms.quickPreflightText(analysis))
-		if state.optimizer != nil {
-			state.optimizer.SetText(ms.optimizationAnalysisText(analysis))
+		if stateValue, ok := exportPreflightStates.Load(ms); ok {
+			if state, _ := stateValue.(*exportPreflightState); state != nil {
+				state.lastAnalysis = &analysis
+			}
 		}
-		ms.finishWorkbenchTaskV3(true, "Preflight ready", fmt.Sprintf("%s solid blocks · %s block types", formatCount(analysis.Blocks), formatCount(analysis.UniqueTypes)))
+
+		short := fmt.Sprintf(
+			"%s blocks · %s block types · %s unresolved preview textures",
+			formatCount(analysis.Blocks),
+			formatCount(analysis.UniqueTypes),
+			formatCount(analysis.UnresolvedTextures),
+		)
+		status.SetText("Preflight: " + short)
+		ms.finishWorkbenchTaskV3(true, "Preflight ready", short)
+		ms.appendLog("Preflight diagnostics:\n" + ms.quickPreflightText(analysis) + "\n" + ms.optimizationAnalysisText(analysis))
 	}()
 }
 
@@ -373,7 +351,7 @@ func (ms *MinesportApp) quickPreflightText(result previewBlockAnalysis) string {
 		lines = append(lines, "Most common: "+strings.Join(result.TopTypes, " · "))
 	}
 	if ms.settings.FlatterOptimizationEnabled {
-		lines = append(lines, "FLATTER: enabled · exact eligibility/compression is evaluated during geometry compilation.")
+		lines = append(lines, fmt.Sprintf("FLATTER: enabled · cell %d³ · exact eligibility/compression is evaluated during geometry compilation.", normalizeFlatterCellSize(ms.settings.FlatterCellSize)))
 	} else {
 		lines = append(lines, "FLATTER: disabled.")
 	}
@@ -381,7 +359,7 @@ func (ms *MinesportApp) quickPreflightText(result previewBlockAnalysis) string {
 		lines = append(lines, "Note: exact custom-selection filtering happens during export; this quick scan reports the enclosing selected region.")
 	}
 	if len(ms.settings.ResourcePackPaths) > 0 {
-		lines = append(lines, fmt.Sprintf("Warning: %d resource pack(s) are configured, but the current preview resolver does not yet apply them. Export does.", len(ms.settings.ResourcePackPaths)))
+		lines = append(lines, fmt.Sprintf("Warning: %d resource pack(s) are configured; export applies them even when preview diagnostics cannot represent every custom renderer.", len(ms.settings.ResourcePackPaths)))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -441,7 +419,7 @@ func (ms *MinesportApp) optimizationAnalysisText(result previewBlockAnalysis) st
 		fmt.Sprintf("Other IDs: %s (%.1f%%)", formatCount(buckets.Other), percentage(buckets.Other, result.Blocks)),
 		"",
 		fmt.Sprintf("Face culling: %s", enabledText(ms.settings.OptimizeOutputEnabled || (ms.optimizeCheck != nil && ms.optimizeCheck.Checked))),
-		fmt.Sprintf("FLATTER: %s", enabledText(ms.settings.FlatterOptimizationEnabled)),
+		fmt.Sprintf("FLATTER: %s · cell %d³", enabledText(ms.settings.FlatterOptimizationEnabled), normalizeFlatterCellSize(ms.settings.FlatterCellSize)),
 		fmt.Sprintf("Hidden-block culling: %s", enabledText(ms.settings.HiddenBlockCullingEnabled)),
 	}
 	if buckets.TransparentLike > 0 {
