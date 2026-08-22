@@ -55,6 +55,7 @@ public class GltfExporter {
             ? FlatterOptimizer.compile(blocks, resolvers)
             : FlatterOptimizer.Result.empty();
         Map<String,List<Quad>> groups = new LinkedHashMap<>();
+        Map<String,int[]> individualBounds = new LinkedHashMap<>();
 
         int done = 0;
         int total = Math.max(blocks.size(), 1);
@@ -81,12 +82,19 @@ public class GltfExporter {
                 case INDIVIDUAL -> compoundIds.getOrDefault(block, physicalName);
             };
 
+            if (mode == ObjExporter.ExportMode.INDIVIDUAL) {
+                includeBlockBounds(individualBounds, key, block);
+            }
+
             List<Quad> blockQuads = builder.buildBlock(block);
             for (Quad quad : blockQuads) {
                 String meshKey = quad.partName() == null
                     ? key
                     : BlockGrouper.partName(block, quad.partName());
                 groups.computeIfAbsent(meshKey, ignored -> new ArrayList<>()).add(quad);
+                if (mode == ObjExporter.ExportMode.INDIVIDUAL) {
+                    includeBlockBounds(individualBounds, meshKey, block);
+                }
             }
             solid++;
             if (progress != null) progress.onProgress(++done, total);
@@ -122,25 +130,47 @@ public class GltfExporter {
         Set<String> usedNames = new HashSet<>();
 
         for (var entry : groups.entrySet()) {
+            boolean flatterObject = flatter.isFlatterObject(entry.getKey());
             String childName;
-            if (flatter.isFlatterObject(entry.getKey())) {
+            if (flatterObject) {
                 childName = safeObjectName(entry.getKey());
                 usedNames.add(childName);
             } else {
                 childName = uniqueName(safeObjectName(entry.getKey()), usedNames);
             }
-            MeshResult result = buildMesh(entry.getValue(), center, optimize, childName);
+
+            // In Individual mode the mesh is local to the Minecraft block cell
+            // instead of the export-wide center. The node translation puts the
+            // geometry back in exactly the same world-space position, while DCCs
+            // such as Blender receive the useful object origin at the block center.
+            float[] meshCenter = center;
+            float[] individualOrigin = null;
+            if (mode == ObjExporter.ExportMode.INDIVIDUAL && !flatterObject) {
+                int[] bounds = individualBounds.get(entry.getKey());
+                if (bounds != null) {
+                    individualOrigin = boundsCenter(bounds);
+                    meshCenter = individualOrigin;
+                }
+            }
+
+            MeshResult result = buildMesh(entry.getValue(), meshCenter, optimize, childName);
             if (result == null) continue;
 
             meshes.add(result.mesh());
             JsonObject child = new JsonObject();
             child.addProperty("name", childName);
             child.addProperty("mesh", meshes.size() - 1);
+            if (individualOrigin != null) {
+                child.add("translation", relativeTranslation(individualOrigin, center));
+            }
 
             JsonObject extras = new JsonObject();
             extras.addProperty("minesportGroup", entry.getKey());
             extras.addProperty("minesportObjectMode", mode.name());
-            if (flatter.isFlatterObject(entry.getKey())) {
+            if (individualOrigin != null) {
+                extras.add("minesportBlockCenter", vec3(individualOrigin));
+            }
+            if (flatterObject) {
                 extras.addProperty("minesportType", "FLATTER");
                 extras.addProperty("minesportFlatterId", entry.getKey());
                 extras.addProperty(
@@ -181,7 +211,7 @@ public class GltfExporter {
         JsonObject root = new JsonObject();
         JsonObject asset = new JsonObject();
         asset.addProperty("version", "2.0");
-        asset.addProperty("generator", "Minesport v0.1 by Kastrick");
+        asset.addProperty("generator", "Minesport v0.2 by Kastrick");
         root.add("asset", asset);
         root.addProperty("scene", 0);
 
@@ -339,6 +369,48 @@ public class GltfExporter {
         primitive.addProperty("material", getMaterial(texture));
         primitive.addProperty("mode", 4);
         return new PrimitiveResult(primitive, positions.size());
+    }
+
+    private static void includeBlockBounds(Map<String,int[]> boundsByObject, String key, BlockData block) {
+        if (key == null || key.isBlank() || block == null) return;
+        int[] bounds = boundsByObject.get(key);
+        if (bounds == null) {
+            boundsByObject.put(key, new int[]{
+                block.x, block.y, block.z,
+                block.x + 1, block.y + 1, block.z + 1
+            });
+            return;
+        }
+        bounds[0] = Math.min(bounds[0], block.x);
+        bounds[1] = Math.min(bounds[1], block.y);
+        bounds[2] = Math.min(bounds[2], block.z);
+        bounds[3] = Math.max(bounds[3], block.x + 1);
+        bounds[4] = Math.max(bounds[4], block.y + 1);
+        bounds[5] = Math.max(bounds[5], block.z + 1);
+    }
+
+    private static float[] boundsCenter(int[] bounds) {
+        return new float[]{
+            (bounds[0] + bounds[3]) / 2f,
+            (bounds[1] + bounds[4]) / 2f,
+            (bounds[2] + bounds[5]) / 2f
+        };
+    }
+
+    private static JsonArray relativeTranslation(float[] origin, float[] exportCenter) {
+        JsonArray translation = new JsonArray();
+        translation.add(origin[0] - exportCenter[0]);
+        translation.add(origin[1] - exportCenter[1]);
+        translation.add(origin[2] - exportCenter[2]);
+        return translation;
+    }
+
+    private static JsonArray vec3(float[] values) {
+        JsonArray result = new JsonArray();
+        result.add(values[0]);
+        result.add(values[1]);
+        result.add(values[2]);
+        return result;
     }
 
     private static String uniqueName(String base, Set<String> used) {
