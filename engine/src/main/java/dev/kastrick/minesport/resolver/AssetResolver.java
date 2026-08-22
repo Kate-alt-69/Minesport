@@ -35,6 +35,17 @@ public interface AssetResolver {
      */
     BufferedImage resolveTexture(String texturePath);
 
+    /**
+     * Return the raw Minecraft texture metadata JSON for the exact texture this
+     * resolver would provide, normally from <texture>.png.mcmeta. Resolvers that
+     * do not expose animation metadata may return null.
+     *
+     * Keeping this next to resolveTexture is important: a resource pack that
+     * overrides a PNG must not accidentally inherit timing from a lower-priority
+     * vanilla/mod texture with the same ResourceLocation.
+     */
+    default String resolveTextureMetadata(String texturePath) { return null; }
+
     /** Human-readable name for logging. */
     String name();
 }
