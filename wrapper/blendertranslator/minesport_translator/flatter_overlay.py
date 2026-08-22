@@ -21,8 +21,8 @@ _VIEW_HANDLE = None
 _TEXT_HANDLE = None
 _CACHE = {}
 
-_GREEN_RGB = (0.18, 1.0, 0.24)
-_SELECTED_GREEN_RGB = (0.55, 1.0, 0.60)
+_GRID_RGB = (0.10, 0.33, 0.14)
+_SELECTED_GREEN_RGB = (0.48, 1.0, 0.54)
 
 _CUBE_EDGES = (
     (0, 1), (1, 2), (2, 3), (3, 0),
@@ -45,9 +45,9 @@ def _active_flatter():
 def _overlay_settings(obj):
     props = getattr(obj, "minesport", None)
     if props is None:
-        return "FULL", 0.58, False
-    mode = str(getattr(props, "flatter_overlay_mode", "FULL") or "FULL")
-    opacity = max(0.05, min(1.0, float(getattr(props, "flatter_overlay_opacity", 0.58))))
+        return "SELECTED", 0.32, False
+    mode = str(getattr(props, "flatter_overlay_mode", "SELECTED") or "SELECTED")
+    opacity = max(0.05, min(1.0, float(getattr(props, "flatter_overlay_opacity", 0.32))))
     xray = bool(getattr(props, "flatter_overlay_xray", False))
     return mode, opacity, xray
 
@@ -160,8 +160,8 @@ def _draw_view():
     if mode == "FULL":
         _draw_lines(
             _world_vertices(obj, _logical_edges(obj)),
-            (*_GREEN_RGB, opacity),
-            1.25,
+            (*_GRID_RGB, min(0.42, opacity * 0.55)),
+            0.8,
             xray=xray,
         )
 
@@ -169,8 +169,8 @@ def _draw_view():
     if selected:
         _draw_lines(
             _world_vertices(obj, selected),
-            (*_SELECTED_GREEN_RGB, min(1.0, opacity + 0.35)),
-            2.5,
+            (*_SELECTED_GREEN_RGB, min(1.0, opacity + 0.60)),
+            3.0,
             xray=xray,
         )
 
@@ -214,6 +214,13 @@ def _draw_text():
     blf.size(font_id, 14)
     blf.color(font_id, 0.35, 1.0, 0.42, 1.0)
     blf.draw(font_id, label)
+
+    focus = str(getattr(getattr(obj, "minesport", None), "flatter_selected", "") or "")
+    if focus:
+        blf.position(font_id, 18, 35, 0)
+        blf.size(font_id, 11)
+        blf.color(font_id, 0.78, 0.95, 0.80, 1.0)
+        blf.draw(font_id, "Focused · " + focus)
 
 
 def tag_redraw():
