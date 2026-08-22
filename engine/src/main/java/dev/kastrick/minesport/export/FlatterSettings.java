@@ -7,10 +7,14 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.Reader;
 
-/** Runtime gate for the optional FLATTER geometry compiler. */
+/** Runtime settings for the optional FLATTER geometry compiler. */
 public final class FlatterSettings {
+    public static final int DEFAULT_CELL_SIZE = 16;
+
     private static final String ENV = "MINESPORT_FLATTER";
     private static final String PROPERTY = "minesport.flatter";
+    private static final String CELL_ENV = "MINESPORT_FLATTER_CELL_SIZE";
+    private static final String CELL_PROPERTY = "minesport.flatterCellSize";
 
     private FlatterSettings() {}
 
@@ -21,14 +25,52 @@ public final class FlatterSettings {
         String env = System.getenv(ENV);
         if (env != null && !env.isBlank()) return parseBoolean(env);
 
-        File settings = settingsFile();
-        if (settings == null || !settings.isFile()) return false;
-        try (Reader reader = new FileReader(settings)) {
-            JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
-            return root.has("flatterOptimizationEnabled")
-                && root.get("flatterOptimizationEnabled").getAsBoolean();
+        JsonObject root = readSettings();
+        return root != null
+            && root.has("flatterOptimizationEnabled")
+            && root.get("flatterOptimizationEnabled").getAsBoolean();
+    }
+
+    public static int cellSize() {
+        String property = System.getProperty(CELL_PROPERTY);
+        if (property != null && !property.isBlank()) return parseCellSize(property);
+
+        String env = System.getenv(CELL_ENV);
+        if (env != null && !env.isBlank()) return parseCellSize(env);
+
+        JsonObject root = readSettings();
+        if (root != null && root.has("flatterCellSize")) {
+            try {
+                return normalizeCellSize(root.get("flatterCellSize").getAsInt());
+            } catch (Exception ignored) {
+                // Fall through to the stable default for old/corrupt settings.
+            }
+        }
+        return DEFAULT_CELL_SIZE;
+    }
+
+    public static int normalizeCellSize(int value) {
+        return switch (value) {
+            case 8, 16, 32, 64 -> value;
+            default -> DEFAULT_CELL_SIZE;
+        };
+    }
+
+    private static int parseCellSize(String value) {
+        try {
+            return normalizeCellSize(Integer.parseInt(value.trim()));
         } catch (Exception ignored) {
-            return false;
+            return DEFAULT_CELL_SIZE;
+        }
+    }
+
+    private static JsonObject readSettings() {
+        File settings = settingsFile();
+        if (settings == null || !settings.isFile()) return null;
+        try (Reader reader = new FileReader(settings)) {
+            return JsonParser.parseReader(reader).getAsJsonObject();
+        } catch (Exception ignored) {
+            return null;
         }
     }
 
