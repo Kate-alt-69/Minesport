@@ -90,6 +90,11 @@ def register():
 
     _register_optional("flatter_overlay")
     _register_optional("flatter_020_ui")
+
+    # Load the batched map renderer before registering the map operator. The
+    # operator's draw_handler_add call then captures the optimized callback from
+    # its very first invocation instead of the thousands-of-draw-calls renderer.
+    _register_optional("performance_map")
     _register_optional("flatter_map")
     _register_optional("flatter_map_live")
     _register_optional("obj_import")
@@ -106,6 +111,7 @@ def unregister():
         "obj_import",
         "flatter_map_live",
         "flatter_map",
+        "performance_map",
         "flatter_020_ui",
         "flatter_overlay",
         "performance_draw",
