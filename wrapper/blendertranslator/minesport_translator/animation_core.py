@@ -1,9 +1,9 @@
 """Shared Minecraft texture-animation core for Minesport.
 
 New exporter descriptors are material-scoped. A single animated material stays
-shared by every object using it, receives one tiny Blender driver, and exposes
-its first-cycle texture changes as ordinary Timeline markers. No frame-change
-handler is installed, so scrubbing/rendering does not run a Python tick loop.
+shared by every object using it, receives two tiny Blender drivers for sprite
+sheet X/Y selection, and exposes its first-cycle texture changes as ordinary
+Timeline markers. No frame-change handler is installed.
 """
 
 import hashlib
@@ -19,6 +19,8 @@ from . import translate as translate_module
 MARKER_PREFIX = "MS TEX · "
 SCHEDULE_KEY = "minesport_texture_frames"
 FRAME_COUNT_KEY = "minesport_texture_frame_count"
+COLUMNS_KEY = "minesport_texture_columns"
+ROWS_KEY = "minesport_texture_rows"
 FRAMES_PER_TICK_KEY = "minesport_texture_frames_per_tick"
 TEXTURE_KEY = "minesport_texture_source"
 DRIVER_PREFIX = "minesport_tex_"
@@ -59,7 +61,7 @@ def _image_node(material):
     return next((node for node in tree.nodes if node.bl_idname == "ShaderNodeTexImage"), None)
 
 
-def _driver_name(material_name):
+def _driver_base(material_name):
     digest = hashlib.sha1(str(material_name).encode("utf-8", "replace")).hexdigest()[:12]
     return DRIVER_PREFIX + digest
 
@@ -73,27 +75,46 @@ def _material_schedule(material):
     return sequence if sequence else (0,)
 
 
-def _register_material_driver(material):
+def _register_material_drivers(material):
     if material is None or SCHEDULE_KEY not in material:
-        return None
+        return None, None
+
     sequence = _material_schedule(material)
     frame_count = max(1, int(material.get(FRAME_COUNT_KEY, 1)))
+    columns = max(1, int(material.get(COLUMNS_KEY, 1)))
+    rows = max(1, int(material.get(ROWS_KEY, frame_count)))
     frames_per_tick = max(1.0e-6, float(material.get(FRAMES_PER_TICK_KEY, 1.0)))
-    function_name = _driver_name(material.name)
+    base = _driver_base(material.name)
+    x_name = base + "_x"
+    y_name = base + "_y"
 
-    def sample(frame, speed, enabled):
+    def sprite(frame, speed):
+        scaled = max(0.0, float(frame) - 1.0) * max(0.0, float(speed))
+        index = int(math.floor(scaled / frames_per_tick)) % len(sequence)
+        return max(0, min(frame_count - 1, int(sequence[index])))
+
+    def sample_x(frame, speed, enabled):
         if not enabled:
             return 0.0
         try:
-            scaled = max(0.0, float(frame) - 1.0) * max(0.0, float(speed))
-            index = int(math.floor(scaled / frames_per_tick)) % len(sequence)
-            sprite = max(0, min(frame_count - 1, int(sequence[index])))
-            return -(sprite / float(frame_count))
+            value = sprite(frame, speed)
+            return (value % columns) / float(columns)
         except Exception:
             return 0.0
 
-    bpy.app.driver_namespace[function_name] = sample
-    return function_name
+    def sample_y(frame, speed, enabled):
+        if not enabled:
+            return 0.0
+        try:
+            value = sprite(frame, speed)
+            row = value // columns
+            return -(row / float(rows))
+        except Exception:
+            return 0.0
+
+    bpy.app.driver_namespace[x_name] = sample_x
+    bpy.app.driver_namespace[y_name] = sample_y
+    return x_name, y_name
 
 
 def _remove_existing_animation_nodes(material):
@@ -108,64 +129,7 @@ def _remove_existing_animation_nodes(material):
                 pass
 
 
-def _configure_shared_material(material, descriptor):
-    if material is None:
-        return False
-    material.use_nodes = True
-    tree = material.node_tree
-    if tree is None:
-        return False
-    image_node = _image_node(material)
-    if image_node is None:
-        return False
-
-    try:
-        frame_count = max(1, int(descriptor.get("frameCount", 1)))
-        frames = descriptor.get("frames")
-        if not isinstance(frames, list) or not frames:
-            frames = list(range(frame_count))
-        frames = [max(0, min(frame_count - 1, int(value))) for value in frames]
-    except Exception:
-        return False
-    if frame_count <= 1 or not frames:
-        return False
-
-    scene = bpy.context.scene
-    fps = max(1.0e-6, float(scene.render.fps) / max(1.0e-6, float(scene.render.fps_base)))
-    # Exporter expands custom .mcmeta durations into one sequence entry per
-    # Minecraft tick, so frameTime is normally 1. Keep the field for backwards
-    # compatibility with older descriptors.
-    frame_time = max(1, int(descriptor.get("frameTime", 1)))
-    frames_per_tick = frame_time * fps / 20.0
-
-    _remove_existing_animation_nodes(material)
-    nodes = tree.nodes
-    links = tree.links
-    texcoord = nodes.new("ShaderNodeTexCoord")
-    mapping = nodes.new("ShaderNodeMapping")
-    texcoord.label = "Minesport UV"
-    mapping.label = "Minesport Animated Texture"
-    mapping.inputs["Scale"].default_value[1] = 1.0 / float(frame_count)
-
-    for link in list(image_node.inputs["Vector"].links):
-        links.remove(link)
-    links.new(texcoord.outputs["UV"], mapping.inputs["Vector"])
-    links.new(mapping.outputs["Vector"], image_node.inputs["Vector"])
-
-    material[SCHEDULE_KEY] = json.dumps(frames, separators=(",", ":"))
-    material[FRAME_COUNT_KEY] = frame_count
-    material[FRAMES_PER_TICK_KEY] = float(frames_per_tick)
-    material[TEXTURE_KEY] = str(descriptor.get("texture") or "")
-    material["minesport_texture_cycle_ticks"] = int(descriptor.get("cycleTicks", len(frames)))
-    material["minesport_texture_interpolate"] = bool(descriptor.get("interpolate", False))
-
-    function_name = _register_material_driver(material)
-    if not function_name:
-        return False
-
-    driver = mapping.inputs["Location"].driver_add("default_value", 1).driver
-    driver.type = "SCRIPTED"
-
+def _driver_scene_variables(driver, scene):
     frame_var = driver.variables.new()
     frame_var.name = "frame"
     frame_target = frame_var.targets[0]
@@ -187,14 +151,81 @@ def _configure_shared_material(material, descriptor):
     speed_target.id = scene
     speed_target.data_path = "minesport_texture_animation_speed"
 
-    driver.expression = f"{function_name}(frame,speed,enabled)"
+
+def _configure_shared_material(material, descriptor):
+    if material is None:
+        return False
+    material.use_nodes = True
+    tree = material.node_tree
+    if tree is None:
+        return False
+    image_node = _image_node(material)
+    if image_node is None:
+        return False
+
+    try:
+        frame_count = max(1, int(descriptor.get("frameCount", 1)))
+        columns = max(1, int(descriptor.get("columns", 1)))
+        rows = max(1, int(descriptor.get("rows", frame_count)))
+        if columns * rows < frame_count:
+            return False
+        frames = descriptor.get("frames")
+        if not isinstance(frames, list) or not frames:
+            frames = list(range(frame_count))
+        frames = [max(0, min(frame_count - 1, int(value))) for value in frames]
+    except Exception:
+        return False
+    if frame_count <= 1 or not frames:
+        return False
+
+    scene = bpy.context.scene
+    fps = max(1.0e-6, float(scene.render.fps) / max(1.0e-6, float(scene.render.fps_base)))
+    frame_time = max(1, int(descriptor.get("frameTime", 1)))
+    frames_per_tick = frame_time * fps / 20.0
+
+    _remove_existing_animation_nodes(material)
+    nodes = tree.nodes
+    links = tree.links
+    texcoord = nodes.new("ShaderNodeTexCoord")
+    mapping = nodes.new("ShaderNodeMapping")
+    texcoord.label = "Minesport UV"
+    mapping.label = "Minesport Animated Texture"
+    mapping.inputs["Scale"].default_value[0] = 1.0 / float(columns)
+    mapping.inputs["Scale"].default_value[1] = 1.0 / float(rows)
+
+    for link in list(image_node.inputs["Vector"].links):
+        links.remove(link)
+    links.new(texcoord.outputs["UV"], mapping.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], image_node.inputs["Vector"])
+
+    material[SCHEDULE_KEY] = json.dumps(frames, separators=(",", ":"))
+    material[FRAME_COUNT_KEY] = frame_count
+    material[COLUMNS_KEY] = columns
+    material[ROWS_KEY] = rows
+    material[FRAMES_PER_TICK_KEY] = float(frames_per_tick)
+    material[TEXTURE_KEY] = str(descriptor.get("texture") or "")
+    material["minesport_texture_cycle_ticks"] = int(descriptor.get("cycleTicks", len(frames)))
+    material["minesport_texture_interpolate"] = bool(descriptor.get("interpolate", False))
+
+    x_name, y_name = _register_material_drivers(material)
+    if not x_name or not y_name:
+        return False
+
+    x_driver = mapping.inputs["Location"].driver_add("default_value", 0).driver
+    x_driver.type = "SCRIPTED"
+    _driver_scene_variables(x_driver, scene)
+    x_driver.expression = f"{x_name}(frame,speed,enabled)"
+
+    y_driver = mapping.inputs["Location"].driver_add("default_value", 1).driver
+    y_driver.type = "SCRIPTED"
+    _driver_scene_variables(y_driver, scene)
+    y_driver.expression = f"{y_name}(frame,speed,enabled)"
     return True
 
 
 def _translate_texture_frames_v2(descriptor):
     if not isinstance(descriptor, dict):
         return
-    # Preserve old object-scoped descriptors produced by older exporters.
     if descriptor.get("object"):
         return _ORIGINAL_TRANSLATE_TEXTURE(descriptor)
 
@@ -271,13 +302,10 @@ def install_texture_markers(metadata, scene=None):
             if count >= MAX_TIMELINE_MARKERS:
                 break
             blender_frame = max(1, int(round(1.0 + tick * fps / 20.0)))
-            marker = scene.timeline_markers.new(
+            scene.timeline_markers.new(
                 f"{MARKER_PREFIX}{short} → {texture_frame}",
                 frame=blender_frame,
             )
-            marker["minesport_texture"] = texture
-            marker["minesport_texture_frame"] = texture_frame
-            marker["minesport_tick"] = tick
             count += 1
         if count >= MAX_TIMELINE_MARKERS:
             break
@@ -332,8 +360,8 @@ class MINESPORT_PT_texture_animation(bpy.types.Panel):
         if bool(scene.get("minesport_texture_marker_limit_hit", False)):
             box.label(text="Marker display capped at 512; animation itself is not capped.", icon="INFO")
         box.operator(MINESPORT_OT_texture_markers_refresh.bl_idname, icon="FILE_REFRESH")
-        box.label(text="Markers show exactly when the Minecraft sprite frame changes.", icon="INFO")
-        box.label(text="Animation uses shared material drivers, not a Python frame loop.", icon="INFO")
+        box.label(text="Markers show when each Minecraft sprite frame changes.", icon="INFO")
+        box.label(text="Shared material drivers animate vertical or 2D sprite sheets.", icon="INFO")
 
 
 _CLASSES = (
@@ -370,11 +398,9 @@ def register():
         _ORIGINAL_TRANSLATE_SCENE = translate_module.translate_scene
         translate_module.translate_scene = _translate_scene_wrapper
 
-    # Driver namespace is not saved in .blend files. Rehydrate all existing
-    # Minesport animated materials when the add-on is enabled or a file reopens.
     for material in bpy.data.materials:
         if material is not None and SCHEDULE_KEY in material:
-            _register_material_driver(material)
+            _register_material_drivers(material)
 
 
 def unregister():
