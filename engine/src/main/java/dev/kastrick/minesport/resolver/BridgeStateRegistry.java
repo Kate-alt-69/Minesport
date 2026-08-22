@@ -18,7 +18,8 @@ import java.util.function.Consumer;
 
 /** Applies semantic metadata captured by the Minecraft/Fabric runtime worker. */
 public final class BridgeStateRegistry {
-    public static final int SNAPSHOT_SCHEMA = 3;
+    public static final int SNAPSHOT_SCHEMA = RuntimeRegistryDataReader.SCHEMA;
+    private static final int LEGACY_JSON_SCHEMA = 3;
 
     private BridgeStateRegistry() {}
 
@@ -45,18 +46,81 @@ public final class BridgeStateRegistry {
         if (snapshot == null || !snapshot.isFile() || blocks == null || blocks.isEmpty()) {
             return 0;
         }
+        if (snapshot.getName().toLowerCase().endsWith(".data")) {
+            return applyData(snapshot, expectedMinecraftVersion, blocks, log);
+        }
+        return applyLegacyJson(snapshot, expectedMinecraftVersion, blocks, log);
+    }
 
-        JsonObject root;
-        try (Reader reader = new FileReader(snapshot)) {
-            root = JsonParser.parseReader(reader).getAsJsonObject();
+    private static int applyData(
+        File snapshot,
+        String expectedMinecraftVersion,
+        List<BlockData> blocks,
+        Consumer<String> log
+    ) {
+        RuntimeRegistryDataReader.DataSnapshot root;
+        try {
+            root = RuntimeRegistryDataReader.read(snapshot);
         } catch (Exception exception) {
             warn(log, "Runtime registry could not be read: " + exception.getMessage());
             return 0;
         }
+        if (root.schema() != SNAPSHOT_SCHEMA) {
+            warn(log, "Ignoring runtime registry schema " + root.schema()
+                + " (expected " + SNAPSHOT_SCHEMA + ")");
+            return 0;
+        }
+
+        String capturedVersion = root.minecraftVersion() == null ? "" : root.minecraftVersion().trim();
+        String expected = expectedMinecraftVersion == null ? "" : expectedMinecraftVersion.trim();
+        if (!expected.isEmpty() && !capturedVersion.equals(expected)) {
+            warn(log, "Ignoring runtime registry for Minecraft " + capturedVersion
+                + " while exporting " + expected);
+            return 0;
+        }
+
+        Map<String, List<LightState>> lightRegistry = new LinkedHashMap<>();
+        Set<String> runtimeModelBlocks = new HashSet<>();
+        for (var blockEntry : root.blocks().entrySet()) {
+            RuntimeRegistryDataReader.DataBlock source = blockEntry.getValue();
+            if (source == null) continue;
+            if (source.variants() != null && !source.variants().isEmpty()) {
+                runtimeModelBlocks.add(blockEntry.getKey());
+            }
+            if (source.lights() == null || source.lights().isEmpty()) continue;
+
+            List<LightState> states = new ArrayList<>();
+            for (RuntimeRegistryDataReader.DataLight state : source.lights()) {
+                int level = clampLevel(state.lightLevel());
+                if (level <= 0) continue;
+                states.add(new LightState(
+                    state.properties() == null ? Map.of() : Map.copyOf(state.properties()),
+                    level
+                ));
+            }
+            if (!states.isEmpty()) lightRegistry.put(blockEntry.getKey(), states);
+        }
+        return applyResolved(snapshot, blocks, log, lightRegistry, runtimeModelBlocks);
+    }
+
+    private static int applyLegacyJson(
+        File snapshot,
+        String expectedMinecraftVersion,
+        List<BlockData> blocks,
+        Consumer<String> log
+    ) {
+        JsonObject root;
+        try (Reader reader = new FileReader(snapshot)) {
+            root = JsonParser.parseReader(reader).getAsJsonObject();
+        } catch (Exception exception) {
+            warn(log, "Legacy runtime registry could not be read: " + exception.getMessage());
+            return 0;
+        }
 
         int schema = root.has("schema") ? safeInt(root.get("schema"), -1) : -1;
-        if (schema != 1 && schema != SNAPSHOT_SCHEMA) {
-            warn(log, "Ignoring runtime registry schema " + schema + " (expected 1 or " + SNAPSHOT_SCHEMA + ")");
+        if (schema != 1 && schema != LEGACY_JSON_SCHEMA) {
+            warn(log, "Ignoring legacy runtime registry schema " + schema
+                + " (expected 1 or " + LEGACY_JSON_SCHEMA + ")");
             return 0;
         }
 
@@ -108,7 +172,16 @@ public final class BridgeStateRegistry {
             }
             if (!states.isEmpty()) lightRegistry.put(blockEntry.getKey(), states);
         }
+        return applyResolved(snapshot, blocks, log, lightRegistry, runtimeModelBlocks);
+    }
 
+    private static int applyResolved(
+        File snapshot,
+        List<BlockData> blocks,
+        Consumer<String> log,
+        Map<String, List<LightState>> lightRegistry,
+        Set<String> runtimeModelBlocks
+    ) {
         int enriched = 0;
         int runtimeTagged = 0;
         String registryPath = snapshot.getAbsolutePath();
@@ -116,10 +189,6 @@ public final class BridgeStateRegistry {
             BlockData block = blocks.get(index);
             if (block == null) continue;
 
-            // Schema-3 capture stores sprite-local UVs from Minecraft's baked
-            // model manager and contains vanilla plus loader-registered blocks.
-            // Tag every matching world block so all export paths consume the
-            // same authoritative runtime geometry.
             if (runtimeModelBlocks.contains(block.blockId)) {
                 block.runtimeRegistryPath = registryPath;
                 runtimeTagged++;
