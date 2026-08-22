@@ -36,10 +36,19 @@ public class BlockData {
         return properties.getOrDefault(key, "");
     }
 
+    /**
+     * Blocks that occupy no visible export geometry.
+     *
+     * minecraft:light intentionally behaves like air for mesh generation so an
+     * invisible level-6 Light block never becomes a resolver fallback cube. The
+     * BlockData record itself is still retained in the world scan, allowing the
+     * Minesport light exporter to preserve its level and create a real DCC light.
+     */
     public boolean isAir() {
         return blockId.equals("minecraft:air")
             || blockId.equals("minecraft:cave_air")
-            || blockId.equals("minecraft:void_air");
+            || blockId.equals("minecraft:void_air")
+            || blockId.equals("minecraft:light");
     }
 
     @Override
