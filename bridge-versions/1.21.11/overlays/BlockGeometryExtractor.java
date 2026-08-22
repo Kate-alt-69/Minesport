@@ -95,21 +95,27 @@ public final class BlockGeometryExtractor {
 
     private static BakedQuadData convertQuad(QuadView quad, SpriteFinder spriteFinder) {
         try {
+            TextureAtlasSprite sprite = spriteFinder.find(quad);
             float[] vertices = new float[4 * 8];
             var faceNormal = quad.faceNormal();
             for (int vertex = 0; vertex < 4; vertex++) {
                 int offset = vertex * 8;
+                float u = quad.u(vertex);
+                float v = quad.v(vertex);
+                if (sprite != null) {
+                    u = SpriteUv.local(u, sprite.getU0(), sprite.getU1());
+                    v = SpriteUv.local(v, sprite.getV0(), sprite.getV1());
+                }
                 vertices[offset] = quad.x(vertex);
                 vertices[offset + 1] = quad.y(vertex);
                 vertices[offset + 2] = quad.z(vertex);
                 vertices[offset + 3] = quad.hasNormal(vertex) ? quad.normalX(vertex) : faceNormal.x();
                 vertices[offset + 4] = quad.hasNormal(vertex) ? quad.normalY(vertex) : faceNormal.y();
                 vertices[offset + 5] = quad.hasNormal(vertex) ? quad.normalZ(vertex) : faceNormal.z();
-                vertices[offset + 6] = quad.u(vertex);
-                vertices[offset + 7] = quad.v(vertex);
+                vertices[offset + 6] = u;
+                vertices[offset + 7] = v;
             }
 
-            TextureAtlasSprite sprite = spriteFinder.find(quad);
             Direction face = quad.lightFace();
             return new BakedQuadData(
                 vertices,
