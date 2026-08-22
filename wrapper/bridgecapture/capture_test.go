@@ -163,6 +163,38 @@ func TestSnapshotLookupRejectsWrongVersionAndSchema(t *testing.T) {
 	}
 }
 
+func TestNewSnapshotPrunesOlderFingerprintForSameMinecraftVersion(t *testing.T) {
+	dir := t.TempDir()
+	oldPath, err := writeSnapshotAt(dir, Snapshot{
+		Schema:           SnapshotSchema,
+		MinecraftVersion: "1.21.10",
+		ModsFingerprint:  "old-fingerprint",
+		Blocks:           map[string]RuntimeBlock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("old snapshot was not written: %v", err)
+	}
+
+	newPath, err := writeSnapshotAt(dir, Snapshot{
+		Schema:           SnapshotSchema,
+		MinecraftVersion: "1.21.10",
+		ModsFingerprint:  "new-fingerprint",
+		Blocks:           map[string]RuntimeBlock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("new snapshot missing: %v", err)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("stale fingerprint directory should be removed, stat err=%v", err)
+	}
+}
+
 func TestStageBridgeDoesNotChangeModsFingerprintAndCleansUp(t *testing.T) {
 	CleanupStaged()
 	defer CleanupStaged()
@@ -205,25 +237,61 @@ func TestStageBridgeDoesNotChangeModsFingerprintAndCleansUp(t *testing.T) {
 	}
 }
 
-func TestModsFingerprintChangesWhenModSetChanges(t *testing.T) {
-	mods := t.TempDir()
+func TestModsFingerprintChangesWhenJarContentsChange(t *testing.T) {
+	root := t.TempDir()
+	mods := filepath.Join(root, "mods")
+	if err := os.MkdirAll(mods, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(mods, "lamp.jar")
+	cache := filepath.Join(root, "hash-cache.json")
 	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	first, err := ModsFingerprint(mods)
+	first, err := modsFingerprintAt(mods, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("version-two"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("v2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	second, err := ModsFingerprint(mods)
+	second, err := modsFingerprintAt(mods, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first == second {
-		t.Fatal("mod fingerprint should change after a mod JAR changes")
+		t.Fatal("content fingerprint should change after a mod JAR changes")
+	}
+	if _, err := os.Stat(cache); err != nil {
+		t.Fatalf("per-JAR digest cache should be persisted: %v", err)
+	}
+}
+
+func TestModsFingerprintIgnoresTimestampOnlyChanges(t *testing.T) {
+	root := t.TempDir()
+	mods := filepath.Join(root, "mods")
+	if err := os.MkdirAll(mods, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(mods, "same.jar")
+	cache := filepath.Join(root, "hash-cache.json")
+	if err := os.WriteFile(path, []byte("same-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, err := modsFingerprintAt(mods, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Hour)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+	second, err := modsFingerprintAt(mods, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("timestamp-only change should not invalidate a content fingerprint: %s != %s", first, second)
 	}
 }
 
