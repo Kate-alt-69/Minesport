@@ -22,6 +22,13 @@ type Result struct {
 func RemoveAll() (Result, error) {
 	result := Result{}
 	var failures []error
+	root := filepath.Clean(appdirs.CacheRoot())
+
+	// Fail closed before touching anything. The cache root can be overridden by
+	// an environment variable, so a bad value must not cause even partial cleanup.
+	if err := validateCacheRoot(root); err != nil {
+		return result, err
+	}
 
 	// Remove any currently staged temporary capture bridge first so a cleanup
 	// requested during a session does not leave a transient JAR behind.
@@ -33,10 +40,7 @@ func RemoveAll() (Result, error) {
 		failures = append(failures, bridgeErr)
 	}
 
-	root := filepath.Clean(appdirs.CacheRoot())
-	if err := validateCacheRoot(root); err != nil {
-		failures = append(failures, err)
-	} else if info, err := os.Stat(root); err != nil {
+	if info, err := os.Stat(root); err != nil {
 		if !os.IsNotExist(err) {
 			failures = append(failures, fmt.Errorf("inspect Minesport cache %s: %w", root, err))
 		}
