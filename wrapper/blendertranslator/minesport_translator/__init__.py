@@ -67,14 +67,15 @@ def register():
     flatter.register()
 
     # Build the translation stack from source-of-truth semantics outward:
-    # lights first, then logical LIGHT_BLOCK adaptation, animation/timeline,
-    # live FPS sampling, and finally material repair for water/glass.
+    # lights first, logical LIGHT_BLOCK adaptation, material-scoped animation,
+    # live FPS sampling, then translucent and binary-cutout material repair.
     _register_optional("lights")
     _register_optional("light_block_core")
     _register_optional("emissive_materials")
     _register_optional("animation_core")
     _register_optional("animation_fps_fix")
     _register_optional("material_core")
+    _register_optional("cutout_materials")
     _register_optional("flatter_runtime")
     _register_optional("incremental_refresh")
     _register_optional("liquid_merge")
@@ -127,6 +128,7 @@ def unregister():
         "liquid_merge",
         "incremental_refresh",
         "flatter_runtime",
+        "cutout_materials",
         "material_core",
         "animation_fps_fix",
         "animation_core",
