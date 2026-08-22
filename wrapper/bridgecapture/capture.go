@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kastrick/minesport/appdirs"
 )
 
 const (
@@ -645,11 +647,7 @@ func copyFile(source, destination string) error {
 }
 
 func cacheDir() string {
-	base, err := os.UserCacheDir()
-	if err != nil || strings.TrimSpace(base) == "" {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "kastrick_software", "minesport", "runtime-registry")
+	return filepath.Join(appdirs.CacheRoot(), "runtime-registry")
 }
 
 func safeVersion(version string) string {
