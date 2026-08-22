@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kastrick/minesport/appdirs"
 	"github.com/kastrick/minesport/ipc"
 )
 
@@ -64,17 +65,13 @@ func heightmapFingerprint(worldPath string) (string, error) {
 }
 
 func heightmapCachePaths(worldPath string) (metadataPath, pngPath string, err error) {
-	cacheRoot, err := os.UserCacheDir()
-	if err != nil {
-		return "", "", err
-	}
 	absolute, err := filepath.Abs(worldPath)
 	if err != nil {
 		return "", "", err
 	}
 	key := sha256.Sum256([]byte(filepath.Clean(absolute)))
 	name := hex.EncodeToString(key[:16])
-	dir := filepath.Join(cacheRoot, "kastrick_software", "minesport", "heightmaps")
+	dir := filepath.Join(appdirs.CacheRoot(), "heightmaps")
 	return filepath.Join(dir, name+".json"), filepath.Join(dir, name+".png"), nil
 }
 
