@@ -24,6 +24,7 @@ func basicSettingRow(parent fyne.Window, label string, value bool, onChange func
 
 func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settings), onDismiss func()) {
 	working := current
+	working.FlatterCellSize = normalizeFlatterCellSize(working.FlatterCellSize)
 
 	face := basicSettingRow(
 		parent,
@@ -32,13 +33,56 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 		func(v bool) { working.OptimizeOutputEnabled = v },
 		"Removes a face only when neighboring geometry fully covers that face.",
 	)
+
+	flatterSize := widget.NewSelect(
+		[]string{"8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"},
+		func(value string) {
+			switch value {
+			case "8 × 8 × 8":
+				working.FlatterCellSize = 8
+			case "32 × 32 × 32":
+				working.FlatterCellSize = 32
+			case "64 × 64 × 64":
+				working.FlatterCellSize = 64
+			default:
+				working.FlatterCellSize = 16
+			}
+		},
+	)
+	flatterSize.SetSelected(fmt.Sprintf("%d × %d × %d", working.FlatterCellSize, working.FlatterCellSize, working.FlatterCellSize))
+	if !working.FlatterOptimizationEnabled {
+		flatterSize.Disable()
+	}
+
 	flatter := basicSettingRow(
 		parent,
 		"FLATTER geometry",
 		working.FlatterOptimizationEnabled,
-		func(v bool) { working.FlatterOptimizationEnabled = v },
-		"Losslessly compiles safe full Minecraft blocks into chunk-local greedy surfaces. The .minesport.json sidecar keeps every logical block so Minesport Translator 0.1.4 can select, materialize and rebuild blocks in Blender 4.3+.",
+		func(v bool) {
+			working.FlatterOptimizationEnabled = v
+			if v {
+				flatterSize.Enable()
+			} else {
+				flatterSize.Disable()
+			}
+		},
+		"Losslessly compiles repeated Minecraft geometry into spatial FLATTER objects. Full solid cubes and compatible repeated non-full shapes are kept in separate FLATTER streams while the .minesport.json sidecar preserves every logical block for Blender editing.",
 	)
+
+	flatterSizeLabel := widget.NewLabel("FLATTER object size")
+	flatterSizeInfo := infoButton(
+		parent,
+		"FLATTER object size",
+		"Controls the spatial cell used for each FLATTER object. 8³ gives smaller, faster local rebuilds and more Blender objects. 16³ is balanced. 32³ and 64³ create fewer, larger objects and can compress broad terrain more aggressively, but editing one cell can rebuild more geometry.",
+	)
+	flatterSizeRow := container.NewBorder(
+		nil,
+		nil,
+		flatterSizeLabel,
+		flatterSizeInfo,
+		flatterSize,
+	)
+
 	hidden := basicSettingRow(
 		parent,
 		"Hidden block culling (Experimental)",
@@ -47,7 +91,7 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 		"Removes a whole block only when all six sides are proven fully covered. Uncertain/custom geometry is kept.",
 	)
 	basic := container.NewVBox(
-		widget.NewCard("GEOMETRY", "", container.NewVBox(face, flatter)),
+		widget.NewCard("GEOMETRY", "", container.NewVBox(face, flatter, flatterSizeRow)),
 		widget.NewCard("VISIBILITY", "", container.NewVBox(hidden)),
 		widget.NewLabel("Simple by default. Use ⓘ for details."),
 	)
@@ -162,6 +206,7 @@ func ShowSettingsDialog(parent fyne.Window, current Settings, onSave func(Settin
 			if !save {
 				return
 			}
+			working.FlatterCellSize = normalizeFlatterCellSize(working.FlatterCellSize)
 			if onSave != nil {
 				onSave(working)
 			}
