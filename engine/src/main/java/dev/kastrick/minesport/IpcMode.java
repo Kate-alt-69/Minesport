@@ -185,7 +185,10 @@ public class IpcMode {
 
             String mcVersion = readMcVersion(tempDir);
             log("MC version: " + mcVersion);
-            BridgeStateRegistry.applyDefault(mcVersion, allBlocks, IpcMode::log);
+            String bridgeRegistry = getStringOption(request, "bridgeRegistry", null);
+            if (bridgeRegistry != null && !bridgeRegistry.isBlank()) {
+                BridgeStateRegistry.apply(new File(bridgeRegistry), mcVersion, allBlocks, IpcMode::log);
+            }
             File mcJar = VanillaResolver.findMinecraftJar(mcVersion);
             if (mcJar != null && mcJar.exists()) {
                 log("Vanilla resolver: " + mcJar.getName());
