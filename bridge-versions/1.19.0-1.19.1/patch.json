@@ -10,7 +10,6 @@
     {"op": "overlay", "source": "bridge-versions/shared/build-java17-modernloom.gradle", "target": "build.gradle"},
     {"op": "overlay", "source": "bridge-versions/shared/fabric-mod-java17-pre1192.json", "target": "src/main/resources/fabric.mod.json"},
     {"op": "overlay", "source": "bridge-versions/1.19.0-1.19.2/overlays/MinesportBridge.java", "target": "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java"},
-    {"op": "overlay", "source": "bridge-versions/1.19.0-1.19.2/overlays/BlockGeometryExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"},
-    {"op": "overlay", "source": "bridge-versions/1.19.0-1.19.2/overlays/TextureExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/TextureExtractor.java"}
+    {"op": "overlay", "source": "bridge-versions/1.19.0-1.19.2/overlays/BlockGeometryExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"}
   ]
 }
