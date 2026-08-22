@@ -107,6 +107,19 @@ func documentationRawURL(page documentationPage) (string, bool) {
 	return documentationRawBase + cleaned, true
 }
 
+func documentationPositionLabel(index, total int) string {
+	if total <= 0 {
+		return "Page 0 of 0"
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index >= total {
+		index = total - 1
+	}
+	return fmt.Sprintf("Page %d of %d", index+1, total)
+}
+
 func openExternalURL(app fyne.App, raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -145,6 +158,34 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 
 	var list *widget.List
 	var showPage func(int)
+	var first *widget.Button
+	var previous *widget.Button
+	var next *widget.Button
+	var last *widget.Button
+	position := widget.NewLabel(documentationPositionLabel(selected, len(pages)))
+	position.Alignment = fyne.TextAlignCenter
+	position.TextStyle = fyne.TextStyle{Monospace: true, Bold: true}
+
+	updateNavigation := func() {
+		position.SetText(documentationPositionLabel(selected, len(pages)))
+		if first == nil || previous == nil || next == nil || last == nil {
+			return
+		}
+		if selected <= 0 {
+			first.Disable()
+			previous.Disable()
+		} else {
+			first.Enable()
+			previous.Enable()
+		}
+		if len(pages) == 0 || selected >= len(pages)-1 {
+			next.Disable()
+			last.Disable()
+		} else {
+			next.Enable()
+			last.Enable()
+		}
+	}
 
 	showPage = func(index int) {
 		if index < 0 || index >= len(pages) {
@@ -152,8 +193,10 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 		}
 		selected = index
 		page := pages[index]
-		title.SetText(fmt.Sprintf("Page %s · %s", page.ID, page.Title))
+		positionText := documentationPositionLabel(index, len(pages))
+		title.SetText(fmt.Sprintf("%s · %s", positionText, page.Title))
 		summary.SetText(page.Summary)
+		updateNavigation()
 		status.SetText("Loading " + page.Path + " from GitHub…")
 		pageHost.RemoveAll()
 		loading := widget.NewProgressBarInfinite()
@@ -224,22 +267,43 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 			row := object.(*fyne.Container)
 			id := row.Objects[0].(*widget.Label)
 			name := row.Objects[1].(*widget.Label)
-			id.SetText(pages[int(item)].ID)
+			id.SetText(fmt.Sprintf("%d", int(item)+1))
 			name.SetText(pages[int(item)].Title)
 		},
 	)
 	list.OnSelected = func(item widget.ListItemID) { showPage(int(item)) }
 
-	previous := widget.NewButtonWithIcon("Previous", theme.NavigateBackIcon(), func() {
+	first = widget.NewButtonWithIcon("First", theme.NavigateBackIcon(), func() {
+		if len(pages) > 0 && selected != 0 {
+			list.Select(0)
+		}
+	})
+	previous = widget.NewButtonWithIcon("Previous", theme.NavigateBackIcon(), func() {
 		if selected > 0 {
 			list.Select(widget.ListItemID(selected - 1))
 		}
 	})
-	next := widget.NewButtonWithIcon("Next", theme.NavigateNextIcon(), func() {
+	next = widget.NewButtonWithIcon("Next", theme.NavigateNextIcon(), func() {
 		if selected+1 < len(pages) {
 			list.Select(widget.ListItemID(selected + 1))
 		}
 	})
+	last = widget.NewButtonWithIcon("Last", theme.NavigateNextIcon(), func() {
+		if len(pages) > 0 && selected != len(pages)-1 {
+			list.Select(widget.ListItemID(len(pages) - 1))
+		}
+	})
+	updateNavigation()
+
+	pageNavigation := container.NewHBox(first, previous, position, next, last)
+	pageActions := container.NewHBox(openGitHub, watchVideo)
+	bottomBar := container.NewBorder(
+		nil,
+		nil,
+		pageNavigation,
+		pageActions,
+		container.NewCenter(status),
+	)
 
 	left := container.NewBorder(
 		container.NewVBox(widget.NewLabelWithStyle("PAGES", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewSeparator()),
@@ -249,7 +313,7 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 	leftSized := container.NewGridWrap(fyne.NewSize(285, 520), left)
 	right := container.NewBorder(
 		container.NewVBox(title, summary, widget.NewSeparator()),
-		container.NewVBox(widget.NewSeparator(), status, container.NewHBox(previous, next, openGitHub, watchVideo)),
+		container.NewVBox(widget.NewSeparator(), bottomBar),
 		nil, nil,
 		pageHost,
 	)
@@ -288,10 +352,11 @@ func (ms *MinesportApp) openDocumentationBrowser() {
 		}
 		pages = cleaned
 		list.Refresh()
-		status.SetText(fmt.Sprintf("Documentation index refreshed from GitHub · %d pages", len(pages)))
 		if selected >= len(pages) {
 			selected = 0
 		}
+		updateNavigation()
+		status.SetText(fmt.Sprintf("Documentation index refreshed from GitHub · %d pages", len(pages)))
 		list.Select(widget.ListItemID(selected))
 	}()
 }
