@@ -9,9 +9,11 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.Reader;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /** Applies semantic metadata captured by the Minecraft/Fabric runtime worker. */
@@ -73,15 +75,18 @@ public final class BridgeStateRegistry {
             : null;
         if (blockObject == null || blockObject.size() == 0) return 0;
 
-        Map<String, List<LightState>> registry = new LinkedHashMap<>();
+        Map<String, List<LightState>> lightRegistry = new LinkedHashMap<>();
+        Set<String> runtimeModelBlocks = new HashSet<>();
         for (var blockEntry : blockObject.entrySet()) {
             JsonElement source = blockEntry.getValue();
-            // Schema 1 stored the light-state array directly under the block ID.
-            // Schema 2 stores a full runtime block object with a "lights" array.
             JsonElement lights = source;
             if (schema >= 2 && source.isJsonObject()) {
                 JsonObject block = source.getAsJsonObject();
                 lights = block.has("lights") ? block.get("lights") : null;
+                if (block.has("variants") && block.get("variants").isJsonArray()
+                    && block.getAsJsonArray("variants").size() > 0) {
+                    runtimeModelBlocks.add(blockEntry.getKey());
+                }
             }
             if (lights == null || !lights.isJsonArray()) continue;
 
@@ -101,15 +106,24 @@ public final class BridgeStateRegistry {
                 }
                 states.add(new LightState(properties, level));
             }
-            if (!states.isEmpty()) registry.put(blockEntry.getKey(), states);
+            if (!states.isEmpty()) lightRegistry.put(blockEntry.getKey(), states);
         }
-        if (registry.isEmpty()) return 0;
 
         int enriched = 0;
+        int runtimeTagged = 0;
+        String registryPath = snapshot.getAbsolutePath();
         for (int index = 0; index < blocks.size(); index++) {
             BlockData block = blocks.get(index);
             if (block == null) continue;
-            List<LightState> states = registry.get(block.blockId);
+
+            // Runtime baked geometry is currently authoritative for modded/custom
+            // registered blocks. Vanilla remains on the deterministic static path.
+            if (!block.blockId.startsWith("minecraft:") && runtimeModelBlocks.contains(block.blockId)) {
+                block.runtimeRegistryPath = registryPath;
+                runtimeTagged++;
+            }
+
+            List<LightState> states = lightRegistry.get(block.blockId);
             if (states == null || states.isEmpty()) continue;
 
             LightState match = bestMatch(block, states);
@@ -124,9 +138,15 @@ public final class BridgeStateRegistry {
             enriched++;
         }
 
-        if (enriched > 0 && log != null) {
-            log.accept("Runtime registry: applied Minecraft light emission to " + enriched
-                + " world block(s) from " + snapshot.getName());
+        if (log != null) {
+            if (runtimeTagged > 0) {
+                log.accept("Runtime registry: attached baked model data to " + runtimeTagged
+                    + " modded world block(s)");
+            }
+            if (enriched > 0) {
+                log.accept("Runtime registry: applied Minecraft light emission to " + enriched
+                    + " world block(s) from " + snapshot.getName());
+            }
         }
         return enriched;
     }
@@ -160,6 +180,7 @@ public final class BridgeStateRegistry {
         copy.connectWest = source.connectWest;
         copy.connectUp = source.connectUp;
         copy.isMultipart = source.isMultipart;
+        copy.runtimeRegistryPath = source.runtimeRegistryPath;
         return copy;
     }
 
