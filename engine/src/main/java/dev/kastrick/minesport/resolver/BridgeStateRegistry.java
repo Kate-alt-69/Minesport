@@ -18,7 +18,7 @@ import java.util.function.Consumer;
 
 /** Applies semantic metadata captured by the Minecraft/Fabric runtime worker. */
 public final class BridgeStateRegistry {
-    public static final int SNAPSHOT_SCHEMA = 2;
+    public static final int SNAPSHOT_SCHEMA = 3;
 
     private BridgeStateRegistry() {}
 
@@ -116,10 +116,10 @@ public final class BridgeStateRegistry {
             BlockData block = blocks.get(index);
             if (block == null) continue;
 
-            // Schema-2 capture is produced by Minecraft's own baked model
-            // manager and contains vanilla plus loader-registered blocks. Tag
-            // every matching world block, not just non-minecraft namespaces, so
-            // export can use the same authoritative cache that the worker made.
+            // Schema-3 capture stores sprite-local UVs from Minecraft's baked
+            // model manager and contains vanilla plus loader-registered blocks.
+            // Tag every matching world block so all export paths consume the
+            // same authoritative runtime geometry.
             if (runtimeModelBlocks.contains(block.blockId)) {
                 block.runtimeRegistryPath = registryPath;
                 runtimeTagged++;
