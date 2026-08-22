@@ -71,6 +71,9 @@ public final class RuntimeRegistryDataReader {
             }
 
             int schema = input.readInt();
+            if (schema != SCHEMA) {
+                throw new IOException("unsupported runtime registry schema " + schema + "; expected " + SCHEMA);
+            }
             String minecraftVersion = readString(input);
             String loaderVersion = readString(input);
             String modsFingerprint = readString(input);
@@ -121,6 +124,9 @@ public final class RuntimeRegistryDataReader {
                 for (int lightIndex = 0; lightIndex < lightCount; lightIndex++) {
                     Map<String, String> properties = readStringMap(input);
                     int level = input.readInt();
+                    if (level < 0 || level > 15) {
+                        throw new IOException("invalid runtime light level " + level);
+                    }
                     lights.add(new DataLight(Map.copyOf(properties), level));
                 }
 
