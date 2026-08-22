@@ -33,6 +33,24 @@ func TestDocumentationFallbackPagesAreStableAndSafe(t *testing.T) {
 	}
 }
 
+func TestDocumentationPositionLabelUsesHumanSequentialPages(t *testing.T) {
+	if got := documentationPositionLabel(0, 9); got != "Page 1 of 9" {
+		t.Fatalf("first page label = %q", got)
+	}
+	if got := documentationPositionLabel(2, 9); got != "Page 3 of 9" {
+		t.Fatalf("third page label = %q", got)
+	}
+	if got := documentationPositionLabel(8, 9); got != "Page 9 of 9" {
+		t.Fatalf("last page label = %q", got)
+	}
+	if got := documentationPositionLabel(999, 9); got != "Page 9 of 9" {
+		t.Fatalf("clamped page label = %q", got)
+	}
+	if got := documentationPositionLabel(0, 0); got != "Page 0 of 0" {
+		t.Fatalf("empty page label = %q", got)
+	}
+}
+
 func TestSafeDocumentationPathRejectsTraversalAndNonMarkdown(t *testing.T) {
 	for _, value := range []string{
 		"../README.md",
