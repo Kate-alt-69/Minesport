@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Minesport Dynamic Translator",
     "author": "Kastrick / Minesport",
-    "version": (0, 1, 9),
+    "version": (0, 2, 0),
     "blender": (4, 3, 0),
     "location": "File > Import / Object Properties / Node Editor / 3D View > Minesport",
     "description": "Imports/translates Minesport exports, FLATTER logical geometry and Minecraft lights into Blender-native data.",
@@ -79,6 +79,7 @@ def register():
     _register_optional("viewport_interaction")
     _register_optional("edit_mode")
     _register_optional("flatter_overlay")
+    _register_optional("flatter_020_ui")
     _register_optional("flatter_map")
     _register_optional("flatter_map_live")
     _register_optional("obj_import")
@@ -95,6 +96,7 @@ def unregister():
         "obj_import",
         "flatter_map_live",
         "flatter_map",
+        "flatter_020_ui",
         "flatter_overlay",
         "edit_mode",
         "viewport_interaction",
