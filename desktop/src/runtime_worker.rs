@@ -280,7 +280,7 @@ fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()).is_none_or(|value| !value.eq_ignore_ascii_case("jar")) { continue; }
         let lower = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if lower.starts_with("minesport-capture-bridge-") || lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") { continue; }
+        if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-") || lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") { continue; }
         fs::copy(&path, target.join(entry.file_name())).with_context(|| format!("copy worker mod {}", path.display()))?;
         count += 1;
     }
