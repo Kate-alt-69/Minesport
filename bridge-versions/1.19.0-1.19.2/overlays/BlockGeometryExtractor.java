@@ -30,34 +30,43 @@ public final class BlockGeometryExtractor {
         var variants = new ArrayList<BlockVariant>();
         var shaper = client.getModelManager().getBlockModelShaper();
 
+        // Every registered state remains addressable even when its renderer does
+        // not expose ordinary baked quads. Empty quads mean "known state, custom
+        // or invisible render path", not "state does not exist".
         for (BlockState state : block.getStateDefinition().getPossibleStates()) {
-            BakedModel model = shaper.getBlockModel(state);
-            if (model == null) continue;
-
             var properties = new LinkedHashMap<String, String>();
             state.getValues().forEach((property, value) ->
                 properties.put(property.getName(), value.toString())
             );
 
             var quads = new ArrayList<BakedQuadData>();
-            for (Direction cullFace : DIRECTIONS) {
-                List<BakedQuad> baked;
-                try {
-                    baked = model.getQuads(state, cullFace, RandomSource.create(42L));
-                } catch (Exception exception) {
-                    continue;
-                }
-                for (BakedQuad quad : baked) {
-                    BakedQuadData converted = convertQuad(quad, cullFace);
-                    if (converted != null) quads.add(converted);
+            BakedModel model = shaper.getBlockModel(state);
+            if (model != null) {
+                for (Direction cullFace : DIRECTIONS) {
+                    List<BakedQuad> baked;
+                    try {
+                        baked = model.getQuads(state, cullFace, RandomSource.create(stableSeed(block, state)));
+                    } catch (Exception exception) {
+                        continue;
+                    }
+                    for (BakedQuad quad : baked) {
+                        BakedQuadData converted = convertQuad(quad, cullFace);
+                        if (converted != null) quads.add(converted);
+                    }
                 }
             }
-
-            if (!quads.isEmpty()) {
-                variants.add(new BlockVariant(properties, quads));
-            }
+            variants.add(new BlockVariant(properties, quads));
         }
         return variants;
+    }
+
+    private static long stableSeed(Block block, BlockState state) {
+        long seed = 1469598103934665603L;
+        seed ^= System.identityHashCode(block);
+        seed *= 1099511628211L;
+        seed ^= state.toString().hashCode();
+        seed *= 1099511628211L;
+        return seed;
     }
 
     private static BakedQuadData convertQuad(BakedQuad quad, Direction cullFace) {
