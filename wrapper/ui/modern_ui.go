@@ -31,18 +31,17 @@ func RunModern(jarPath, diagnosticsLogPath string) {
 	ms.engine = ipc.NewEngine(jarPath)
 	w.SetContent(ms.buildModernUI())
 	ms.installWorkbenchEnhancements()
-	ms.installProjectControls()
 	installWorkbenchAssetCenter(ms)
 	ms.installViewportShortcuts()
 	w.SetCloseIntercept(func() {
 		cleanupWorkbenchAssetCenter(ms)
-		cleanupProjectControls(ms)
 		cleanupWorkbenchEnhancements(ms)
 		cleanupWorkbenchRuntimeV3(ms)
 		workbenchStates.Delete(ms)
 		if ms.embeddedViewer != nil {
 			ms.embeddedViewer.Close()
 		}
+		ms.cancelRuntimeModelCacheGeneration()
 		ms.engine.Stop()
 		w.SetCloseIntercept(nil)
 		w.Close()
@@ -141,7 +140,19 @@ func (ms *MinesportApp) onExportModern() {
 		ms.handleCoreEngineFailure("Export was requested while the core engine was unavailable.")
 		return
 	}
-	if ms.requireBridgeCompatibility(ms.onExportModern) {
+
+	// Fabric exports automatically populate the runtime registry when the exact
+	// Minecraft-version/mod-set cache is missing or stale. Manual generation is
+	// still available under Settings → Advanced, but it is never a prerequisite
+	// the user has to remember before pressing Export.
+	if ms.ensureRuntimeModelCacheForExport(ms.onExportModernAfterRuntimeCache) {
+		return
+	}
+	ms.onExportModernAfterRuntimeCache()
+}
+
+func (ms *MinesportApp) onExportModernAfterRuntimeCache() {
+	if ms.requireBridgeCompatibility(ms.onExportModernAfterRuntimeCache) {
 		return
 	}
 
@@ -251,14 +262,6 @@ func (ms *MinesportApp) startModernExport(outputPath string) {
 		"minecraftVersion": normalizedMinecraftVersion(ms.mcVersion),
 		"modLoader":        normalizedLoader(ms.loaderType),
 	}
-	if project := ms.currentProjectState(); project != nil {
-		if strings.TrimSpace(project.id) != "" {
-			options["projectId"] = project.id
-		}
-		if strings.TrimSpace(project.path) != "" {
-			options["projectPath"] = project.path
-		}
-	}
 	if ms.optimizeCheck.Checked {
 		options["optimize"] = "true"
 		options["faceCulling"] = "true"
@@ -345,9 +348,6 @@ func (ms *MinesportApp) finishModernExport(resp ipc.Response, ok bool, msg strin
 			ext = ".obj"
 		}
 		exportedPath = filepath.Join(ms.outputPath, name+ext)
-	}
-	if err := ms.stampCurrentProjectMetadata(exportedPath); err != nil {
-		ms.appendLog("[WARN] Could not stamp Minesport project identity: " + err.Error())
 	}
 
 	ms.showModernExportComplete(exportedPath, resp)
