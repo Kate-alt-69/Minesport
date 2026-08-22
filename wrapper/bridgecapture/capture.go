@@ -19,11 +19,11 @@ import (
 
 const (
 	DefaultAddress       = "127.0.0.1:25590"
-	SnapshotSchema       = 3
+	SnapshotSchema       = 4
 	maxMessageSize       = 128 << 20
 	captureBridgePrefix  = "minesport-capture-bridge-"
 	captureBridgeSuffix  = ".jar"
-	registryFileName     = "registry.json"
+	registryFileName     = "registry.data"
 	modHashCacheFileName = "mod-hash-cache-v1.json"
 	modHashCacheSchema   = 1
 )
@@ -228,9 +228,9 @@ func (s *Server) capture(connection net.Conn) {
 			entry.Lights = sanitizeLights(message.States)
 			snapshot.Blocks[blockID] = entry
 		case "texture":
-			// Legacy bridge packets may still send images. Runtime-registry schema 3
-			// intentionally does not cache texture bytes; texture IDs on baked quads
-			// are resolved later from resource packs/mod JARs/vanilla/Piston.
+			// Legacy bridge packets may still send images. Runtime-registry schema 4
+			// deliberately caches no texture bytes; baked quads keep texture IDs and
+			// the engine resolves pixels through packs/mod JARs/vanilla/Piston.
 		case "error":
 			if message.Message != "" {
 				s.log("Minecraft runtime worker reported: " + message.Message)
@@ -260,8 +260,6 @@ func (s *Server) capture(connection net.Conn) {
 		snapshot.ModsFingerprint = session.ModsFingerprint
 	}
 	if snapshot.ModsFingerprint == "" {
-		// An externally launched bridge can still be inspected, but it is kept in
-		// an unscoped bucket and will never pass SnapshotPathForMods validation.
 		snapshot.ModsFingerprint = loadedModsFingerprint(snapshot.LoadedMods)
 	}
 	snapshot.CapturedAt = time.Now().UTC().Format(time.RFC3339)
@@ -272,7 +270,7 @@ func (s *Server) capture(connection net.Conn) {
 	}
 	cleanupSession(snapshot.MinecraftVersion)
 	s.log(fmt.Sprintf(
-		"Runtime model registry cached for Minecraft %s: %d block type(s) · %s",
+		"Full runtime registry cached for Minecraft %s: %d registered block type(s) · %s",
 		snapshot.MinecraftVersion,
 		len(snapshot.Blocks),
 		path,
@@ -330,9 +328,6 @@ func (s *Server) log(message string) {
 	}
 }
 
-// BeginSession binds the next runtime dump for this Minecraft version to the
-// exact mod-JAR set currently selected in Minesport. The worker may run from a
-// disposable game directory; the original mods directory is only fingerprinted.
 func BeginSession(version, modsPath string) (string, error) {
 	version = strings.TrimSpace(version)
 	modsPath = filepath.Clean(strings.TrimSpace(modsPath))
@@ -356,9 +351,6 @@ func BeginSession(version, modsPath string) (string, error) {
 	return fingerprint, nil
 }
 
-// StageBridge is retained as a compatibility fallback for launchers that still
-// require instance staging. New Minesport worker capture should prefer BeginSession
-// plus a disposable worker directory and never touch the user's instance.
 func StageBridge(bridgeJar, modsPath, version string) (string, error) {
 	bridgeJar = filepath.Clean(strings.TrimSpace(bridgeJar))
 	if bridgeJar == "" || bridgeJar == "." {
@@ -430,8 +422,6 @@ func sessionForVersion(version string) (captureSession, bool) {
 	return session, ok
 }
 
-// SnapshotPath reports any valid cached registry for a Minecraft version. It is
-// used only for UI stale/not-captured status; exports must use SnapshotPathForMods.
 func SnapshotPath(version string) (string, bool) {
 	version = strings.TrimSpace(version)
 	if version == "" {
@@ -477,21 +467,12 @@ func SnapshotPathForMods(version, modsPath string) (string, bool) {
 }
 
 func snapshotPathAt(dir, version, fingerprint string) string {
-	return filepath.Join(
-		dir,
-		safeVersion(version),
-		safeFingerprint(fingerprint),
-		registryFileName,
-	)
+	return filepath.Join(dir, safeVersion(version), safeFingerprint(fingerprint), registryFileName)
 }
 
 func validSnapshot(path, version, fingerprint string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var snapshot Snapshot
-	if json.Unmarshal(data, &snapshot) != nil || snapshot.Schema != SnapshotSchema {
+	snapshot, err := readSnapshotFile(path)
+	if err != nil || snapshot.Schema != SnapshotSchema {
 		return false
 	}
 	if strings.TrimSpace(snapshot.MinecraftVersion) != strings.TrimSpace(version) {
@@ -524,17 +505,13 @@ func writeSnapshotAt(dir string, snapshot Snapshot) (string, error) {
 	if err := os.MkdirAll(folder, 0o755); err != nil {
 		return "", err
 	}
-	data, err := json.MarshalIndent(snapshot, "", "  ")
-	if err != nil {
-		return "", err
-	}
 	temporary, err := os.CreateTemp(folder, ".runtime-registry-*.tmp")
 	if err != nil {
 		return "", err
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if _, err := temporary.Write(data); err != nil {
+	if err := writeSnapshotData(temporary, snapshot); err != nil {
 		temporary.Close()
 		return "", err
 	}
@@ -545,10 +522,6 @@ func writeSnapshotAt(dir string, snapshot Snapshot) (string, error) {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return "", err
 	}
-
-	// A new successful capture supersedes every older mod-set fingerprint for
-	// this exact Minecraft version. Keeping those siblings wastes disk and makes
-	// cache inspection confusing; current exports can only use this fingerprint.
 	_ = pruneSiblingFingerprints(dir, snapshot.MinecraftVersion, snapshot.ModsFingerprint)
 	return path, nil
 }
@@ -574,10 +547,6 @@ func pruneSiblingFingerprints(dir, version, keepFingerprint string) error {
 	return nil
 }
 
-// ModsFingerprint uses SHA-256 of the actual JAR contents. To avoid re-reading
-// every mod on every export, per-JAR content digests are cached by absolute path
-// plus size/mtime. Normal add/remove/update workflows therefore remain cheap,
-// while the registry identity itself is content-based rather than timestamp-based.
 func ModsFingerprint(modsPath string) (string, error) {
 	return modsFingerprintAt(modsPath, filepath.Join(cacheDir(), modHashCacheFileName))
 }
@@ -636,16 +605,10 @@ func modsFingerprintAt(modsPath, hashCachePath string) (string, error) {
 			return "", fmt.Errorf("hash mod JAR %s: %w", items[index].path, hashErr)
 		}
 		items[index].hash = digest
-		cache.Entries[key] = jarHashCacheEntry{
-			Size:    items[index].size,
-			ModTime: items[index].mod,
-			SHA256:  digest,
-		}
+		cache.Entries[key] = jarHashCacheEntry{Size: items[index].size, ModTime: items[index].mod, SHA256: digest}
 		dirty = true
 	}
 	if dirty {
-		// Digest caching is an optimization only. A cache write failure must not
-		// prevent a correct content fingerprint from being returned.
 		_ = writeJarHashCache(hashCachePath, cache)
 	}
 	modHashCacheMu.Unlock()
@@ -666,10 +629,7 @@ func jarHashCacheKey(path string) string {
 }
 
 func readJarHashCache(path string) jarHashCacheDocument {
-	document := jarHashCacheDocument{
-		Schema:  modHashCacheSchema,
-		Entries: make(map[string]jarHashCacheEntry),
-	}
+	document := jarHashCacheDocument{Schema: modHashCacheSchema, Entries: make(map[string]jarHashCacheEntry)}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return document
@@ -738,7 +698,6 @@ func safeFingerprint(value string) string {
 	if value == "" {
 		return "unknown"
 	}
-	// Real mod fingerprints are SHA-256. Keep unscoped values readable but safe.
 	if len(value) > 80 {
 		value = value[:80]
 	}
@@ -763,8 +722,7 @@ func cleanupCaptureJars(modsPath string) error {
 
 func isCaptureBridgeName(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasPrefix(lower, captureBridgePrefix) &&
-		strings.HasSuffix(lower, captureBridgeSuffix)
+	return strings.HasPrefix(lower, captureBridgePrefix) && strings.HasSuffix(lower, captureBridgeSuffix)
 }
 
 func copyFile(source, destination string) error {
