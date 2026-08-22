@@ -21,6 +21,7 @@ LIGHT_RANGE_KEY = "minesport_light_range_blocks"
 LIGHT_FALLOFF_KEY = "minesport_light_falloff"
 LIGHT_SOURCE_KEY = "minesport_light_source"
 LIGHT_INVISIBLE_KEY = "minesport_light_invisible_source"
+LIGHT_IMPORTED_KEY = "minesport_light_imported"
 LIGHT_HELPERS_KEY = "minesport_light_helpers_visible"
 LIGHT_COLLECTION_KEY = "minesport_light_collection"
 
@@ -60,15 +61,22 @@ def _existing_light(name):
     exact = bpy.data.objects.get(name)
     if exact is not None and exact.type == "LIGHT":
         return exact
-    # Blender may suffix an imported glTF node if the scene already contained a
-    # same-named object. Prefer an unclaimed Minesport-like light before creating
-    # another point light at exactly the same location.
     for obj in bpy.data.objects:
         if obj.type != "LIGHT":
             continue
-        if obj.name.startswith(name + ".") and not obj.get("minesport_type"):
+        if obj.name.startswith(name + ".") and obj.get("minesport_type") == TYPE_LIGHT:
             return obj
     return None
+
+
+def _incoming_light(imported, name):
+    exact = next((obj for obj in imported if obj.type == "LIGHT" and obj.name == name), None)
+    if exact is not None:
+        return exact
+    return next(
+        (obj for obj in imported if obj.type == "LIGHT" and obj.name.startswith(name + ".")),
+        None,
+    )
 
 
 def _move_to_collection(obj, collection):
@@ -92,7 +100,7 @@ def _vec3(value, fallback):
     return fallback
 
 
-def _configure_light(obj, descriptor, helpers_visible=False):
+def _configure_light(obj, descriptor, helpers_visible=False, imported=True):
     level = max(1, min(15, int(descriptor.get("minecraftLevel", 15))))
     range_blocks = max(0.5, float(descriptor.get("rangeBlocks", level + 0.5)))
     intensity = max(0.0, float(descriptor.get("intensity", 45.0 * level)))
@@ -103,9 +111,9 @@ def _configure_light(obj, descriptor, helpers_visible=False):
         data.type = "POINT"
     data.color = color
     data.energy = intensity
-    # Give the Minecraft logical reach a hard outer bound while Blender renders
-    # a smooth point-light falloff inside it. Level 6 therefore reaches roughly
-    # six blocks, but never looks like six blocky brightness shells.
+    # Minecraft's logical reach stays exact in metadata. Blender receives a hard
+    # outer range and renders a smooth falloff within it, so level 6 reaches
+    # roughly six blocks without looking like Minecraft's old blocky light bands.
     if hasattr(data, "use_custom_distance"):
         data.use_custom_distance = True
     if hasattr(data, "cutoff_distance"):
@@ -119,6 +127,7 @@ def _configure_light(obj, descriptor, helpers_visible=False):
     obj[LIGHT_FALLOFF_KEY] = str(descriptor.get("falloff") or "minecraft_linear_smooth")
     obj[LIGHT_SOURCE_KEY] = str(descriptor.get("source") or "minecraft:light")
     obj[LIGHT_INVISIBLE_KEY] = bool(descriptor.get("invisibleSource", False))
+    obj[LIGHT_IMPORTED_KEY] = bool(imported)
     obj["minesport_light_decay_rule"] = "one_level_per_block"
     obj["minesport_light_smooth_render"] = True
     obj.hide_render = False
@@ -130,26 +139,41 @@ def _configure_light(obj, descriptor, helpers_visible=False):
     if hasattr(obj, "minesport"):
         obj.minesport.translated = True
         obj.minesport.source_block = str(descriptor.get("source") or "minecraft:light")
+        obj.minesport.light_level = level
 
 
 def translate_lights(metadata, objects=None):
     if not isinstance(metadata, dict):
         return []
     records = metadata.get("lights")
-    if not isinstance(records, list) or not records:
+    if not isinstance(records, list):
         return []
 
     collection = _light_collection(metadata)
     helpers_visible = bool(collection.get(LIGHT_HELPERS_KEY, False))
     imported = list(objects) if objects is not None else list(bpy.context.scene.objects)
-    imported_by_name = {obj.name: obj for obj in imported if obj.type == "LIGHT"}
     result = []
+    keep = set()
 
     for descriptor in records:
         if not isinstance(descriptor, dict):
             continue
         name = _safe_name(descriptor.get("name"))
-        obj = imported_by_name.get(name) or _existing_light(name)
+        existing = _existing_light(name)
+        incoming = _incoming_light(imported, name)
+
+        if existing is not None and incoming is not None and incoming != existing:
+            # Full glTF refreshes may import a temporary .001 light because the
+            # previous Minesport light already owns the stable name. Reuse the
+            # stable object (preserving Blender-side references) and delete only
+            # the duplicate native import.
+            try:
+                bpy.data.objects.remove(incoming, do_unlink=True)
+            except Exception:
+                pass
+            incoming = None
+
+        obj = existing or incoming
         if obj is None:
             data = bpy.data.lights.new(name + "_Data", type="POINT")
             obj = bpy.data.objects.new(name, data)
@@ -159,8 +183,21 @@ def translate_lights(metadata, objects=None):
 
         position = _vec3(descriptor.get("position"), tuple(obj.location))
         obj.location = position
-        _configure_light(obj, descriptor, helpers_visible=helpers_visible)
+        _configure_light(obj, descriptor, helpers_visible=helpers_visible, imported=True)
+        keep.add(obj.name)
         result.append(obj)
+
+    # Round-trip refresh: remove imported lights that disappeared from Minecraft,
+    # but never touch user-created animation/lighting helpers.
+    for obj in list(_objects_in_light_collection(collection)):
+        if not bool(obj.get(LIGHT_IMPORTED_KEY, False)):
+            continue
+        if obj.name in keep:
+            continue
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        except Exception:
+            pass
 
     collection["minesport_light_count"] = len(result)
     return result
@@ -200,6 +237,14 @@ def _active_flatter(context=None):
     return obj
 
 
+def _active_light(context=None):
+    context = context or bpy.context
+    obj = getattr(context, "object", None)
+    if obj is None or obj.type != "LIGHT" or obj.get("minesport_type") != TYPE_LIGHT:
+        return None
+    return obj
+
+
 def _focused_xyz(parent):
     try:
         value = json.loads(parent.get(flatter._SELECTED_KEY, ""))
@@ -234,6 +279,37 @@ class MINESPORT_OT_light_helpers_toggle(bpy.types.Operator):
         visible = not _helpers_visible()
         count = _set_helpers_visible(visible)
         self.report({"INFO"}, f"{'Showing' if visible else 'Hiding'} {count:,} Minesport light helper(s)")
+        return {"FINISHED"}
+
+
+class MINESPORT_OT_light_apply_level(bpy.types.Operator):
+    bl_idname = "minesport.light_apply_level"
+    bl_label = "Apply Minecraft Light Level"
+    bl_description = "Update this Blender light's smooth range and energy from its Minecraft light level"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        obj = _active_light(context)
+        if obj is None:
+            return {"CANCELLED"}
+        level = max(1, min(15, int(obj.minesport.light_level)))
+        descriptor = {
+            "minecraftLevel": level,
+            "rangeBlocks": level + 0.5,
+            "intensity": 45.0 * level,
+            "falloff": obj.get(LIGHT_FALLOFF_KEY, "minecraft_linear_smooth"),
+            "source": obj.get(LIGHT_SOURCE_KEY, "minecraft:light"),
+            "invisibleSource": bool(obj.get(LIGHT_INVISIBLE_KEY, False)),
+            "color": list(obj.data.color),
+        }
+        visible = not obj.hide_get()
+        _configure_light(
+            obj,
+            descriptor,
+            helpers_visible=visible,
+            imported=bool(obj.get(LIGHT_IMPORTED_KEY, False)),
+        )
+        self.report({"INFO"}, f"Minecraft light level {level} → smooth {level + 0.5:.1f}-block range")
         return {"FINISHED"}
 
 
@@ -286,6 +362,7 @@ class MINESPORT_OT_flatter_add_light(bpy.types.Operator):
             obj,
             _descriptor_for_user_light(name, level, world),
             helpers_visible=bool(collection.get(LIGHT_HELPERS_KEY, False)),
+            imported=False,
         )
         collection["minesport_light_count"] = int(collection.get("minesport_light_count", 0)) + 1
         self.report({"INFO"}, f"Placed light level {level} on {snap.lower()} face @ {xyz}")
@@ -314,6 +391,14 @@ class MINESPORT_PT_lights(bpy.types.Panel):
         )
         box.label(text="Logical level falls by 1/block; Blender falloff stays smooth.", icon="INFO")
 
+        light = _active_light(context)
+        if light is not None:
+            edit = layout.box()
+            edit.label(text=str(light.get(LIGHT_SOURCE_KEY, "Minecraft light")), icon="LIGHT_POINT")
+            edit.prop(light.minesport, "light_level")
+            edit.label(text=f"Range: {float(light.get(LIGHT_RANGE_KEY, 0.0)):.1f} blocks")
+            edit.operator(MINESPORT_OT_light_apply_level.bl_idname, icon="FILE_REFRESH")
+
         parent = _active_flatter(context)
         if parent is not None:
             place = layout.box()
@@ -330,6 +415,7 @@ class MINESPORT_PT_lights(bpy.types.Panel):
 
 _CLASSES = (
     MINESPORT_OT_light_helpers_toggle,
+    MINESPORT_OT_light_apply_level,
     MINESPORT_OT_flatter_add_light,
     MINESPORT_PT_lights,
 )
