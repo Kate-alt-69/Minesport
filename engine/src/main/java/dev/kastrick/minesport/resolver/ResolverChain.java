@@ -103,10 +103,14 @@ public class ResolverChain {
             BufferedImage img = r.resolveTexture(normalized);
             if (img == null) continue;
             textureSources.put(texturePath, r.name());
+
             String metadata = r.resolveTextureMetadata(normalized);
             if (metadata == null && r instanceof VanillaResolver vanilla) {
                 metadata = AnimationAwareVanillaResolver.readFrom(vanilla, normalized);
+            } else if (metadata == null && (r instanceof QuiltResolver || r instanceof ForgeResolver)) {
+                metadata = ModJarTextureMetadata.read(r, normalized);
             }
+
             // The winning PNG owns the animation decision. Null means static;
             // never continue into a lower-priority resolver after this point.
             return metadata;
