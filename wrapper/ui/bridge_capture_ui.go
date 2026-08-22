@@ -22,14 +22,15 @@ type runtimeCacheCompletion func(error)
 type runtimeCacheProgress func(int, string)
 
 type runtimeCacheJobState struct {
-	mu         sync.Mutex
-	running    bool
-	cancelled  bool
-	version    string
-	modsPath   string
-	worker     *bridgecompat.RuntimeWorker
-	callbacks  []runtimeCacheCompletion
-	listeners  []runtimeCacheProgress
+	mu          sync.Mutex
+	running     bool
+	cancelled   bool
+	version     string
+	modsPath    string
+	fingerprint string
+	worker      *bridgecompat.RuntimeWorker
+	callbacks   []runtimeCacheCompletion
+	listeners   []runtimeCacheProgress
 }
 
 var runtimeCacheJobs sync.Map
@@ -69,11 +70,12 @@ func (ms *MinesportApp) finishRuntimeCacheJob(err error) {
 	callbacks := append([]runtimeCacheCompletion(nil), state.callbacks...)
 	state.running = false
 	state.cancelled = false
-	state.version = ""
-	state.modsPath = ""
 	state.worker = nil
 	state.callbacks = nil
 	state.listeners = nil
+	// Keep version/modsPath/fingerprint as the last verified instance identity.
+	// READY checks can then be cheap and never re-hash the mod directory on the
+	// Fyne event thread. A new cache job replaces this identity synchronously.
 	state.mu.Unlock()
 	if len(callbacks) == 0 {
 		return
@@ -96,16 +98,12 @@ func (ms *MinesportApp) generateRuntimeModelCache(
 	if err != nil {
 		return false, err
 	}
-	if !force {
-		if _, ok := bridgecapture.SnapshotPathForMods(version, ms.modsPath); ok {
-			return false, nil
-		}
-	}
 
+	modsPath := ms.modsPath
 	state := runtimeCacheJob(ms)
 	state.mu.Lock()
 	if state.running {
-		if state.version != version || !strings.EqualFold(state.modsPath, ms.modsPath) {
+		if state.version != version || !strings.EqualFold(state.modsPath, modsPath) {
 			state.mu.Unlock()
 			return false, fmt.Errorf("another runtime model-cache worker is already running")
 		}
@@ -121,7 +119,8 @@ func (ms *MinesportApp) generateRuntimeModelCache(
 	state.running = true
 	state.cancelled = false
 	state.version = version
-	state.modsPath = ms.modsPath
+	state.modsPath = modsPath
+	state.fingerprint = ""
 	state.worker = nil
 	state.callbacks = nil
 	state.listeners = nil
@@ -133,17 +132,48 @@ func (ms *MinesportApp) generateRuntimeModelCache(
 	}
 	state.mu.Unlock()
 
-	go ms.runRuntimeModelCacheJob(version, ms.modsPath)
+	// SHA-256 identity work can touch every installed mod JAR. It belongs here,
+	// never in a button callback or Settings renderer.
+	go ms.runRuntimeModelCacheJob(version, modsPath, force)
 	return true, nil
 }
 
-func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
-	fingerprint, err := bridgecapture.BeginSession(version, modsPath)
+func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string, force bool) {
+	ms.emitRuntimeCacheProgress(1, "Verifying exact mod contents…")
+	fingerprint, err := bridgecapture.ModsFingerprint(modsPath)
 	if err != nil {
 		ms.finishRuntimeCacheJob(err)
 		return
 	}
+
+	state := runtimeCacheJob(ms)
+	state.mu.Lock()
+	if !state.running || state.version != version || !strings.EqualFold(state.modsPath, modsPath) {
+		state.mu.Unlock()
+		return
+	}
+	state.fingerprint = fingerprint
+	cancelled := state.cancelled
+	state.mu.Unlock()
+	if cancelled {
+		ms.finishRuntimeCacheJob(fmt.Errorf("runtime model-cache generation cancelled"))
+		return
+	}
+
 	ms.appendLogAsync("Runtime model cache fingerprint: " + fingerprint)
+	if !force {
+		if path, ok := bridgecapture.SnapshotPathForFingerprint(version, fingerprint); ok {
+			ms.appendLogAsync("Full runtime model registry already ready: " + path)
+			ms.emitRuntimeCacheProgress(100, "Full runtime model registry already ready")
+			ms.finishRuntimeCacheJob(nil)
+			return
+		}
+	}
+
+	if err := bridgecapture.BeginSessionWithFingerprint(version, modsPath, fingerprint); err != nil {
+		ms.finishRuntimeCacheJob(err)
+		return
+	}
 	ms.emitRuntimeCacheProgress(2, "Fingerprint ready · preparing isolated Minecraft worker")
 
 	worker, err := bridgecompat.StartRuntimeWorker(
@@ -166,7 +196,6 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 		return
 	}
 
-	state := runtimeCacheJob(ms)
 	state.mu.Lock()
 	if state.cancelled {
 		state.mu.Unlock()
@@ -187,7 +216,7 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 	defer timeout.Stop()
 
 	for {
-		if path, ok := bridgecapture.SnapshotPathForMods(version, modsPath); ok {
+		if path, ok := bridgecapture.SnapshotPathForFingerprint(version, fingerprint); ok {
 			// The Bridge publishes a reusable instance-wide registry only after its
 			// complete all-registry packet has been received. Selection bounds are
 			// never involved in this capture.
@@ -204,7 +233,7 @@ func (ms *MinesportApp) runRuntimeModelCacheJob(version, modsPath string) {
 		case <-worker.Done():
 			waitErr := worker.Wait()
 			bridgecapture.CancelSession(version)
-			if _, ok := bridgecapture.SnapshotPathForMods(version, modsPath); ok && waitErr == nil {
+			if _, ok := bridgecapture.SnapshotPathForFingerprint(version, fingerprint); ok && waitErr == nil {
 				ms.emitRuntimeCacheProgress(100, "Full runtime model registry ready")
 				ms.finishRuntimeCacheJob(nil)
 				return
@@ -253,6 +282,32 @@ func (ms *MinesportApp) cancelRuntimeModelCacheGeneration() {
 	}
 }
 
+func (ms *MinesportApp) runtimeCacheFingerprintForCurrentWorld() (string, bool) {
+	if ms == nil {
+		return "", false
+	}
+	version := bridgecompat.NormalizeVersion(ms.mcVersion)
+	modsPath := ms.modsPath
+	state := runtimeCacheJob(ms)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.version != version || !strings.EqualFold(state.modsPath, modsPath) || state.fingerprint == "" {
+		return "", false
+	}
+	return state.fingerprint, true
+}
+
+func (ms *MinesportApp) runtimeCacheReadyForCurrentWorld() (string, bool) {
+	fingerprint, ok := ms.runtimeCacheFingerprintForCurrentWorld()
+	if !ok {
+		return "", false
+	}
+	return bridgecapture.SnapshotPathForFingerprint(
+		bridgecompat.NormalizeVersion(ms.mcVersion),
+		fingerprint,
+	)
+}
+
 // ensureRuntimeModelCacheForExport returns true when Export has been deferred
 // while the instance-wide registry worker runs. Failure is non-fatal: Minesport
 // reports it clearly and continues with the static resolver chain.
@@ -265,7 +320,7 @@ func (ms *MinesportApp) ensureRuntimeModelCacheForExport(continueExport func()) 
 		ms.appendLog("Runtime model cache skipped: " + err.Error())
 		return false
 	}
-	if _, ok := bridgecapture.SnapshotPathForMods(version, ms.modsPath); ok {
+	if _, ok := ms.runtimeCacheReadyForCurrentWorld(); ok {
 		return false
 	}
 
@@ -391,15 +446,18 @@ func (ms *MinesportApp) bridgeRuntimeCaptureStatus() string {
 		return "UNAVAILABLE · The selected instance mods folder cannot be read."
 	}
 	if ms.runtimeCacheIsPreparingForCurrentWorld() {
-		return "PREPARING · Caching every registered block state and baked model for Minecraft " + version + "."
+		if _, known := ms.runtimeCacheFingerprintForCurrentWorld(); known {
+			return "PREPARING · Loading every registered block state and baked model for Minecraft " + version + "."
+		}
+		return "PREPARING · Verifying the exact Fabric mod set for Minecraft " + version + "."
 	}
-	if path, ok := bridgecapture.SnapshotPathForMods(version, ms.modsPath); ok {
+	if path, ok := ms.runtimeCacheReadyForCurrentWorld(); ok {
 		return "READY · Full Minecraft " + version + " runtime registry matches this mod set · " + path
 	}
-	if _, ok := bridgecapture.SnapshotPath(version); ok {
-		return "STALE · Mod set changed; Minesport will rebuild the full runtime registry automatically."
+	if _, known := ms.runtimeCacheFingerprintForCurrentWorld(); known {
+		return "STALE / NOT CACHED · This exact mod set has no completed runtime registry yet."
 	}
-	return "NOT CACHED · Minesport will prepare the full registered block/state/model registry automatically."
+	return "NOT CACHED · Minesport will verify this mod set and prepare the full registered block/state/model registry automatically."
 }
 
 func (ms *MinesportApp) validateBridgeRuntimeCapture() (string, error) {
