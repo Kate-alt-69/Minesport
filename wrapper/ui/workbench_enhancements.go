@@ -72,15 +72,15 @@ func (ms *MinesportApp) installWorkbenchEnhancements() {
 	state.run = widget.NewButtonWithIcon("Run quick preflight", theme.SearchIcon(), func() {
 		ms.runQuickPreflight()
 	})
-	state.result = widget.NewLabel("Preflight has not been run for this selection.")
+	state.result = widget.NewLabel("")
 	state.result.Wrapping = fyne.TextWrapWord
+	state.result.Hide()
 	state.optimizer = widget.NewLabel("Run Quick Preflight to populate the optimization analyzer.")
 	state.optimizer.Wrapping = fyne.TextWrapWord
 
 	presetHint := widget.NewLabel("Presets configure the current export controls; Advanced settings remain available underneath.")
 	presetHint.Wrapping = fyne.TextWrapWord
 	presetCard := widget.NewCard("PRESET", "", container.NewVBox(state.preset, presetHint))
-	preflightCard := widget.NewCard("QUICK PREFLIGHT", "", container.NewVBox(state.run, state.result))
 
 	optimizeMore := widget.NewButton("Apply safe optimization", func() {
 		ms.settings.OptimizeOutputEnabled = true
@@ -101,11 +101,32 @@ func (ms *MinesportApp) installWorkbenchEnhancements() {
 		"Logical pressure before final geometry compilation",
 		container.NewVBox(state.optimizer, optimizeMore),
 	)
+	optimizerHolder := container.NewVBox(optimizerCard)
+	optimizerHolder.Hide()
+	analysisToggle := widget.NewButton("Show optimization analysis", nil)
+	analysisToggle.OnTapped = func() {
+		if optimizerHolder.Visible() {
+			optimizerHolder.Hide()
+			analysisToggle.SetText("Show optimization analysis")
+			return
+		}
+		optimizerHolder.Show()
+		analysisToggle.SetText("Hide optimization analysis")
+	}
 
+	preflightCard := widget.NewCard(
+		"QUICK PREFLIGHT",
+		"",
+		container.NewVBox(state.run, state.result, analysisToggle, optimizerHolder),
+	)
+
+	// Keep diagnostics compact around the real export pane. The analyzer is
+	// collapsed by default so its multiline text can never consume the sidebar
+	// and push the actual Export button out of view.
 	holder.RemoveAll()
 	holder.Add(container.NewBorder(
 		presetCard,
-		container.NewVBox(preflightCard, optimizerCard),
+		preflightCard,
 		nil,
 		nil,
 		base,
@@ -207,6 +228,7 @@ func (ms *MinesportApp) runQuickPreflight() {
 	if state == nil || state.run == nil || state.result == nil {
 		return
 	}
+	state.result.Show()
 	if ms.worldPath == "" {
 		state.result.SetText("Select a Minecraft world before running preflight.")
 		return
