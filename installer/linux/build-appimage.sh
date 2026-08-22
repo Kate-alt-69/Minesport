@@ -11,7 +11,7 @@ case "$ARCH_RAW" in
   *) echo "ERROR: unsupported AppImage architecture: $ARCH_RAW" >&2; exit 1 ;;
 esac
 
-BIN="$ROOT/wrapper/dist/minesport"
+BIN="$ROOT/desktop/dist/minesport"
 MANIFEST="$ROOT/bridge-versions/manifest.json"
 BRIDGE="$ROOT/dist/bundled-bridge/minesport-bridge-${BRIDGE_VERSION}.jar"
 OUT="$ROOT/dist/installer"
