@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"sync"
 
 	"fyne.io/fyne/v2"
@@ -60,15 +59,14 @@ func (ms *MinesportApp) showRuntimeCacheWindow(version string) {
 	detail.Wrapping = fyne.TextWrapWord
 	bar := widget.NewProgressBar()
 	bar.SetValue(0)
-	percent := widget.NewLabel("0%")
 
 	cancel := widget.NewButtonWithIcon("Cancel", theme.CancelIcon(), nil)
 	state := &runtimeCacheWindowState{
-		window: w,
-		stage: stage,
-		detail: detail,
-		bar: bar,
-		cancel: cancel,
+		window:  w,
+		stage:   stage,
+		detail:  detail,
+		bar:     bar,
+		cancel:  cancel,
 		version: version,
 	}
 	cancel.OnTapped = func() {
@@ -78,14 +76,10 @@ func (ms *MinesportApp) showRuntimeCacheWindow(version string) {
 		ms.cancelRuntimeModelCacheGeneration()
 	}
 
-	bar.OnChanged = func(value float64) {
-		percent.SetText(fmt.Sprintf("%d%%", int(value*100+0.5)))
-	}
-
 	content := container.NewVBox(
 		container.NewBorder(nil, nil, spinner, nil, stage),
 		detail,
-		container.NewBorder(nil, nil, nil, percent, bar),
+		bar,
 		widget.NewSeparator(),
 		widget.NewLabel("Minesport is caching Minecraft's registered baked block models. Your world is not opened or modified."),
 		container.NewHBox(cancel),
