@@ -66,8 +66,6 @@ where
     if !mods_path.is_dir() { bail!("mods folder is unavailable: {}", mods_path.display()); }
     if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
 
-    // Keep generated cache/toolchain/workspace paths alive for the entire
-    // operation. Destructive cleanup takes the write side of the same lease.
     let _cache_lease = runtime::acquire_generated_cache_lease()?;
 
     progress(Progress { percent: 1, message: "Verifying exact mod contents…".into() });
@@ -100,7 +98,7 @@ where
 
     let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);
     let (capture_tx, capture_rx) = mpsc::sync_channel::<Result<PathBuf>>(1);
-    let (capture_progress_tx, capture_progress_rx) = mpsc::channel::<usize>();
+    let (capture_progress_tx, capture_progress_rx) = mpsc::channel::<(usize, usize)>();
     let capture_root = cache_root.clone();
     let capture_version = version.clone();
     let capture_fingerprint = fingerprint.clone();
@@ -116,8 +114,8 @@ where
                     announced = true;
                     let _ = listen_tx.send(Ok(()));
                 }
-                registry::CaptureNotice::Progress { blocks } => {
-                    let _ = capture_progress_tx.send(blocks);
+                registry::CaptureNotice::Progress { blocks, total_blocks } => {
+                    let _ = capture_progress_tx.send((blocks, total_blocks));
                 }
                 _ => {}
             },
@@ -141,17 +139,16 @@ where
             bail!("runtime model-cache generation cancelled");
         }
 
-        while let Ok(blocks) = capture_progress_rx.try_recv() {
+        while let Ok((blocks, total_blocks)) = capture_progress_rx.try_recv() {
             if blocks <= last_captured_blocks { continue; }
             last_captured_blocks = blocks;
-            // The wire protocol currently reports completed block count but not
-            // total progress. Keep the bar moving through the capture segment
-            // without pretending the heuristic is an exact percentage.
-            let capture_percent = (62 + (blocks / 64) as i32).clamp(63, 94);
-            progress(Progress {
-                percent: capture_percent,
-                message: format!("Receiving baked model registry · {blocks} block types captured"),
-            });
+            let capture_percent = capture_progress_percent(blocks, total_blocks);
+            let message = if total_blocks > 0 {
+                format!("Receiving baked model registry · {blocks}/{total_blocks} block types captured")
+            } else {
+                format!("Receiving baked model registry · {blocks} block types captured")
+            };
+            progress(Progress { percent: capture_percent, message });
         }
 
         match capture_rx.try_recv() {
@@ -164,23 +161,11 @@ where
             }
             Ok(Err(error)) => {
                 stop_child(&mut child);
-                return Err(runtime_worker_failure(
-                    &workspace,
-                    &version,
-                    &log_path,
-                    format!("{error:#}"),
-                    60,
-                ));
+                return Err(runtime_worker_failure(&workspace, &version, &log_path, format!("{error:#}"), 60));
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 stop_child(&mut child);
-                return Err(runtime_worker_failure(
-                    &workspace,
-                    &version,
-                    &log_path,
-                    "runtime registry receiver terminated unexpectedly".into(),
-                    60,
-                ));
+                return Err(runtime_worker_failure(&workspace, &version, &log_path, "runtime registry receiver terminated unexpectedly".into(), 60));
             }
             Err(mpsc::TryRecvError::Empty) => {}
         }
@@ -192,13 +177,7 @@ where
                     return Ok(CacheResult { fingerprint, registry_path: path, reused: false });
                 }
                 Ok(Err(error)) => {
-                    return Err(runtime_worker_failure(
-                        &workspace,
-                        &version,
-                        &log_path,
-                        format!("{error:#}"),
-                        80,
-                    ));
+                    return Err(runtime_worker_failure(&workspace, &version, &log_path, format!("{error:#}"), 80));
                 }
                 Err(_) => {
                     return Err(runtime_worker_failure(
@@ -218,6 +197,14 @@ where
         }
         thread::sleep(Duration::from_millis(150));
     }
+}
+
+fn capture_progress_percent(blocks: usize, total_blocks: usize) -> i32 {
+    if total_blocks == 0 {
+        return (62 + (blocks / 64) as i32).clamp(63, 94);
+    }
+    let fraction = (blocks.min(total_blocks) as f64 / total_blocks as f64).clamp(0.0, 1.0);
+    (62.0 + fraction * 32.0).round() as i32
 }
 
 fn create_workspace<F>(version: &str, mods_path: &Path, mut progress: F) -> Result<WorkspacePlan>
@@ -242,8 +229,6 @@ where
     let run_mods = run_dir.join("mods");
     fs::create_dir_all(&run_mods)?;
 
-    // The canonical 1.21.10 fast workspace intentionally has no Bridge source
-    // project. Its already-built Bridge is loaded as a local run mod instead.
     if version == MC_1_21_10 {
         let bridge = runtime::materialize_bundled_bridge()?;
         fs::copy(&bridge, run_mods.join("minesport-bridge-0.2.0.jar"))
@@ -287,18 +272,10 @@ fn start_gradle_worker(workspace: &Path, log_path: &Path, java_home: &Path) -> R
     let stdout = File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
     let stderr = stdout.try_clone()?;
     let java = java_home.join("bin").join(if cfg!(windows) { "java.exe" } else { "java" });
-    if !java.is_file() {
-        bail!("selected runtime JDK has no Java launcher: {}", java.display());
-    }
+    if !java.is_file() { bail!("selected runtime JDK has no Java launcher: {}", java.display()); }
     let wrapper = workspace.join("gradle").join("wrapper").join("gradle-wrapper.jar");
-    if !wrapper.is_file() {
-        bail!("runtime worker has no embedded Gradle wrapper: {}", wrapper.display());
-    }
+    if !wrapper.is_file() { bail!("runtime worker has no embedded Gradle wrapper: {}", wrapper.display()); }
 
-    // Launch the wrapper directly instead of cmd.exe -> gradlew.bat -> Java.
-    // More importantly, keep Gradle's own build JVM small. Minecraft's runClient
-    // process is separate and retains the memory it actually needs for baked
-    // model loading; this only removes the oversized 1.5 GiB Gradle overhead.
     let mut command = Command::new(&java);
     command
         .arg("-Xmx512m")
@@ -357,17 +334,10 @@ fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
     Ok(count)
 }
 
-// Crash Assistant treats Minesport's intentionally short-lived registry worker
-// like a crashed normal client and may spawn its own UI. It contributes nothing
-// to block/model registration, so identify it by Fabric mod ID first, with the
-// filename check retained as a fallback for malformed/unreadable JARs.
 fn should_skip_runtime_worker_mod(jar_path: &Path, filename: &str) -> bool {
     let lower = filename.to_ascii_lowercase();
-    if lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") {
-        return true;
-    }
-    runtime_worker_fabric_mod_id(jar_path)
-        .is_some_and(|id| id.eq_ignore_ascii_case("crash_assistant"))
+    if lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") { return true; }
+    runtime_worker_fabric_mod_id(jar_path).is_some_and(|id| id.eq_ignore_ascii_case("crash_assistant"))
 }
 
 fn runtime_worker_fabric_mod_id(jar_path: &Path) -> Option<String> {
@@ -375,20 +345,11 @@ fn runtime_worker_fabric_mod_id(jar_path: &Path) -> Option<String> {
     let mut archive = zip::ZipArchive::new(file).ok()?;
     let mut entry = archive.by_name("fabric.mod.json").ok()?;
     let mut bytes = Vec::new();
-    entry
-        .by_ref()
-        .take(FABRIC_MOD_JSON_LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() as u64 > FABRIC_MOD_JSON_LIMIT {
-        return None;
-    }
+    entry.by_ref().take(FABRIC_MOD_JSON_LIMIT + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > FABRIC_MOD_JSON_LIMIT { return None; }
 
     #[derive(Deserialize)]
-    struct FabricMetadata {
-        #[serde(default)]
-        id: String,
-    }
+    struct FabricMetadata { #[serde(default)] id: String }
     let metadata: FabricMetadata = serde_json::from_slice(&bytes).ok()?;
     let id = metadata.id.trim();
     if id.is_empty() { None } else { Some(id.to_string()) }
@@ -424,23 +385,15 @@ fn runtime_worker_failure(workspace: &Path, version: &str, log_path: &Path, mess
     let tail = tail_file(log_path, tail_lines);
     let diagnostics = preserve_runtime_worker_diagnostics(workspace, version);
     let mut detail = message;
-    if let Some(path) = diagnostics {
-        detail.push_str(&format!("\nDiagnostics preserved at: {}", path.display()));
-    }
-    if !tail.is_empty() {
-        detail.push_str("\nRuntime worker tail:\n");
-        detail.push_str(&tail);
-    }
+    if let Some(path) = diagnostics { detail.push_str(&format!("\nDiagnostics preserved at: {}", path.display())); }
+    if !tail.is_empty() { detail.push_str("\nRuntime worker tail:\n"); detail.push_str(&tail); }
     anyhow!(detail)
 }
 
 fn preserve_runtime_worker_diagnostics(workspace: &Path, version: &str) -> Option<PathBuf> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis();
-    let destination = diagnostics::folder()
-        .join("runtime-workers")
-        .join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
+    let destination = diagnostics::folder().join("runtime-workers").join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
     fs::create_dir_all(&destination).ok()?;
-
     let files = [
         (workspace.join("runtime-worker.log"), "runtime-worker.log"),
         (workspace.join("run").join("logs").join("latest.log"), "minecraft-latest.log"),
@@ -448,16 +401,9 @@ fn preserve_runtime_worker_diagnostics(workspace: &Path, version: &str) -> Optio
     let mut copied = false;
     for (source, name) in files {
         if !source.is_file() { continue; }
-        if fs::copy(&source, destination.join(name)).is_ok() {
-            copied = true;
-        }
+        if fs::copy(&source, destination.join(name)).is_ok() { copied = true; }
     }
-    if copied {
-        Some(destination)
-    } else {
-        let _ = fs::remove_dir_all(&destination);
-        None
-    }
+    if copied { Some(destination) } else { let _ = fs::remove_dir_all(&destination); None }
 }
 
 fn tail_file(path: &Path, lines: usize) -> String {
@@ -472,9 +418,7 @@ fn safe(value: &str) -> String {
 }
 
 struct WorkspaceCleanup(PathBuf);
-impl Drop for WorkspaceCleanup {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
-}
+impl Drop for WorkspaceCleanup { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
 
 const SETTINGS_GRADLE: &str = r#"pluginManagement {
     repositories {
@@ -552,6 +496,14 @@ mod tests {
     }
 
     #[test]
+    fn exact_capture_progress_maps_to_runtime_segment() {
+        assert_eq!(capture_progress_percent(0, 1000), 62);
+        assert_eq!(capture_progress_percent(500, 1000), 78);
+        assert_eq!(capture_progress_percent(1000, 1000), 94);
+        assert_eq!(capture_progress_percent(1200, 1000), 94);
+    }
+
+    #[test]
     fn fake_oracle_javapath_parent_is_not_a_jdk() {
         let fake = Path::new(r"C:\Program Files\Common Files\Oracle\Java");
         assert!(!toolchain::valid_jdk_home(fake, 21));
@@ -579,8 +531,7 @@ mod tests {
         let jar = root.join("totally-normal-mod.jar");
         let file = File::create(&jar).unwrap();
         let mut writer = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         writer.start_file("fabric.mod.json", options).unwrap();
         writer.write_all(br#"{"schemaVersion":1,"id":"crash_assistant","version":"1.0.0"}"#).unwrap();
         writer.finish().unwrap();
