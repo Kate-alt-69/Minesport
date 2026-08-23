@@ -80,16 +80,6 @@ pub fn install_detected_profiles() -> Result<InstallReport> {
     })
 }
 
-/// Blender profile directories that Minesport can install into. This keeps the
-/// old Rust call-site contract while discovery itself now matches the retired
-/// Go implementation, including Blender installations found under Program Files.
-pub fn detected_profiles() -> Result<Vec<PathBuf>> {
-    Ok(discover_targets()?
-        .into_iter()
-        .map(|target| target.profile_dir)
-        .collect())
-}
-
 /// Preserve the retired Fyne/Go status contract exactly: a translator counts
 /// as current only when every embedded translator file matches the installed
 /// copy byte-for-byte.
