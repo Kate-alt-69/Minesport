@@ -3,6 +3,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::VecDeque,
     env, fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -48,6 +49,10 @@ pub struct Response {
     pub quad_count: i32,
     #[serde(default, rename = "vertexCount")]
     pub vertex_count: i32,
+    #[serde(default, rename = "operationId")]
+    pub operation_id: String,
+    #[serde(default, rename = "traceId")]
+    pub trace_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +66,12 @@ pub enum EngineEvent {
 struct EngineInner {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RequestCorrelation {
+    operation_id: String,
+    trace_id: String,
 }
 
 /// UI-side handle to the isolated Minesport backend worker.
@@ -131,37 +142,46 @@ impl Engine {
     }
 
     pub fn send<T: Serialize>(&self, request: &T) -> Result<()> {
-        let bytes = serde_json::to_vec(request).context("encode backend IPC request")?;
-        let value = serde_json::from_slice::<Value>(&bytes).ok();
+        let mut value = serde_json::to_value(request).context("encode backend IPC request")?;
         let command = value
-            .as_ref()
-            .and_then(|value| value.get("command"))
+            .get("command")
             .and_then(Value::as_str)
             .unwrap_or("request")
             .to_string();
         let world = value
-            .as_ref()
-            .and_then(|value| value.get("worldPath"))
+            .get("worldPath")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
         let output = value
-            .as_ref()
-            .and_then(|value| value.get("outputPath"))
+            .get("outputPath")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+
         let logger = diagnostics::Logger::new("IPC").child("TX");
         let mut operation = logger
             .operation(request_operation_id(&command))
-            .field("command", &command)
-            .field("bytes", bytes.len());
+            .field("command", &command);
         if !world.is_empty() {
             operation = operation.field("world", &world);
         }
         if !output.is_empty() {
             operation = operation.field("output", &output);
         }
+
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "operationId".to_string(),
+                Value::String(operation.operation_id().to_string()),
+            );
+            object.insert(
+                "traceId".to_string(),
+                Value::String(operation.trace_id().to_string()),
+            );
+        }
+        let bytes = serde_json::to_vec(&value).context("serialize correlated backend IPC request")?;
+        operation = operation.field("bytes", bytes.len());
         operation.event("IpcRequestWrite", "writing backend IPC request", &[]);
 
         let result = (|| -> Result<()> {
@@ -254,6 +274,48 @@ fn request_operation_id(command: &str) -> &'static str {
     }
 }
 
+fn correlation_from_request_line(line: &str) -> RequestCorrelation {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return RequestCorrelation::default();
+    };
+    RequestCorrelation {
+        operation_id: value
+            .get("operationId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        trace_id: value
+            .get("traceId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+fn annotate_java_response(line: &str, correlation: &RequestCorrelation) -> (String, bool) {
+    let Ok(mut value) = serde_json::from_str::<Value>(line) else {
+        return (line.to_string(), false);
+    };
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+    if let Some(object) = value.as_object_mut() {
+        if !correlation.operation_id.is_empty() {
+            object.insert(
+                "operationId".to_string(),
+                Value::String(correlation.operation_id.clone()),
+            );
+        }
+        if !correlation.trace_id.is_empty() {
+            object.insert(
+                "traceId".to_string(),
+                Value::String(correlation.trace_id.clone()),
+            );
+        }
+    }
+    let terminal = matches!(kind.as_str(), "pong" | "done" | "error" | "heightmap" | "blocksReady");
+    let encoded = serde_json::to_string(&value).unwrap_or_else(|_| line.to_string());
+    (encoded, terminal)
+}
+
 /// Preserve the retired Go IPC behavior for Minecraft 26.1+ Overworld storage.
 /// Java heightmap generation expects `<worldPath>/region`, while modern worlds
 /// store the Overworld under `dimensions/minecraft/overworld/region`. Rewrite
@@ -327,9 +389,8 @@ fn has_region_files(region_dir: &Path) -> bool {
 /// Headless mode used by the self-spawned Minesport backend process.
 ///
 /// This process owns Java and transparently relays the existing Java newline
-/// JSON protocol. Java stdout becomes worker stdout; Java stderr becomes worker
-/// stderr; worker stdin is forwarded to Java stdin. The UI can therefore keep
-/// using the established engine protocol while gaining a hard process boundary.
+/// JSON protocol. It also preserves the UI request's operation/trace IDs on
+/// Java responses, keeping observability concerns out of the Java engine.
 pub fn run_engine_worker(jar: &Path) -> Result<()> {
     let logger = diagnostics::Logger::new("IPC").child("WORKER");
     let operation = logger
@@ -388,6 +449,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     let mut java_stdin = child.stdin.take().context("open Java engine stdin")?;
     let java_stdout = child.stdout.take().context("open Java engine stdout")?;
     let java_stderr = child.stderr.take().context("open Java engine stderr")?;
+    let correlations = Arc::new(Mutex::new(VecDeque::<RequestCorrelation>::new()));
 
     {
         let mut output = std::io::stdout().lock();
@@ -399,14 +461,26 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         output.flush().context("flush Java engine announcement")?;
     }
 
+    let stdout_correlations = correlations.clone();
     let stdout_relay = thread::spawn(move || -> std::io::Result<()> {
         let reader = BufReader::new(java_stdout);
         let stdout = std::io::stdout();
         let mut output = stdout.lock();
         for line in reader.lines() {
             let line = line?;
+            let correlation = stdout_correlations
+                .lock()
+                .ok()
+                .and_then(|queue| queue.front().cloned())
+                .unwrap_or_default();
+            let (line, terminal) = annotate_java_response(&line, &correlation);
             writeln!(output, "{line}")?;
             output.flush()?;
+            if terminal {
+                if let Ok(mut queue) = stdout_correlations.lock() {
+                    let _ = queue.pop_front();
+                }
+            }
         }
         Ok(())
     });
@@ -423,10 +497,14 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         Ok(())
     });
 
+    let stdin_correlations = correlations;
     thread::spawn(move || {
         let reader = BufReader::new(std::io::stdin());
         for line in reader.lines() {
             let Ok(line) = line else { break; };
+            if let Ok(mut queue) = stdin_correlations.lock() {
+                queue.push_back(correlation_from_request_line(&line));
+            }
             if java_stdin.write_all(line.as_bytes()).is_err() { break; }
             if java_stdin.write_all(b"\n").is_err() { break; }
             if java_stdin.flush().is_err() { break; }
@@ -454,7 +532,7 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
     thread::spawn(move || {
         let logger = diagnostics::Logger::new("IPC").child("RX");
         let reader = BufReader::new(stdout);
-        let mut last_progress_percent: Option<i32> = None;
+        let mut last_progress: Option<(String, String, i32)> = None;
         for line in reader.lines() {
             match line {
                 Ok(line) if !line.trim().is_empty() => {
@@ -464,22 +542,37 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                         ..Response::default()
                     });
                     match response.kind.as_str() {
-                        "log" => diagnostics::append(&response.message),
+                        "log" => diagnostics::append_correlated(
+                            &response.message,
+                            &response.operation_id,
+                            &response.trace_id,
+                        ),
                         "progress" => {
                             let percent = response.percent.clamp(0, 100);
-                            if last_progress_percent != Some(percent) {
-                                logger.info(
+                            let progress_key = (
+                                response.operation_id.clone(),
+                                response.trace_id.clone(),
+                                percent,
+                            );
+                            if last_progress.as_ref() != Some(&progress_key) {
+                                logger.correlated(
+                                    diagnostics::Level::Info,
                                     "IpcResponseProgress",
+                                    &response.operation_id,
+                                    &response.trace_id,
                                     &response.message,
                                     &[("percent", percent.to_string())],
                                 );
-                                last_progress_percent = Some(percent);
+                                last_progress = Some(progress_key);
                             }
                         }
                         "done" => {
-                            last_progress_percent = None;
-                            logger.info(
+                            last_progress = None;
+                            logger.correlated(
+                                diagnostics::Level::Info,
                                 "IpcResponseDone",
+                                &response.operation_id,
+                                &response.trace_id,
                                 "engine operation completed",
                                 &[
                                     ("output", response.output.clone()),
@@ -490,11 +583,21 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                             );
                         }
                         "error" => {
-                            last_progress_percent = None;
-                            logger.error("IpcResponseError", &response.message, &[]);
+                            last_progress = None;
+                            logger.correlated(
+                                diagnostics::Level::Error,
+                                "IpcResponseError",
+                                &response.operation_id,
+                                &response.trace_id,
+                                &response.message,
+                                &[],
+                            );
                         }
-                        kind => logger.debug(
+                        kind => logger.correlated(
+                            diagnostics::Level::Debug,
                             "IpcResponseReceived",
+                            &response.operation_id,
+                            &response.trace_id,
                             "backend response received",
                             &[("type", kind.to_string())],
                         ),
@@ -752,5 +855,43 @@ mod tests {
         assert_eq!(request_operation_id("ping"), "IpcRequestPingBackend");
         assert_eq!(request_operation_id("quit"), "IpcRequestQuitBackend");
         assert_eq!(request_operation_id("mystery"), "IpcRequestDispatchUnknownCommand");
+    }
+
+    #[test]
+    fn request_correlation_is_read_from_json() {
+        let correlation = correlation_from_request_line(
+            r#"{"command":"export","operationId":"IpcRequestDispatchExport","traceId":"123-000004"}"#,
+        );
+        assert_eq!(correlation.operation_id, "IpcRequestDispatchExport");
+        assert_eq!(correlation.trace_id, "123-000004");
+    }
+
+    #[test]
+    fn java_terminal_response_is_correlated_and_marks_queue_completion() {
+        let correlation = RequestCorrelation {
+            operation_id: "IpcRequestDispatchExport".to_string(),
+            trace_id: "123-000004".to_string(),
+        };
+        let (line, terminal) = annotate_java_response(
+            r#"{"type":"done","output":"test.obj"}"#,
+            &correlation,
+        );
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert!(terminal);
+        assert_eq!(value.get("operationId").and_then(Value::as_str), Some("IpcRequestDispatchExport"));
+        assert_eq!(value.get("traceId").and_then(Value::as_str), Some("123-000004"));
+    }
+
+    #[test]
+    fn java_progress_response_keeps_request_open() {
+        let correlation = RequestCorrelation {
+            operation_id: "IpcRequestDispatchExport".to_string(),
+            trace_id: "123-000004".to_string(),
+        };
+        let (_, terminal) = annotate_java_response(
+            r#"{"type":"progress","percent":62,"message":"Building geometry"}"#,
+            &correlation,
+        );
+        assert!(!terminal);
     }
 }
