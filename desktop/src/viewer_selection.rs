@@ -65,9 +65,9 @@ pub fn point_a() -> Option<[i32; 3]> {
     state().lock().ok().and_then(|state| state.point_a)
 }
 
-/// Grow/shrink point B by one block along the dominant look axis. This is the
-/// exact interaction the retired viewer used while E was held and the wheel
-/// moved; the Slint input wiring lands in the next migration slice.
+/// Grow/shrink point B by one block along the dominant look axis. The sign of
+/// the look vector matters exactly like the retired OpenGL viewer: looking west
+/// grows toward -X, looking down grows toward -Y, etc.
 pub fn resize_point_b(direction: [f32; 3], delta: i32) -> Option<BoxSelection> {
     if delta == 0 { return current(); }
     let Ok(mut state) = state().lock() else { return None; };
@@ -75,7 +75,8 @@ pub fn resize_point_b(direction: [f32; 3], delta: i32) -> Option<BoxSelection> {
     let mut point_b = state.point_b?;
 
     let axis = dominant_axis(direction);
-    point_b[axis] = point_b[axis].saturating_add(delta);
+    let signed_delta = if direction[axis] >= 0.0 { delta } else { delta.saturating_neg() };
+    point_b[axis] = point_b[axis].saturating_add(signed_delta);
     state.point_b = Some(point_b);
     Some(selection(point_a, point_b))
 }
@@ -131,11 +132,18 @@ mod tests {
     }
 
     #[test]
-    fn e_wheel_resize_uses_dominant_look_axis() {
+    fn e_wheel_resize_uses_dominant_axis_and_look_sign() {
         reset();
         set_point_a([0, 0, 0]);
         set_point_b([3, 4, 5]).unwrap();
-        let updated = resize_point_b([0.2, -0.9, 0.3], -2).unwrap();
-        assert_eq!(updated.point_b, [3, 2, 5]);
+
+        let down = resize_point_b([0.2, -0.9, 0.3], 2).unwrap();
+        assert_eq!(down.point_b, [3, 2, 5]);
+
+        let west = resize_point_b([-0.95, 0.1, 0.2], 1).unwrap();
+        assert_eq!(west.point_b, [2, 2, 5]);
+
+        let south_shrink = resize_point_b([0.1, 0.2, 0.98], -2).unwrap();
+        assert_eq!(south_shrink.point_b, [2, 2, 3]);
     }
 }
