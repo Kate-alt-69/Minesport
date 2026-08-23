@@ -218,15 +218,16 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
         thread::spawn(move || {
             let worlds = world_context::all_worlds();
             let count = worlds.len();
+            let event_weak = weak.clone();
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 append_diagnostic(&ui, &format!("World picker discovered {count} world(s) across installed launchers"));
 
-                let select_weak = weak.clone();
+                let select_weak = event_weak.clone();
                 let select_engine = engine.clone();
                 let select_state = state.clone();
                 let select_cache = cache.clone();
 
-                let browse_weak = weak.clone();
+                let browse_weak = event_weak.clone();
                 let browse_engine = engine.clone();
                 let browse_state = state.clone();
                 let browse_cache = cache.clone();
@@ -820,7 +821,12 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
             let added = state.lock().map(|mut guard| add_unique_path(&mut guard.resource_packs, path.clone())).unwrap_or(false);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 refresh_asset_summaries(&ui, &state);
-                append_diagnostic(&ui, if added { &format!("Resource pack added: {}", path.display()) } else { "Resource pack already exists in the priority stack" });
+                let message = if added {
+                    format!("Resource pack added: {}", path.display())
+                } else {
+                    "Resource pack already exists in the priority stack".to_string()
+                };
+                append_diagnostic(&ui, &message);
                 persist_settings_snapshot(&ui, &state);
             });
         });
@@ -837,7 +843,12 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
             let added = state.lock().map(|mut guard| add_unique_path(&mut guard.resource_packs, path.clone())).unwrap_or(false);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 refresh_asset_summaries(&ui, &state);
-                append_diagnostic(&ui, if added { &format!("Resource pack folder added: {}", path.display()) } else { "Resource pack already exists in the priority stack" });
+                let message = if added {
+                    format!("Resource pack folder added: {}", path.display())
+                } else {
+                    "Resource pack already exists in the priority stack".to_string()
+                };
+                append_diagnostic(&ui, &message);
                 persist_settings_snapshot(&ui, &state);
             });
         });
@@ -880,7 +891,12 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
             let added = state.lock().map(|mut guard| add_unique_path(&mut guard.data_packs, path.clone())).unwrap_or(false);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 refresh_asset_summaries(&ui, &state);
-                append_diagnostic(&ui, if added { &format!("Data pack added: {}", path.display()) } else { "Data pack already exists in the priority stack" });
+                let message = if added {
+                    format!("Data pack added: {}", path.display())
+                } else {
+                    "Data pack already exists in the priority stack".to_string()
+                };
+                append_diagnostic(&ui, &message);
                 persist_settings_snapshot(&ui, &state);
             });
         });
