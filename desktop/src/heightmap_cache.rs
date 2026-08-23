@@ -16,7 +16,6 @@ pub struct CachedHeightmap {
     pub max_x: i32,
     pub max_z: i32,
     pub scale: i32,
-    pub png_file: String,
 }
 
 pub fn load(world: &Path) -> Result<Option<(CachedHeightmap, Vec<u8>)>> {
@@ -64,11 +63,6 @@ pub fn save(
         max_x,
         max_z,
         scale,
-        png_file: png_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("heightmap.png")
-            .to_string(),
     };
     let metadata_bytes = serde_json::to_vec(&metadata).context("serialize heightmap cache metadata")?;
 
