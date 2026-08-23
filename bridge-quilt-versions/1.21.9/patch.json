@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "description": "Adapt the canonical Quilt 1.21.10 Bridge to Minecraft 1.21.9 while retaining the current Quilt Loader line.",
+  "operations": [
+    {"op": "set_property", "file": "gradle.properties", "key": "minecraft_version", "value": "${minecraft_version}"},
+    {"op": "set_property", "file": "gradle.properties", "key": "quilt_loader_version", "value": "${quilt_loader_version}"},
+    {"op": "set_property", "file": "gradle.properties", "key": "fabric_version", "value": "${fabric_version}"}
+  ]
+}

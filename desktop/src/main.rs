@@ -6,6 +6,8 @@ mod blender;
 mod bridge_build;
 mod bridge_cli;
 mod bridge_compat;
+#[allow(dead_code)]
+mod bridge_family;
 mod bridge_java;
 mod diagnostics;
 mod error_reporter;

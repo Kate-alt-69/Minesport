@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "description": "Adapt the canonical Forge 1.21.10 Bridge to Minecraft 1.21.9 / Forge 59.0.5.",
+  "operations": [
+    {"op": "set_property", "file": "gradle.properties", "key": "minecraft_version", "value": "${minecraft_version}"},
+    {"op": "set_property", "file": "gradle.properties", "key": "forge_version", "value": "${forge_version}"},
+    {"op": "replace", "file": "src/main/resources/META-INF/mods.toml", "from": "loaderVersion=\"[60,)\"", "to": "loaderVersion=\"[59,)\""},
+    {"op": "replace", "file": "src/main/resources/META-INF/mods.toml", "from": "versionRange=\"[60.1.0,)\"", "to": "versionRange=\"[59.0.0,)\""},
+    {"op": "replace", "file": "src/main/resources/META-INF/mods.toml", "from": "versionRange=\"[1.21.10,1.21.11)\"", "to": "versionRange=\"[1.21.9,1.21.10)\""}
+  ]
+}

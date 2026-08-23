@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "loader": "forge",
+  "base": {
+    "version": "1.21.10",
+    "compatible": ["1.21.10"],
+    "java": 21,
+    "variables": {
+      "minecraft_version": "1.21.10",
+      "forge_version": "60.1.15"
+    }
+  },
+  "profiles": [
+    {
+      "id": "1.21.9",
+      "match": "^1\\.21\\.9$",
+      "patch": "1.21.9/patch.json",
+      "java": 21,
+      "variables": {
+        "minecraft_version": "1.21.9",
+        "forge_version": "59.0.5"
+      }
+    }
+  ]
+}

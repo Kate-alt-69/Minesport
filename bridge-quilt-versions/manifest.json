@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "loader": "quilt",
+  "base": {
+    "version": "1.21.10",
+    "compatible": ["1.21.10"],
+    "java": 21,
+    "variables": {
+      "minecraft_version": "1.21.10",
+      "quilt_loader_version": "0.30.1-beta.3",
+      "fabric_version": "0.138.4+1.21.10"
+    }
+  },
+  "profiles": [
+    {
+      "id": "1.21.9",
+      "match": "^1\\.21\\.9$",
+      "patch": "1.21.9/patch.json",
+      "java": 21,
+      "variables": {
+        "minecraft_version": "1.21.9",
+        "quilt_loader_version": "0.30.1-beta.3",
+        "fabric_version": "0.134.1+1.21.9"
+      }
+    }
+  ]
+}

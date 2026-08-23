@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "description": "Adapt the canonical NeoForge 1.21.10 Bridge to Minecraft 1.21.9 / NeoForge 21.9.16-beta.",
+  "operations": [
+    {"op": "set_property", "file": "gradle.properties", "key": "minecraft_version", "value": "${minecraft_version}"},
+    {"op": "set_property", "file": "gradle.properties", "key": "minecraft_version_range", "value": "${minecraft_version_range}"},
+    {"op": "set_property", "file": "gradle.properties", "key": "neo_version", "value": "${neo_version}"},
+    {"op": "replace", "file": "src/main/resources/META-INF/neoforge.mods.toml", "from": "versionRange=\"[21.10.64,)\"", "to": "versionRange=\"[21.9.0-beta,)\""},
+    {"op": "replace", "file": "src/main/resources/META-INF/neoforge.mods.toml", "from": "versionRange=\"[1.21.10,1.21.11)\"", "to": "versionRange=\"${minecraft_version_range}\""}
+  ]
+}
