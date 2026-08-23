@@ -6,6 +6,7 @@ on:
     paths:
       - 'bridge/**'
       - 'bridge-versions/**'
+      - 'desktop/src/bridge_build.rs'
       - 'desktop/src/bridge_compat.rs'
       - 'desktop/src/toolchain.rs'
       - 'desktop/src/bin/bridge-prepare.rs'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'bridge/**'
       - 'bridge-versions/**'
+      - 'desktop/src/bridge_build.rs'
       - 'desktop/src/bridge_compat.rs'
       - 'desktop/src/toolchain.rs'
       - 'desktop/src/bin/bridge-prepare.rs'
@@ -54,6 +56,12 @@ jobs:
         with:
           toolchain: 1.92.0
       - uses: gradle/actions/setup-gradle@v6
+      - name: Install Rust/Slint build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
       - name: Generate and compile from canonical Bridge with Rust
         env:
           MINESPORT_HEADLESS_BRIDGE_PREPARE: '1'
