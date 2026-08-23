@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use include_dir::{Dir, include_dir};
 use regex::Regex;
 use serde::Deserialize;
@@ -15,6 +16,8 @@ static BRIDGE_SOURCE: Dir<'_> = include_dir!("$OUT_DIR/bridge-source");
 static BRIDGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../bridge-versions");
 const MANIFEST_JSON: &str = include_str!("../../bridge-versions/manifest.json");
 const MAX_NETWORK_TEXT: u64 = 8 * 1024 * 1024;
+const DOWNLOAD_ATTEMPTS: usize = 3;
+const GITHUB_CONTENTS_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
@@ -494,10 +497,39 @@ fn resolve_fabric_api(version: &str) -> Result<String> {
 }
 
 fn http_get_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    if !url.starts_with("https://") { bail!("network URL must use HTTPS: {url}"); }
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(20))
         .timeout_read(Duration::from_secs(120))
         .build();
+    let mut last_error = None;
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        match http_get_limited_once(&agent, url, max_bytes) {
+            Ok(data) => return Ok(data),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < DOWNLOAD_ATTEMPTS {
+                    std::thread::sleep(Duration::from_millis(400 * attempt as u64));
+                }
+            }
+        }
+    }
+
+    let primary = last_error.unwrap_or_else(|| anyhow!("unknown HTTP failure"));
+    if url.starts_with("https://raw.githubusercontent.com/") {
+        match github_contents_fallback(url, max_bytes) {
+            Ok(data) => return Ok(data),
+            Err(fallback) => {
+                return Err(anyhow!(
+                    "HTTP request failed for {url} after {DOWNLOAD_ATTEMPTS} attempts: {primary:#}; GitHub Contents fallback failed: {fallback:#}"
+                ));
+            }
+        }
+    }
+    Err(anyhow!("HTTP request failed for {url} after {DOWNLOAD_ATTEMPTS} attempts: {primary:#}"))
+}
+
+fn http_get_limited_once(agent: &ureq::Agent, url: &str, max_bytes: u64) -> Result<Vec<u8>> {
     let response = agent
         .get(url)
         .set("User-Agent", "Minesport-Rust-Bridge-Builder/0.2.0")
@@ -508,6 +540,68 @@ fn http_get_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
     reader.read_to_end(&mut data)?;
     if data.len() as u64 > max_bytes { bail!("network resource exceeds {max_bytes} byte limit: {url}"); }
     Ok(data)
+}
+
+fn github_contents_fallback(raw_url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    let (owner, repository, git_ref, repo_path) = parse_raw_github_url(raw_url)?;
+    let escaped_path = repo_path
+        .split('/')
+        .map(percent_encode_segment)
+        .collect::<Vec<_>>()
+        .join("/");
+    let endpoint = format!(
+        "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
+        percent_encode_segment(owner),
+        percent_encode_segment(repository),
+        escaped_path,
+        percent_encode_segment(git_ref),
+    );
+    let payload_limit = GITHUB_CONTENTS_LIMIT.min(max_bytes.saturating_mul(2).max(1024 * 1024));
+    let payload = http_get_limited(&endpoint, payload_limit)?;
+
+    #[derive(Deserialize)]
+    struct GithubContents {
+        content: String,
+        encoding: String,
+    }
+    let payload: GithubContents = serde_json::from_slice(&payload).context("decode GitHub Contents response")?;
+    if payload.encoding != "base64" || payload.content.trim().is_empty() {
+        bail!("GitHub Contents response did not contain base64 file content");
+    }
+    let compact = payload.content.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    let decoded = BASE64.decode(compact).context("decode GitHub Contents file")?;
+    if decoded.len() as u64 > max_bytes {
+        bail!("GitHub Contents file exceeds {max_bytes} byte limit");
+    }
+    Ok(decoded)
+}
+
+fn parse_raw_github_url(url: &str) -> Result<(&str, &str, &str, &str)> {
+    let rest = url
+        .strip_prefix("https://raw.githubusercontent.com/")
+        .ok_or_else(|| anyhow!("not a Raw GitHub URL"))?;
+    let mut parts = rest.splitn(4, '/');
+    let owner = parts.next().unwrap_or_default();
+    let repository = parts.next().unwrap_or_default();
+    let git_ref = parts.next().unwrap_or_default();
+    let repo_path = parts.next().unwrap_or_default();
+    if owner.is_empty() || repository.is_empty() || git_ref.is_empty() || repo_path.is_empty() {
+        bail!("incomplete Raw GitHub URL");
+    }
+    Ok((owner, repository, git_ref, repo_path))
+}
+
+fn percent_encode_segment(value: &str) -> String {
+    use std::fmt::Write as _;
+    let mut output = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            output.push(char::from(byte));
+        } else {
+            let _ = write!(output, "%{byte:02X}");
+        }
+    }
+    output
 }
 
 fn safe_join(root: &Path, relative: &Path) -> Result<PathBuf> {
@@ -580,5 +674,17 @@ mod tests {
             assert_eq!(patch.schema, 1, "{}", profile.patch);
             assert!(!patch.operations.is_empty(), "{}", profile.patch);
         }
+    }
+
+    #[test]
+    fn raw_github_fallback_parses_repository_coordinates() {
+        let parsed = parse_raw_github_url("https://raw.githubusercontent.com/Kate-alt-69/Minesport/main/bridge/file.java").unwrap();
+        assert_eq!(parsed, ("Kate-alt-69", "Minesport", "main", "bridge/file.java"));
+        assert_eq!(percent_encode_segment("a b"), "a%20b");
+    }
+
+    #[test]
+    fn compatibility_download_attempts_match_legacy_hardening() {
+        assert_eq!(DOWNLOAD_ATTEMPTS, 3);
     }
 }
