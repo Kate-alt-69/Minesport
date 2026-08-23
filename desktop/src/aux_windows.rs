@@ -258,10 +258,11 @@ where
 {
     RUNTIME_WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();
-        // Fingerprint verification reports 1% before the cache-hit check. Do
-        // not hide the workbench or flash a second window unless the job has
-        // actually crossed into cache-miss preparation (4%+).
-        if slot.is_none() && progress < 0.04 {
+        // Fingerprint verification reports 1% before the cache-hit check. A
+        // cache hit then jumps straight to 100%. Neither event should create a
+        // second window or hide the workbench. Only genuine cache-miss work in
+        // the open interval [4%, 100%) is allowed to create the progress UI.
+        if slot.is_none() && (progress < 0.04 || progress >= 1.0) {
             return;
         }
         let created = slot.is_none();
@@ -321,11 +322,14 @@ where
             }
             window.set_progress(progress.clamp(0.0, 1.0));
             if created {
-                let _ = main.hide();
+                // Keep at least one top-level window visible at all times. On
+                // Windows/Slint, hiding the last visible window can terminate
+                // the event loop cleanly before the replacement is shown.
                 if let Err(error) = window.show() {
                     diagnostics::append(&format!("Could not show runtime-cache window: {error}"));
-                    let _ = main.show();
+                    return;
                 }
+                let _ = main.hide();
             }
         }
     });
