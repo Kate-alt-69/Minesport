@@ -43,12 +43,12 @@ export component MinesportLoader inherits Rectangle {
             root.finishing = false;
             root.finish-step = 0;
             root.cycle = 0.0;
-            finish-timer.stop();
+            finish-timer.running = false;
         } else if (root.was-active) {
             root.was-active = false;
             root.finishing = true;
             root.finish-step = 1;
-            finish-timer.restart();
+            finish-timer.running = true;
         }
     }
 
@@ -65,13 +65,13 @@ export component MinesportLoader inherits Rectangle {
         running: false;
         triggered() => {
             if (!root.finishing) {
-                self.stop();
+                self.running = false;
             } else if (root.finish-step < 5) {
                 root.finish-step += 1;
             } else {
                 root.finishing = false;
                 root.finish-step = 0;
-                self.stop();
+                self.running = false;
             }
         }
     }
@@ -191,9 +191,6 @@ export component MinesportLoader inherits Rectangle {
                 }
             }
 
-            // Every square begins at the collapsed center and snaps into the
-            // larger monochrome creeper face. A 1px gap keeps the pixel-grid
-            // character visible instead of looking like a generic flat icon.
             for pixel[index] in 64: Rectangle {
                 x: root.pixel-x(index);
                 y: root.pixel-y(index);
