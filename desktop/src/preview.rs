@@ -3,7 +3,7 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs::{self, File},
+    fs::File,
     path::Path,
     sync::Arc,
 };
@@ -221,41 +221,48 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
             id: normalized_id(&block.id),
         });
 
-        // Fyne's OpenGL shader used 0.65 side-lighting and full brightness on
-        // upward faces. Preserve that appearance in the software renderer.
-        fill_textured_quad(
-            &mut pixels,
-            &mut hit_indices,
-            hit_index,
-            left,
-            bottom,
-            down_bottom,
-            down_left,
-            &side_texture,
-            0.65,
-        );
-        fill_textured_quad(
-            &mut pixels,
-            &mut hit_indices,
-            hit_index,
-            bottom,
-            right,
-            down_right,
-            down_bottom,
-            &side_texture,
-            0.65,
-        );
-        fill_textured_quad(
-            &mut pixels,
-            &mut hit_indices,
-            hit_index,
-            top,
-            right,
-            bottom,
-            left,
-            &top_texture,
-            1.0,
-        );
+        // The fixed isometric camera looks from +X/+Y/+Z, so only those three
+        // outward faces can be visible. Match the old OpenGL mesh's occupancy
+        // culling so shared/internal faces are never rasterized.
+        if !occupied.contains(&[block.x, block.y, block.z + 1]) {
+            fill_textured_quad(
+                &mut pixels,
+                &mut hit_indices,
+                hit_index,
+                left,
+                bottom,
+                down_bottom,
+                down_left,
+                &side_texture,
+                0.65,
+            );
+        }
+        if !occupied.contains(&[block.x + 1, block.y, block.z]) {
+            fill_textured_quad(
+                &mut pixels,
+                &mut hit_indices,
+                hit_index,
+                bottom,
+                right,
+                down_right,
+                down_bottom,
+                &side_texture,
+                0.65,
+            );
+        }
+        if !occupied.contains(&[block.x, block.y + 1, block.z]) {
+            fill_textured_quad(
+                &mut pixels,
+                &mut hit_indices,
+                hit_index,
+                top,
+                right,
+                bottom,
+                left,
+                &top_texture,
+                1.0,
+            );
+        }
     }
 
     Ok(RenderedPreview {
@@ -308,7 +315,7 @@ fn preview_texture(
 
 fn load_preview_tile(key: &str, fallback: [u8; 4]) -> TextureTile {
     let source = if !key.starts_with("fallback:") {
-        fs::read(key)
+        std::fs::read(key)
             .ok()
             .and_then(|bytes| image::load_from_memory_with_format(&bytes, ImageFormat::Png).ok())
             .map(DynamicImage::into_rgba8)
