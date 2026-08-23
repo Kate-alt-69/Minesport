@@ -1,7 +1,10 @@
+#[allow(dead_code)]
 #[path = "../bridge_compat.rs"]
 mod bridge_compat;
+#[allow(dead_code)]
 #[path = "../runtime.rs"]
 mod runtime;
+#[allow(dead_code)]
 #[path = "../toolchain.rs"]
 mod toolchain;
 
