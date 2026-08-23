@@ -245,7 +245,6 @@ component WorldMapView inherits Rectangle {
         scroll-event(event) => {
             if (!root.available || root.zoom <= 0 || event.delta-y == 0px) { return reject; }
             let old = root.zoom;
-            // Match Fyne V3: positive wheel delta zooms in, negative zooms out.
             let next = event.delta-y > 0px ? min(64.0, old * 1.12) : max(0.05, old / 1.12);
             let factor = next / old;
             root.offset-x = self.mouse-x - (self.mouse-x - root.offset-x) * factor;
@@ -334,7 +333,8 @@ export component MainWindow inherits Window {
     in-out property <bool> preview-available: false;
     in-out property <bool> preview-loading: false;
     in-out property <int> preview-block-count: 0;
-    in-out property <string> preview-focus-label: "Click a visible block to focus/select it";
+    in-out property <string> preview-focus-label: "LMB point A · RMB point B · LMB again confirms";
+    in-out property <int> preview-pick-button: 0;
 
     in-out property <string> output-path: "";
     in-out property <string> export-name: "Minesport_Export";
@@ -642,7 +642,7 @@ export component MainWindow inherits Window {
                                 padding-left: 12px;
                                 padding-right: 10px;
                                 spacing: 8px;
-                                Text { text: root.viewport-mode == 0 ? "LMB select · MMB pan · scroll zoom · F6 fit" : "LMB select · MMB orbit · Shift+MMB pan · scroll dolly · F6 fit"; color: #adb5b0; font-size: 11px; vertical-alignment: center; }
+                                Text { text: root.viewport-mode == 0 ? "LMB select · MMB pan · scroll zoom · F6 fit" : "LMB A · RMB B · LMB confirm · MMB look · Shift+MMB pan · scroll dolly · F6 fit"; color: #adb5b0; font-size: 11px; vertical-alignment: center; }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                                 Button { text: "2D"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
                                 Button { text: "3D"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-path != "No world selected"; clicked => { root.viewport-mode = 1; root.open-3d(); } }
@@ -726,8 +726,15 @@ export component MainWindow inherits Window {
 
                                     enabled: root.preview-available && !root.preview-loading && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible;
                                     mouse-cursor: self.middle-held ? grabbing : crosshair;
-                                    clicked => { root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px); }
                                     pointer-event(event) => {
+                                        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                            root.preview-pick-button = 1;
+                                            root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px);
+                                        }
+                                        if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                            root.preview-pick-button = 2;
+                                            root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px);
+                                        }
                                         if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.down) {
                                             self.middle-held = true;
                                             self.middle-pan = event.modifiers.shift;
@@ -757,7 +764,7 @@ export component MainWindow inherits Window {
                                     background: #0f1216;
                                     Spinner { width: 38px; height: 38px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2 - 40px; indeterminate: true; }
                                     Text { x: 0px; y: parent.height / 2 + 8px; width: parent.width; height: 24px; text: "Rendering 3D preview…"; color: #d2d8d4; font-size: 15px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                                    Text { x: 24px; y: parent.height / 2 + 36px; width: parent.width - 48px; height: 24px; text: "Block parsing, hit-map generation and rasterization run outside the Slint event loop."; color: #9fa8a2; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                                    Text { x: 24px; y: parent.height / 2 + 36px; width: parent.width - 48px; height: 24px; text: "Block parsing, voxel-ray indexing and rasterization run outside the Slint event loop."; color: #9fa8a2; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
                                 }
                                 if !root.preview-available && !root.preview-loading: Rectangle {
                                     x: 0px; y: 0px; width: parent.width; height: parent.height;
@@ -775,8 +782,6 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // Export gets its own centered workbench activity treatment. The
-                            // compact task indicator below remains independent and VS Code-like.
                             if root.task-active && root.task-title == "EXPORT": Rectangle {
                                 x: 0px; y: 0px; width: parent.width; height: parent.height;
                                 background: #0d1012d8;
@@ -831,7 +836,7 @@ export component MainWindow inherits Window {
                                 Text { text: root.selection-mode == 0 ? "BOX  X " + root.min-x + ".." + root.max-x + "  ·  Y " + root.min-y + ".." + root.max-y + "  ·  Z " + root.min-z + ".." + root.max-z : "BUBBLE  center " + root.center-x + "," + root.center-y + "," + root.center-z + "  ·  radius " + root.radius-x + "," + root.radius-y + "," + root.radius-z; color: #d7ddd9; font-size: 11px; vertical-alignment: center; overflow: elide; }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                                 if root.viewport-mode == 0 && root.map-available: Text { text: root.map-cursor-label; color: #d2d8d4; font-size: 11px; font-family: "monospace"; font-weight: 700; vertical-alignment: center; }
-                                if root.viewport-mode == 1 && root.preview-available: Text { text: root.select-by-model ? "3D PICK · MODEL" : "3D PICK · BLOCK"; color: #9ac7a2; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                if root.viewport-mode == 1 && root.preview-available: Text { text: "3D BOX · A/B"; color: #9ac7a2; font-size: 11px; font-weight: 700; vertical-alignment: center; }
                             }
                         }
                     }
@@ -841,8 +846,6 @@ export component MainWindow inherits Window {
             Rectangle { height: 3px; background: #4e8a3a; }
         }
 
-        // VS Code-like compact activity indicator: it does not linger after a
-        // completed task and it never covers the entire bottom of the window.
         if root.task-active: Rectangle {
             width: min(520px, parent.width - 36px);
             height: 64px;
@@ -874,9 +877,6 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Fyne's advanced settings were a dialog, not a replacement for the
-        // World Inspector. Keep the inspector exactly where it was and float
-        // Settings in the middle of the workbench.
         if root.settings-visible: Rectangle {
             x: 0px; y: 0px; width: parent.width; height: parent.height;
             background: #0000009e;
