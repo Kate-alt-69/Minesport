@@ -22,6 +22,7 @@ mod runtime_worker;
 mod selection;
 mod settings;
 mod toolchain;
+mod viewer_selection;
 mod world_context;
 mod world_picker;
 
