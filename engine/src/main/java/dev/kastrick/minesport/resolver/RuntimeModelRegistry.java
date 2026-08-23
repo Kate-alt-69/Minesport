@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import dev.kastrick.minesport.export.BlockGrouper;
 import dev.kastrick.minesport.export.Quad;
 import dev.kastrick.minesport.region.BlockData;
 
@@ -14,14 +15,17 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /**
  * Read-only geometry registry captured from Minecraft's own baked model manager.
  *
- * Schema 4 uses compact registry.data storage. Texture pixels deliberately remain
- * outside this cache and continue through the normal Minesport resolver chain
- * (resource packs -> mod JARs -> vanilla/Piston).
+ * Schema 4 uses compact registry.data storage. The complete baked cache remains
+ * on disk, while Java keeps only a small hash -> file-offset index and decodes
+ * block records on demand. Texture pixels deliberately remain outside this cache
+ * and continue through the normal Minesport resolver chain.
  */
 public final class RuntimeModelRegistry {
     public static final int SNAPSHOT_SCHEMA = RuntimeRegistryDataReader.SCHEMA;
@@ -51,17 +55,26 @@ public final class RuntimeModelRegistry {
     ) {}
 
     private final Map<String, RuntimeBlock> blocks;
+    private final RuntimeRegistryIndex dataIndex;
+    private final Map<String, RuntimeBlock> lazyBlocks = new ConcurrentHashMap<>();
+    private final Set<String> lazyMissing = ConcurrentHashMap.newKeySet();
+    private final Map<Long, Map<String, Variant>> stateVariantBuckets = new ConcurrentHashMap<>();
     private final String minecraftVersion;
     private final String modsFingerprint;
+    private final Consumer<String> log;
 
     private RuntimeModelRegistry(
         Map<String, RuntimeBlock> blocks,
+        RuntimeRegistryIndex dataIndex,
         String minecraftVersion,
-        String modsFingerprint
+        String modsFingerprint,
+        Consumer<String> log
     ) {
         this.blocks = Map.copyOf(blocks);
+        this.dataIndex = dataIndex;
         this.minecraftVersion = minecraftVersion;
         this.modsFingerprint = modsFingerprint;
+        this.log = log;
     }
 
     public static RuntimeModelRegistry load(
@@ -81,72 +94,35 @@ public final class RuntimeModelRegistry {
         String expectedMinecraftVersion,
         Consumer<String> log
     ) {
-        RuntimeRegistryDataReader.DataSnapshot root;
+        RuntimeRegistryIndex index;
         try {
-            root = RuntimeRegistryDataReader.read(snapshot);
+            index = RuntimeRegistryIndex.open(snapshot);
         } catch (Exception exception) {
-            warn(log, "Runtime model registry could not be read: " + exception.getMessage());
-            return null;
-        }
-        if (root.schema() != SNAPSHOT_SCHEMA) {
-            warn(log, "Runtime model registry schema " + root.schema()
-                + " is not geometry-compatible with schema " + SNAPSHOT_SCHEMA);
+            warn(log, "Runtime model registry could not be indexed: " + exception.getMessage());
             return null;
         }
 
-        String capturedVersion = root.minecraftVersion() == null ? "" : root.minecraftVersion().trim();
+        RuntimeRegistryIndex.Header header = index.header();
+        String capturedVersion = header.minecraftVersion() == null ? "" : header.minecraftVersion().trim();
         String expected = expectedMinecraftVersion == null ? "" : expectedMinecraftVersion.trim();
         if (!expected.isEmpty() && !capturedVersion.equals(expected)) {
             warn(log, "Ignoring runtime models for Minecraft " + capturedVersion
                 + " while exporting " + expected);
             return null;
         }
-
-        Map<String, RuntimeBlock> parsed = new LinkedHashMap<>();
-        int variantCount = 0;
-        int quadCount = 0;
-        int emptyVariantCount = 0;
-        for (var blockEntry : root.blocks().entrySet()) {
-            RuntimeRegistryDataReader.DataBlock source = blockEntry.getValue();
-            if (source == null || source.variants() == null || source.variants().isEmpty()) continue;
-
-            List<Variant> variants = new ArrayList<>(source.variants().size());
-            for (RuntimeRegistryDataReader.DataVariant sourceVariant : source.variants()) {
-                List<RuntimeQuad> quads = new ArrayList<>(sourceVariant.quads().size());
-                for (RuntimeRegistryDataReader.DataQuad sourceQuad : sourceVariant.quads()) {
-                    float[] vertices = sourceQuad.vertices();
-                    if (vertices == null || vertices.length < 32) continue;
-                    quads.add(new RuntimeQuad(
-                        vertices.clone(),
-                        sourceQuad.textureId(),
-                        sourceQuad.face(),
-                        sourceQuad.shade(),
-                        sourceQuad.tintIndex()
-                    ));
-                }
-                if (quads.isEmpty()) emptyVariantCount++;
-                quadCount += quads.size();
-                variants.add(new Variant(
-                    sourceVariant.properties() == null ? Map.of() : Map.copyOf(sourceVariant.properties()),
-                    List.copyOf(quads)
-                ));
-            }
-            if (variants.isEmpty()) continue;
-            parsed.put(blockEntry.getKey(), new RuntimeBlock(
-                source.vanillaMapping() == null ? "" : source.vanillaMapping(),
-                source.loaderType() == null ? "" : source.loaderType(),
-                List.copyOf(variants)
-            ));
-            variantCount += variants.size();
-        }
-        if (parsed.isEmpty()) return null;
+        if (index.blockCount() == 0) return null;
 
         if (log != null) {
-            log.accept("Runtime model registry loaded from registry.data: " + parsed.size() + " block type(s), "
-                + variantCount + " state variant(s), " + quadCount + " baked quad(s), "
-                + emptyVariantCount + " known empty state(s)");
+            log.accept("Runtime model registry indexed lazily from registry.data: "
+                + index.blockCount() + " block type(s); baked geometry will load on demand");
         }
-        return new RuntimeModelRegistry(parsed, capturedVersion, root.modsFingerprint());
+        return new RuntimeModelRegistry(
+            Map.of(),
+            index,
+            capturedVersion,
+            header.modsFingerprint(),
+            log
+        );
     }
 
     private static RuntimeModelRegistry loadLegacyJson(
@@ -213,11 +189,12 @@ public final class RuntimeModelRegistry {
                 + variantCount + " state variant(s), " + quadCount + " baked quad(s), "
                 + emptyVariantCount + " known empty state(s)");
         }
-        return new RuntimeModelRegistry(parsed, capturedVersion, fingerprint);
+        return new RuntimeModelRegistry(parsed, null, capturedVersion, fingerprint, log);
     }
 
     public boolean hasBlock(String blockId) {
-        return blockId != null && blocks.containsKey(blockId);
+        if (blockId == null) return false;
+        return blocks.containsKey(blockId) || (dataIndex != null && dataIndex.hasBlock(blockId));
     }
 
     public boolean shouldOverride(BlockData block) {
@@ -226,9 +203,9 @@ public final class RuntimeModelRegistry {
 
     public StateKind stateKind(BlockData block) {
         if (block == null || block.blockId == null) return StateKind.UNKNOWN;
-        RuntimeBlock runtime = blocks.get(block.blockId);
+        RuntimeBlock runtime = runtimeBlock(block.blockId);
         if (runtime == null) return StateKind.UNKNOWN;
-        Variant variant = bestVariant(block, runtime.variants());
+        Variant variant = bestVariantCached(block, runtime);
         if (variant == null) return StateKind.UNKNOWN;
         return variant.quads().isEmpty() ? StateKind.EMPTY_BAKED_MODEL : StateKind.BAKED;
     }
@@ -236,9 +213,9 @@ public final class RuntimeModelRegistry {
     /** Returns null when the registry has no matching state; empty means a real empty model. */
     public List<Quad> build(BlockData block) {
         if (block == null) return null;
-        RuntimeBlock runtime = blocks.get(block.blockId);
+        RuntimeBlock runtime = runtimeBlock(block.blockId);
         if (runtime == null) return null;
-        Variant variant = bestVariant(block, runtime.variants());
+        Variant variant = bestVariantCached(block, runtime);
         if (variant == null) return null;
 
         List<Quad> result = new ArrayList<>(variant.quads().size());
@@ -251,7 +228,80 @@ public final class RuntimeModelRegistry {
 
     public String minecraftVersion() { return minecraftVersion; }
     public String modsFingerprint() { return modsFingerprint; }
-    public int blockTypeCount() { return blocks.size(); }
+    public int blockTypeCount() { return dataIndex != null ? dataIndex.blockCount() : blocks.size(); }
+
+    private RuntimeBlock runtimeBlock(String blockId) {
+        RuntimeBlock eager = blocks.get(blockId);
+        if (eager != null || dataIndex == null) return eager;
+
+        RuntimeBlock cached = lazyBlocks.get(blockId);
+        if (cached != null) return cached;
+        if (lazyMissing.contains(blockId)) return null;
+
+        RuntimeRegistryDataReader.DataBlock source;
+        try {
+            source = dataIndex.readBlock(blockId);
+        } catch (Exception exception) {
+            lazyMissing.add(blockId);
+            warn(log, "Runtime baked model " + blockId + " could not be read: " + exception.getMessage());
+            return null;
+        }
+        RuntimeBlock decoded = decodeDataBlock(source);
+        if (decoded == null) {
+            lazyMissing.add(blockId);
+            return null;
+        }
+        RuntimeBlock previous = lazyBlocks.putIfAbsent(blockId, decoded);
+        return previous != null ? previous : decoded;
+    }
+
+    private static RuntimeBlock decodeDataBlock(RuntimeRegistryDataReader.DataBlock source) {
+        if (source == null || source.variants() == null || source.variants().isEmpty()) return null;
+
+        List<Variant> variants = new ArrayList<>(source.variants().size());
+        for (RuntimeRegistryDataReader.DataVariant sourceVariant : source.variants()) {
+            List<RuntimeQuad> quads = new ArrayList<>(sourceVariant.quads().size());
+            for (RuntimeRegistryDataReader.DataQuad sourceQuad : sourceVariant.quads()) {
+                float[] vertices = sourceQuad.vertices();
+                if (vertices == null || vertices.length < 32) continue;
+                // The lazy reader allocated this array exclusively for this
+                // block record, so keep it directly instead of cloning another
+                // 128 bytes per baked quad.
+                quads.add(new RuntimeQuad(
+                    vertices,
+                    sourceQuad.textureId(),
+                    sourceQuad.face(),
+                    sourceQuad.shade(),
+                    sourceQuad.tintIndex()
+                ));
+            }
+            variants.add(new Variant(
+                sourceVariant.properties() == null ? Map.of() : Map.copyOf(sourceVariant.properties()),
+                List.copyOf(quads)
+            ));
+        }
+        if (variants.isEmpty()) return null;
+        return new RuntimeBlock(
+            source.vanillaMapping() == null ? "" : source.vanillaMapping(),
+            source.loaderType() == null ? "" : source.loaderType(),
+            List.copyOf(variants)
+        );
+    }
+
+    private Variant bestVariantCached(BlockData block, RuntimeBlock runtime) {
+        String canonicalKey = block.blockId + "|" + BlockGrouper.stateKey(block.properties);
+        long hash = RuntimeRegistryIndex.hash64(canonicalKey);
+        Map<String, Variant> bucket = stateVariantBuckets.computeIfAbsent(
+            hash,
+            ignored -> new ConcurrentHashMap<>()
+        );
+        Variant cached = bucket.get(canonicalKey);
+        if (cached != null) return cached;
+
+        Variant resolved = bestVariant(block, runtime.variants());
+        if (resolved != null) bucket.putIfAbsent(canonicalKey, resolved);
+        return resolved;
+    }
 
     private static Variant bestVariant(BlockData block, List<Variant> variants) {
         Variant best = null;
