@@ -13,19 +13,24 @@ use std::{thread, time::Duration};
 
 const REPORTER_ARG: &str = "--error-reporter";
 const OPERATION_TAIL_BYTES: u64 = 64 * 1024;
+const HUMAN_LOG_TAIL_BYTES: u64 = 48 * 1024;
+const HUMAN_LOG_TAIL_LINES: usize = 30;
 
 slint::slint! {
-    import { Button } from "std-widgets.slint";
+    import { Button, ScrollView } from "std-widgets.slint";
 
     export component ErrorReporterWindow inherits Window {
         title: "Minesport — Crash Reporter";
-        preferred-width: 660px;
-        preferred-height: 380px;
+        preferred-width: 720px;
+        preferred-height: 560px;
+        min-width: 600px;
+        min-height: 430px;
         background: #111514;
 
         in-out property <string> headline: "Minesport exited unexpectedly";
         in-out property <string> detail: "";
         in-out property <string> last-operation: "";
+        in-out property <string> recent-log: "";
         in-out property <string> log-path: "";
         in-out property <string> operations-path: "";
 
@@ -35,7 +40,7 @@ slint::slint! {
 
         VerticalLayout {
             padding: 18px;
-            spacing: 12px;
+            spacing: 10px;
 
             Text {
                 text: root.headline;
@@ -72,6 +77,39 @@ slint::slint! {
             }
 
             Text {
+                text: "RECENT LOG";
+                color: #8f9b94;
+                font-size: 11px;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                min-height: 150px;
+                background: #0d100f;
+                border-width: 1px;
+                border-color: #343b37;
+                recent-scroll := ScrollView {
+                    x: 1px;
+                    y: 1px;
+                    width: parent.width - 2px;
+                    height: parent.height - 2px;
+                    horizontal-scrollbar-policy: as-needed;
+                    vertical-scrollbar-policy: as-needed;
+                    VerticalLayout {
+                        padding: 10px;
+                        Text {
+                            text: root.recent-log;
+                            color: #c5cec8;
+                            font-size: 11px;
+                            font-family: "monospace";
+                            wrap: no-wrap;
+                        }
+                    }
+                }
+            }
+
+            Text {
                 text: "DIAGNOSTICS";
                 color: #8f9b94;
                 font-size: 11px;
@@ -79,26 +117,16 @@ slint::slint! {
             }
 
             Text {
-                text: "Human log: " + root.log-path;
-                color: #aeb8b1;
-                font-size: 12px;
+                text: root.log-path;
+                color: #929c96;
+                font-size: 11px;
                 font-family: "monospace";
-                wrap: word-wrap;
+                overflow: elide;
             }
-
-            Text {
-                text: "Operations: " + root.operations-path;
-                color: #aeb8b1;
-                font-size: 12px;
-                font-family: "monospace";
-                wrap: word-wrap;
-            }
-
-            Rectangle { vertical-stretch: 1; background: transparent; }
 
             HorizontalLayout {
                 spacing: 9px;
-                Button { text: "View logs"; clicked => { root.view-logs(); } }
+                Button { text: "Open full log"; clicked => { root.view-logs(); } }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Button { text: "Close"; clicked => { root.close-reporter(); } }
                 Button { text: "Relaunch Minesport"; clicked => { root.relaunch(); } }
@@ -188,6 +216,11 @@ fn run_reporter(parent_pid: u32) -> Result<()> {
             .unwrap_or_else(|| "No complete structured operation record was available.".to_string())
             .into(),
     );
+    window.set_recent_log(
+        latest_human_log_tail()
+            .unwrap_or_else(|| "No recent human diagnostics were available.".to_string())
+            .into(),
+    );
     window.set_log_path(diagnostics::log_path().display().to_string().into());
     window.set_operations_path(diagnostics::operations_path().display().to_string().into());
 
@@ -217,21 +250,7 @@ fn run_reporter(parent_pid: u32) -> Result<()> {
 }
 
 fn latest_operation_summary() -> Option<String> {
-    let path = diagnostics::operations_path();
-    let mut file = File::open(path).ok()?;
-    let length = file.metadata().ok()?.len();
-    let start = length.saturating_sub(OPERATION_TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-
-    let mut bytes = Vec::with_capacity((length - start).min(OPERATION_TAIL_BYTES) as usize);
-    file.read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    let text = if start > 0 {
-        text.split_once('\n').map(|(_, tail)| tail).unwrap_or_default()
-    } else {
-        text.as_ref()
-    };
-
+    let text = read_file_tail(diagnostics::operations_path(), OPERATION_TAIL_BYTES)?;
     for line in text.lines().rev().filter(|line| !line.trim().is_empty()) {
         let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
         let Some(operation_id) = record.get("operation_id").and_then(serde_json::Value::as_str) else { continue; };
@@ -244,6 +263,34 @@ fn latest_operation_summary() -> Option<String> {
         ));
     }
     None
+}
+
+fn latest_human_log_tail() -> Option<String> {
+    let text = read_file_tail(diagnostics::log_path(), HUMAN_LOG_TAIL_BYTES)?;
+    let mut lines = text
+        .lines()
+        .rev()
+        .take(HUMAN_LOG_TAIL_LINES)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    lines.reverse();
+    if lines.is_empty() { None } else { Some(lines.join("\n")) }
+}
+
+fn read_file_tail(path: std::path::PathBuf, maximum_bytes: u64) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(maximum_bytes);
+    file.seek(SeekFrom::Start(start)).ok()?;
+
+    let mut bytes = Vec::with_capacity((length - start).min(maximum_bytes) as usize);
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    if start > 0 {
+        Some(text.split_once('\n').map(|(_, tail)| tail).unwrap_or_default().to_string())
+    } else {
+        Some(text.into_owned())
+    }
 }
 
 fn format_exit_headline(exit_code: u32) -> String {
