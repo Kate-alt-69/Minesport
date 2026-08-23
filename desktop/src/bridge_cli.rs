@@ -39,13 +39,15 @@ fn ensure_bridge(raw_version: &str) -> Result<PathBuf> {
     if !bridge_compat::is_supported(&version) {
         bail!("Minesport has no embedded Fabric compatibility recipe for Minecraft {version}");
     }
+    let required_java = bridge_compat::required_java(&version)?;
 
     let manifest = bridge_compat::manifest()?;
     if bridge_compat::is_bundled_compatible(&version)? {
         let jar = runtime::materialize_bundled_bridge()?;
         println!(
-            "Minecraft {version} uses bundled Bridge {} · {}",
+            "Minecraft {version} uses bundled Bridge {} · Java {} · {}",
             manifest.base.bundled_jar,
+            required_java,
             jar.display()
         );
         return Ok(jar);
@@ -53,7 +55,7 @@ fn ensure_bridge(raw_version: &str) -> Result<PathBuf> {
 
     let destination = compiled_bridge_path(&version);
     if destination.is_file() {
-        println!("Minecraft {version} · cached Bridge reused");
+        println!("Minecraft {version} · Java {required_java} · cached Bridge reused");
         return Ok(destination);
     }
 
@@ -71,16 +73,24 @@ fn ensure_bridge(raw_version: &str) -> Result<PathBuf> {
     let prepared = bridge_compat::prepare_source(&version, &workspace, |update| {
         print_progress(update.percent, &update.stage, &update.detail);
     })?;
+    if prepared.java != required_java {
+        bail!(
+            "compatibility Java requirement drift for Minecraft {version}: manifest requires {required_java}, prepared profile {} requested {}",
+            prepared.profile_id,
+            prepared.java
+        );
+    }
 
     println!(
-        "Prepared profile {} for Minecraft {} · {} variable(s) · {}",
+        "Prepared profile {} for Minecraft {} · Java {} · {} variable(s) · {}",
         prepared.profile_id,
         prepared.version,
+        required_java,
         prepared.variables.len(),
         prepared.workspace.display()
     );
 
-    let java_home = toolchain::ensure_jdk(prepared.java, |update| {
+    let java_home = toolchain::ensure_jdk(required_java, |update| {
         print_progress(update.percent, "JDK", &update.message);
     })?;
     println!("Building compatibility Bridge with {}", java_home.display());
