@@ -12,6 +12,11 @@ pub struct ExactSelection {
 }
 
 impl ExactSelection {
+    // The old Joined/Model preview modes constructed exact coordinate sets.
+    // The confirmed Fyne A/B workflow deliberately exports ordinary cuboid
+    // bounds instead, so keep this constructor only for schema/file tests until
+    // an exact-selection UI is reintroduced intentionally.
+    #[cfg(test)]
     pub fn from_coordinates(mut coordinates: Vec<[i32; 3]>, label: impl Into<String>) -> Option<Self> {
         if coordinates.is_empty() {
             return None;
