@@ -25,8 +25,6 @@ struct PreviewBlock {
     texture_top: String,
     #[serde(default, rename = "textureSide")]
     texture_side: String,
-    #[serde(default, rename = "textureBottom")]
-    texture_bottom: String,
     #[serde(default = "default_color")]
     r: u8,
     #[serde(default = "default_color")]
