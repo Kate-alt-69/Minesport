@@ -1,0 +1,124 @@
+import { ProgressIndicator } from "std-widgets.slint";
+
+// One reusable Minesport activity indicator for workbench overlays and
+// auxiliary windows. Callers own placement; this component only owns the
+// animation, text and optional determinate progress presentation.
+export component MinesportLoader inherits Rectangle {
+    in property <string> title: "Working…";
+    in property <string> detail: "";
+    in property <float> progress: 0.0;
+    in property <bool> determinate: false;
+    in property <bool> compact: false;
+
+    min-width: root.compact ? 220px : 300px;
+    preferred-width: root.compact ? 320px : 420px;
+    min-height: root.compact ? 58px : 88px;
+    preferred-height: root.compact ? 64px : 104px;
+    background: #141817ee;
+    border-width: 1px;
+    border-color: #3b453f;
+    border-radius: 8px;
+
+    private property <angle> spinner-angle: 0deg;
+    animate spinner-angle {
+        duration: 900ms;
+        iteration-count: infinite;
+        easing: linear;
+    }
+    spinner-angle: 360deg;
+
+    HorizontalLayout {
+        padding: root.compact ? 10px : 14px;
+        spacing: root.compact ? 10px : 14px;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: root.compact ? 30px : 40px;
+            height: root.compact ? 30px : 40px;
+            background: transparent;
+
+            // Four fading bars produce a Minesport-specific spinner without
+            // relying on the platform widget implementation.
+            Rectangle {
+                x: parent.width / 2 - 2px;
+                y: 1px;
+                width: 4px;
+                height: parent.height * 0.30;
+                border-radius: 2px;
+                background: #69c4ff;
+                transform-origin-x: 2px;
+                transform-origin-y: parent.height / 2 - 1px;
+                rotation-angle: root.spinner-angle;
+            }
+            Rectangle {
+                x: parent.width / 2 - 2px;
+                y: 1px;
+                width: 4px;
+                height: parent.height * 0.30;
+                border-radius: 2px;
+                background: #69c4ff99;
+                transform-origin-x: 2px;
+                transform-origin-y: parent.height / 2 - 1px;
+                rotation-angle: root.spinner-angle + 90deg;
+            }
+            Rectangle {
+                x: parent.width / 2 - 2px;
+                y: 1px;
+                width: 4px;
+                height: parent.height * 0.30;
+                border-radius: 2px;
+                background: #69c4ff55;
+                transform-origin-x: 2px;
+                transform-origin-y: parent.height / 2 - 1px;
+                rotation-angle: root.spinner-angle + 180deg;
+            }
+            Rectangle {
+                x: parent.width / 2 - 2px;
+                y: 1px;
+                width: 4px;
+                height: parent.height * 0.30;
+                border-radius: 2px;
+                background: #69c4ff2d;
+                transform-origin-x: 2px;
+                transform-origin-y: parent.height / 2 - 1px;
+                rotation-angle: root.spinner-angle + 270deg;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: root.compact ? 3px : 6px;
+            Text {
+                text: root.title;
+                color: #eef2ef;
+                font-size: root.compact ? 12px : 14px;
+                font-weight: 700;
+                overflow: elide;
+            }
+            if root.detail != "": Text {
+                text: root.detail;
+                color: #aeb8b2;
+                font-size: root.compact ? 10px : 11px;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+            if root.determinate: HorizontalLayout {
+                spacing: 8px;
+                ProgressIndicator {
+                    horizontal-stretch: 1;
+                    progress: max(0.0, min(1.0, root.progress));
+                }
+                Text {
+                    width: 44px;
+                    text: round(max(0.0, min(1.0, root.progress)) * 100) + "%";
+                    color: #d8ded9;
+                    font-size: 11px;
+                    font-family: "monospace";
+                    font-weight: 700;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
