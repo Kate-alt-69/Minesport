@@ -2,7 +2,7 @@ use crate::{
     MainWindow, blender, bridge_compat, diagnostics, heightmap_cache,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
     preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, settings,
-    world_context,
+    world_context, world_picker,
 };
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -211,125 +211,48 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
         let engine = picker_engine.clone();
         let state = world_state.clone();
         let cache = cache.clone();
+        if let Some(ui) = weak.upgrade() {
+            ui.set_task_title("WORLD PICKER".into());
+            ui.set_task_detail("Discovering Minecraft launchers, instances and worlds…".into());
+        }
         thread::spawn(move || {
-            let picked = rfd::FileDialog::new().set_title("Select a Minecraft world").pick_folder();
-            let Some(path) = picked else { return; };
-            if !path.join("level.dat").is_file() {
-                let display = path.display().to_string();
-                let _ = weak.upgrade_in_event_loop(move |ui| {
-                    append_diagnostic(&ui, &format!("Rejected world without level.dat: {display}"));
-                    ui.set_task_title("INVALID WORLD".into());
-                    ui.set_task_detail("The selected folder does not contain level.dat".into());
-                });
-                return;
-            }
-
-            let discovered = world_context::resolve(&path);
-            let name = discovered
-                .as_ref()
-                .map(|context| context.world_name.clone())
-                .or_else(|| path.file_name().and_then(|name| name.to_str()).map(str::to_string))
-                .unwrap_or_else(|| "Minecraft World".to_string());
-            let version = discovered
-                .as_ref()
-                .map(|context| context.version.clone())
-                .filter(|value| !value.trim().is_empty() && value != "?")
-                .or_else(|| detect_minecraft_version(&path))
-                .unwrap_or_else(|| "1.21.10".to_string());
-            let loader = discovered
-                .as_ref()
-                .map(|context| context.loader.clone())
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| detect_loader(&path));
-            let mods_path = discovered
-                .as_ref()
-                .map(|context| context.mods_path.clone())
-                .unwrap_or_else(|| infer_mods_path(&path));
-            let display = path.display().to_string();
-            let context_line = discovered.as_ref().map(|context| {
-                format!(
-                    "Launcher context: {} › {} · MC {} · {}{} · minecraft dir {}",
-                    context.launcher,
-                    context.instance,
-                    context.version,
-                    context.loader,
-                    if context.has_polymer { " · Polymer" } else { "" },
-                    context.minecraft_dir.display()
-                )
-            });
-
-            if cache.is_running() && !cache.is_running_for(&version, &mods_path) {
-                cache.cancel();
-            }
-            if let Ok(mut guard) = state.lock() {
-                guard.pending_export = None;
-                guard.selected_world = Some(path.clone());
-                guard.selected_mods_path = Some(mods_path.clone());
-                guard.selected_version = Some(version.clone());
-                guard.selected_loader = Some(loader.clone());
-            }
-
-            let cached_map = match heightmap_cache::load(&path) {
-                Ok(Some((metadata, png))) => match decode_png(&png) {
-                    Ok(raster) => Some((metadata, raster)),
-                    Err(error) => {
-                        diagnostics::append(&format!("Ignored unreadable heightmap cache for {}: {error:#}", path.display()));
-                        None
-                    }
-                },
-                Ok(None) => None,
-                Err(error) => {
-                    diagnostics::append(&format!("Heightmap cache lookup failed for {}: {error:#}", path.display()));
-                    None
-                }
-            };
-            let cache_hit = cached_map.is_some();
-
-            let display_for_ui = display.clone();
-            let version_for_ui = version.clone();
-            let loader_for_ui = loader.clone();
+            let worlds = world_context::all_worlds();
+            let count = worlds.len();
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                ui.set_world_path(display_for_ui.clone().into());
-                ui.set_world_name(name.into());
-                ui.set_minecraft_version(version_for_ui.clone().into());
-                ui.set_loader_type(loader_for_ui.clone().into());
-                ui.set_runtime_cache_status("PREPARING · full instance registry starts automatically".into());
-                ui.set_preview_available(false);
-                ui.set_preview_loading(false);
-                if let Some((metadata, raster)) = cached_map {
-                    apply_map_raster(&ui, raster, metadata.min_x, metadata.min_z, metadata.max_x, metadata.max_z, metadata.scale);
-                    ui.set_task_title("MAP CACHE HIT".into());
-                    ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · saved 2D map restored").into());
-                    append_diagnostic(&ui, "2D map cache hit: using saved heightmap");
-                } else {
-                    ui.set_map_loading(true);
-                    ui.set_map_available(false);
-                    ui.set_task_title("WORLD".into());
-                    ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · loading 2D map").into());
-                }
-                append_diagnostic(&ui, &format!("Selected world: {display_for_ui} (Minecraft {version_for_ui}, {loader_for_ui})"));
-                if let Some(line) = context_line { append_diagnostic(&ui, &line); }
-            });
+                append_diagnostic(&ui, &format!("World picker discovered {count} world(s) across installed launchers"));
 
-            if !cache_hit {
-                if let Err(error) = engine.send_value(json!({ "command": "heightmap", "worldPath": display, "scale": 1 })) {
-                    let _ = weak.upgrade_in_event_loop(move |ui| {
-                        ui.set_map_loading(false);
-                        ui.set_task_title("MAP FAILED".into());
-                        ui.set_task_detail(error.to_string().into());
-                        append_diagnostic(&ui, &format!("Heightmap request failed: {error:#}"));
-                    });
-                }
-            }
+                let select_weak = weak.clone();
+                let select_engine = engine.clone();
+                let select_state = state.clone();
+                let select_cache = cache.clone();
 
-            if runtime_registry_supported(&loader, &version, &mods_path) {
-                let _ = start_runtime_cache_job(
-                    weak.clone(), cache, engine, state, version, mods_path, false, false,
+                let browse_weak = weak.clone();
+                let browse_engine = engine.clone();
+                let browse_state = state.clone();
+                let browse_cache = cache.clone();
+
+                world_picker::show(
+                    worlds,
+                    move |context| {
+                        activate_world(
+                            select_weak.clone(),
+                            select_engine.clone(),
+                            select_state.clone(),
+                            select_cache.clone(),
+                            context.world_path.clone(),
+                            Some(context),
+                        );
+                    },
+                    move || {
+                        browse_world_folder(
+                            browse_weak.clone(),
+                            browse_engine.clone(),
+                            browse_state.clone(),
+                            browse_cache.clone(),
+                        );
+                    },
                 );
-            } else {
-                let detail = runtime_registry_unavailable_reason(&loader, &version, &mods_path);
-                let _ = weak.upgrade_in_event_loop(move |ui| ui.set_runtime_cache_status(detail.into()));
-            }
+            });
         });
     });
 
@@ -376,6 +299,147 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
                 });
             }
         });
+    });
+}
+
+fn browse_world_folder(
+    weak: slint::Weak<MainWindow>,
+    engine: JavaEngine,
+    state: SharedState,
+    cache: RuntimeCacheManager,
+) {
+    thread::spawn(move || {
+        let picked = rfd::FileDialog::new().set_title("Select a Minecraft world folder").pick_folder();
+        let Some(path) = picked else { return; };
+        activate_world(weak, engine, state, cache, path, None);
+    });
+}
+
+fn activate_world(
+    weak: slint::Weak<MainWindow>,
+    engine: JavaEngine,
+    state: SharedState,
+    cache: RuntimeCacheManager,
+    path: PathBuf,
+    supplied_context: Option<world_context::WorldContext>,
+) {
+    thread::spawn(move || {
+        if !path.join("level.dat").is_file() {
+            let display = path.display().to_string();
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                append_diagnostic(&ui, &format!("Rejected world without level.dat: {display}"));
+                ui.set_task_title("INVALID WORLD".into());
+                ui.set_task_detail("The selected folder does not contain level.dat".into());
+            });
+            return;
+        }
+
+        let discovered = supplied_context.or_else(|| world_context::resolve(&path));
+        let name = discovered
+            .as_ref()
+            .map(|context| context.world_name.clone())
+            .or_else(|| path.file_name().and_then(|name| name.to_str()).map(str::to_string))
+            .unwrap_or_else(|| "Minecraft World".to_string());
+        let version = discovered
+            .as_ref()
+            .map(|context| context.version.clone())
+            .filter(|value| !value.trim().is_empty() && value != "?")
+            .or_else(|| detect_minecraft_version(&path))
+            .unwrap_or_else(|| "1.21.10".to_string());
+        let loader = discovered
+            .as_ref()
+            .map(|context| context.loader.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| detect_loader(&path));
+        let mods_path = discovered
+            .as_ref()
+            .map(|context| context.mods_path.clone())
+            .unwrap_or_else(|| infer_mods_path(&path));
+        let display = path.display().to_string();
+        let context_line = discovered.as_ref().map(|context| {
+            format!(
+                "Launcher context: {} › {} · MC {} · {}{} · minecraft dir {}",
+                context.launcher,
+                context.instance,
+                context.version,
+                context.loader,
+                if context.has_polymer { " · Polymer" } else { "" },
+                context.minecraft_dir.display()
+            )
+        });
+
+        if cache.is_running() && !cache.is_running_for(&version, &mods_path) {
+            cache.cancel();
+        }
+        if let Ok(mut guard) = state.lock() {
+            guard.pending_export = None;
+            guard.selected_world = Some(path.clone());
+            guard.selected_mods_path = Some(mods_path.clone());
+            guard.selected_version = Some(version.clone());
+            guard.selected_loader = Some(loader.clone());
+        }
+
+        let cached_map = match heightmap_cache::load(&path) {
+            Ok(Some((metadata, png))) => match decode_png(&png) {
+                Ok(raster) => Some((metadata, raster)),
+                Err(error) => {
+                    diagnostics::append(&format!("Ignored unreadable heightmap cache for {}: {error:#}", path.display()));
+                    None
+                }
+            },
+            Ok(None) => None,
+            Err(error) => {
+                diagnostics::append(&format!("Heightmap cache lookup failed for {}: {error:#}", path.display()));
+                None
+            }
+        };
+        let cache_hit = cached_map.is_some();
+
+        let display_for_ui = display.clone();
+        let version_for_ui = version.clone();
+        let loader_for_ui = loader.clone();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            ui.set_world_path(display_for_ui.clone().into());
+            ui.set_world_name(name.into());
+            ui.set_minecraft_version(version_for_ui.clone().into());
+            ui.set_loader_type(loader_for_ui.clone().into());
+            ui.set_runtime_cache_status("PREPARING · full instance registry starts automatically".into());
+            ui.set_preview_available(false);
+            ui.set_preview_loading(false);
+            if let Some((metadata, raster)) = cached_map {
+                apply_map_raster(&ui, raster, metadata.min_x, metadata.min_z, metadata.max_x, metadata.max_z, metadata.scale);
+                ui.set_task_title("MAP CACHE HIT".into());
+                ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · saved 2D map restored").into());
+                append_diagnostic(&ui, "2D map cache hit: using saved heightmap");
+            } else {
+                ui.set_map_loading(true);
+                ui.set_map_available(false);
+                ui.set_task_title("WORLD".into());
+                ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · loading 2D map").into());
+            }
+            append_diagnostic(&ui, &format!("Selected world: {display_for_ui} (Minecraft {version_for_ui}, {loader_for_ui})"));
+            if let Some(line) = context_line { append_diagnostic(&ui, &line); }
+        });
+
+        if !cache_hit {
+            if let Err(error) = engine.send_value(json!({ "command": "heightmap", "worldPath": display, "scale": 1 })) {
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    ui.set_map_loading(false);
+                    ui.set_task_title("MAP FAILED".into());
+                    ui.set_task_detail(error.to_string().into());
+                    append_diagnostic(&ui, &format!("Heightmap request failed: {error:#}"));
+                });
+            }
+        }
+
+        if runtime_registry_supported(&loader, &version, &mods_path) {
+            let _ = start_runtime_cache_job(
+                weak.clone(), cache, engine, state, version, mods_path, false, false,
+            );
+        } else {
+            let detail = runtime_registry_unavailable_reason(&loader, &version, &mods_path);
+            let _ = weak.upgrade_in_event_loop(move |ui| ui.set_runtime_cache_status(detail.into()));
+        }
     });
 }
 
