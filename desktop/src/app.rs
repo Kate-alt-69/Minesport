@@ -1,5 +1,5 @@
 use crate::{
-    MainWindow, blender, bridge_compat, diagnostics, heightmap_cache,
+    MainWindow, aux_windows, blender, bridge_compat, diagnostics, heightmap_cache,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
     preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, selection, settings,
     world_context, world_picker,
@@ -111,6 +111,7 @@ pub fn run() -> Result<()> {
     wire_cache_actions(&ui, engine.clone(), state.clone(), cache.clone());
     wire_asset_pickers(&ui, state.clone());
     wire_settings_persistence(&ui, state.clone());
+    sync_debug_console(&ui, state.clone());
     wire_docs(&ui);
     wire_blender(&ui, state.clone());
 
@@ -215,8 +216,37 @@ fn wire_settings_persistence(ui: &MainWindow, state: SharedState) {
     let weak = ui.as_weak();
     ui.on_settings_changed(move || {
         let Some(ui) = weak.upgrade() else { return; };
+        sync_debug_console(&ui, state.clone());
         persist_settings_snapshot(&ui, &state);
     });
+}
+
+fn sync_debug_console(ui: &MainWindow, state: SharedState) {
+    // The retired Fyne UI used a real secondary window. Keep the old in-workbench
+    // modal permanently suppressed even if a stale Slint binding toggles it.
+    ui.set_debug_console_visible(false);
+    if !ui.get_debug_mode() {
+        aux_windows::hide_debug_console();
+        return;
+    }
+
+    let close_weak = ui.as_weak();
+    let close_state = state.clone();
+    let clear_weak = ui.as_weak();
+    aux_windows::show_debug_console(
+        ui,
+        move || {
+            let Some(ui) = close_weak.upgrade() else { return; };
+            ui.set_debug_mode(false);
+            ui.set_debug_console_visible(false);
+            persist_settings_snapshot(&ui, &close_state);
+        },
+        move || {
+            let Some(ui) = clear_weak.upgrade() else { return; };
+            ui.set_diagnostics("".into());
+            aux_windows::update_debug_console(&ui);
+        },
+    );
 }
 
 fn persist_settings_snapshot(ui: &MainWindow, state: &SharedState) {
@@ -549,7 +579,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             if let Ok(mut guard) = state.lock() {
                 guard.pending_export = Some(request);
             }
-            ui.set_task_active(true);
+            ui.set_task_active(false);
             ui.set_task_progress(0.01);
             ui.set_task_title("RUNTIME CACHE".into());
             ui.set_task_detail("Export is waiting for the full Minecraft registry…".into());
@@ -886,6 +916,7 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
     let weak = ui.as_weak();
     ui.on_cancel_runtime_cache(move || {
         if cache.cancel() {
+            aux_windows::mark_runtime_cache_cancelling();
             if let Some(ui) = weak.upgrade() {
                 ui.set_runtime_cache_status("CANCELLING…".into());
                 ui.set_task_detail("Stopping disposable Minecraft registry worker…".into());
@@ -908,18 +939,28 @@ fn start_runtime_cache_job(
     let ui_weak = weak.clone();
     let completion_engine = engine.clone();
     let completion_state = state.clone();
+    let window_version = version.clone();
+    let window_cache = cache.clone();
     let started = cache.start(version.clone(), mods_path.clone(), force, move |event| match event {
         RuntimeCacheEvent::Progress(progress) => {
             let detail = progress.message.clone();
+            let version = window_version.clone();
+            let cancel_cache = window_cache.clone();
+            let percent = (progress.percent.clamp(0, 100) as f32) / 100.0;
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
                 ui.set_runtime_cache_busy(true);
                 ui.set_runtime_cache_status(format!("PREPARING · {}% · {}", progress.percent, detail).into());
-                if foreground || ui.get_task_active() {
-                    ui.set_task_active(true);
-                    ui.set_task_title("RUNTIME CACHE".into());
-                    ui.set_task_progress((progress.percent.clamp(0, 100) as f32) / 100.0);
-                    ui.set_task_detail(detail.into());
-                }
+                // Match the Fyne runtime-cache window: heavy Gradle/Minecraft
+                // preparation gets its own window and hides the repaint-heavy
+                // workbench until the disposable client exits.
+                aux_windows::show_runtime_cache(
+                    &ui,
+                    &version,
+                    &detail,
+                    percent,
+                    move || { let _ = cancel_cache.cancel(); },
+                );
+                ui.set_task_active(false);
             });
         }
         RuntimeCacheEvent::Complete(result) => {
@@ -935,12 +976,13 @@ fn start_runtime_cache_job(
             let ui_weak2 = ui_weak.clone();
             let ui_completion_state = completion_state.clone();
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
+                aux_windows::close_runtime_cache(&ui);
                 ui.set_runtime_cache_busy(false);
                 ui.set_runtime_cache_status(status.into());
+                ui.set_task_active(false);
                 match &result {
                     Ok(cache_result) => {
                         if foreground && !has_pending_export(&ui_completion_state) {
-                            ui.set_task_active(false);
                             ui.set_task_progress(1.0);
                             ui.set_task_title("RUNTIME REGISTRY READY".into());
                             ui.set_task_detail(cache_result.registry_path.display().to_string().into());
@@ -949,7 +991,6 @@ fn start_runtime_cache_job(
                     }
                     Err(error) => {
                         if foreground && !has_pending_export(&ui_completion_state) {
-                            ui.set_task_active(false);
                             ui.set_task_title("RUNTIME CACHE FAILED".into());
                             ui.set_task_detail(first_line(error).into());
                         }
@@ -964,9 +1005,8 @@ fn start_runtime_cache_job(
     let _ = weak.upgrade_in_event_loop(move |ui| {
         ui.set_runtime_cache_busy(true);
         ui.set_runtime_cache_status(if force { "PREPARING · forced full-registry rebuild" } else { "PREPARING · full instance registry" }.into());
+        ui.set_task_active(false);
         if foreground {
-            ui.set_task_active(true);
-            ui.set_task_progress(0.01);
             ui.set_task_title("RUNTIME CACHE".into());
             ui.set_task_detail(format!("Minecraft {version} · full registered block/model registry").into());
         }
@@ -1652,6 +1692,7 @@ fn append_diagnostic(ui: &MainWindow, line: &str) {
         combined = format!("… older diagnostics trimmed …\n{}", &combined[start..]);
     }
     ui.set_diagnostics(combined.into());
+    aux_windows::update_debug_console(ui);
 }
 
 fn add_bubble_fields(ui: &MainWindow, request: &mut Value) {
