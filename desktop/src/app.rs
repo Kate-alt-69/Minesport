@@ -1,7 +1,7 @@
 use crate::{
     MainWindow, blender, bridge_compat, diagnostics, heightmap_cache,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
-    preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, settings,
+    preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, selection, settings,
     world_context, world_picker,
 };
 use anyhow::{Context, Result, anyhow};
@@ -22,6 +22,7 @@ use std::{
 };
 
 const VERSION: &str = "0.2.0";
+const DEFAULT_JOINED_SELECTION_POWER: usize = 64;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum BlockRequestPurpose {
@@ -40,6 +41,8 @@ struct AppState {
     selected_mods_path: Option<PathBuf>,
     selected_version: Option<String>,
     selected_loader: Option<String>,
+    preview_pick_map: Option<preview::PreviewPickMap>,
+    exact_selection: Option<selection::ExactSelection>,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -97,6 +100,7 @@ pub fn run() -> Result<()> {
     append_diagnostic(&ui, "Runtime registry: Rust binary registry.data capture + isolated Fabric/Loom worker");
     append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover the manifest-supported Fabric version families");
     append_diagnostic(&ui, "World context: launcher/instance discovery is authoritative when available; folder inference is fallback-only");
+    append_diagnostic(&ui, "3D selection: Rust hit-map + Joined Blocks flood fill + exact custom-selection export");
 
     let ping_engine = engine.clone();
     let ping_weak = ui.as_weak();
@@ -378,6 +382,8 @@ fn activate_world(
             guard.selected_mods_path = Some(mods_path.clone());
             guard.selected_version = Some(version.clone());
             guard.selected_loader = Some(loader.clone());
+            guard.preview_pick_map = None;
+            guard.exact_selection = None;
         }
 
         let cached_map = match heightmap_cache::load(&path) {
@@ -407,6 +413,7 @@ fn activate_world(
             ui.set_runtime_cache_status("PREPARING · full instance registry starts automatically".into());
             ui.set_preview_available(false);
             ui.set_preview_loading(false);
+            ui.set_preview_focus_label("Click a visible block to focus/select it".into());
             if let Some((metadata, raster)) = cached_map {
                 apply_map_raster(&ui, raster, metadata.min_x, metadata.min_z, metadata.max_x, metadata.max_z, metadata.scale);
                 ui.set_task_title("MAP CACHE HIT".into());
@@ -466,7 +473,13 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
 
         let format = if ui.get_export_format_index() == 1 { "obj" } else { "gltf" };
         let name = sanitize_export_name(&ui.get_export_name().to_string());
-        let output = output_dir.join(format!("{name}.{format}"));
+        let requested_output = output_dir.join(format!("{name}.{format}"));
+        let output = resolve_export_collision(&requested_output);
+        let Some(output) = output else {
+            ui.set_task_title("EXPORT CANCELLED".into());
+            ui.set_task_detail("Existing file was left unchanged".into());
+            return;
+        };
         let export_mode = match ui.get_export_mode_index() { 1 => "individual", 2 => "merged", _ => "grouped" };
         let (version, loader, mods_path) = selected_runtime_context(&state, &ui, &world);
         let cell_size = [8, 16, 32, 64].get(ui.get_flatter_cell_index().max(0) as usize).copied().unwrap_or(16);
@@ -497,6 +510,12 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             }
         });
         add_bubble_fields(&ui, &mut request);
+        if let Err(error) = attach_exact_selection(&ui, &state, &mut request) {
+            ui.set_task_title("EXPORT FAILED".into());
+            ui.set_task_detail(error.to_string().into());
+            append_diagnostic(&ui, &format!("Could not prepare exact preview selection: {error:#}"));
+            return;
+        }
 
         if let Some(registry_path) = cache.ready_path(&version, &mods_path) {
             attach_registry(&mut request, &registry_path);
@@ -527,6 +546,39 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
         append_diagnostic(&ui, &format!("{}; exporting through static asset resolvers.", runtime_registry_unavailable_reason(&loader, &version, &mods_path)));
         send_export_now(&ui, &engine, request, &output);
     });
+}
+
+fn resolve_export_collision(path: &Path) -> Option<PathBuf> {
+    if !path.exists() { return Some(path.to_path_buf()); }
+    let replace = MessageDialog::new()
+        .set_level(MessageLevel::Warning)
+        .set_title("Replace existing Minesport export?")
+        .set_description(format!("{} already exists.\n\nYes: replace it.\nNo: keep it and export with the next available name.", path.display()))
+        .set_buttons(MessageButtons::YesNo)
+        .show();
+    if replace == MessageDialogResult::Yes {
+        Some(path.to_path_buf())
+    } else if replace == MessageDialogResult::No {
+        Some(next_export_path(path))
+    } else {
+        None
+    }
+}
+
+fn next_export_path(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("Minesport_Export");
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("");
+    for index in 2u32.. {
+        let name = if extension.is_empty() {
+            format!("{stem}_{index}")
+        } else {
+            format!("{stem}_{index}.{extension}")
+        };
+        let candidate = parent.join(name);
+        if !candidate.exists() { return candidate; }
+    }
+    unreachable!("u32 export suffix space exhausted")
 }
 
 fn send_export_now(ui: &MainWindow, engine: &JavaEngine, request: Value, output: &Path) {
@@ -568,16 +620,21 @@ fn wire_preflight(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
 
 fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     let weak = ui.as_weak();
+    let open_state = state.clone();
     ui.on_open_3d(move || {
         let Some(ui) = weak.upgrade() else { return; };
         let world = PathBuf::from(ui.get_world_path().to_string());
         if !world.join("level.dat").is_file() { return; }
-        if let Ok(mut guard) = state.lock() { guard.block_request_purpose = BlockRequestPurpose::Preview; }
+        if let Ok(mut guard) = open_state.lock() {
+            guard.block_request_purpose = BlockRequestPurpose::Preview;
+            guard.preview_pick_map = None;
+        }
 
-        let mut request = block_list_request(&ui, &world, &state);
+        let mut request = block_list_request(&ui, &world, &open_state);
         add_bubble_fields(&ui, &mut request);
         ui.set_preview_loading(true);
         ui.set_preview_available(false);
+        ui.set_preview_focus_label("Building clickable Rust preview…".into());
         ui.set_task_active(true);
         ui.set_task_progress(0.05);
         ui.set_task_title("3D PREVIEW".into());
@@ -587,6 +644,63 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
             ui.set_task_active(false);
             ui.set_task_title("3D PREVIEW FAILED".into());
             ui.set_task_detail(error.to_string().into());
+        }
+    });
+
+    let weak = ui.as_weak();
+    ui.on_preview_click(move |mouse_x, mouse_y, view_width, view_height| {
+        let Some(ui) = weak.upgrade() else { return; };
+        let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+        let Some(pick_map) = pick_map else {
+            ui.set_preview_focus_label("Preview hit-map is not ready yet".into());
+            return;
+        };
+        let (image_width, image_height) = pick_map.dimensions();
+        let Some((source_x, source_y)) = selection::preview_source_point(
+            mouse_x, mouse_y, view_width, view_height, image_width, image_height,
+        ) else {
+            ui.set_preview_focus_label("Click inside the rendered 3D image".into());
+            return;
+        };
+        let Some(picked) = pick_map.pick(source_x, source_y) else {
+            ui.set_preview_focus_label("No solid block under the cursor".into());
+            return;
+        };
+
+        let (coordinates, label) = if ui.get_select_by_model() {
+            let coordinates = pick_map.coordinates_for_id(&picked.id);
+            let label = format!("Model {}", picked.id);
+            (coordinates, label)
+        } else {
+            let coordinates = pick_map.joined_blocks(
+                [picked.x, picked.y, picked.z],
+                DEFAULT_JOINED_SELECTION_POWER,
+            );
+            let label = format!("Joined Blocks from {},{},{}", picked.x, picked.y, picked.z);
+            (coordinates, label)
+        };
+        let Some(exact) = selection::ExactSelection::from_coordinates(coordinates, label) else {
+            ui.set_preview_focus_label("Selection did not contain any solid blocks".into());
+            return;
+        };
+
+        ui.set_selection_mode(0);
+        ui.set_min_x(exact.min[0]);
+        ui.set_min_y(exact.min[1]);
+        ui.set_min_z(exact.min[2]);
+        ui.set_max_x(exact.max[0]);
+        ui.set_max_y(exact.max[1]);
+        ui.set_max_z(exact.max[2]);
+        let mode = if ui.get_select_by_model() { "MODEL" } else { "JOINED" };
+        ui.set_preview_focus_label(format!(
+            "{mode} · {} block(s) · X {}..{} · Y {}..{} · Z {}..{}",
+            exact.coordinates.len(), exact.min[0], exact.max[0], exact.min[1], exact.max[1], exact.min[2], exact.max[2],
+        ).into());
+        append_diagnostic(&ui, &format!(
+            "3D exact selection: {} · {} block(s)", exact.label, exact.coordinates.len()
+        ));
+        if let Ok(mut guard) = state.lock() {
+            guard.exact_selection = Some(exact);
         }
     });
 }
@@ -807,6 +921,28 @@ fn attach_registry(request: &mut Value, path: &Path) {
     if let Some(options) = request.get_mut("options").and_then(Value::as_object_mut) {
         options.insert("bridgeRegistry".to_string(), Value::String(path.display().to_string()));
     }
+}
+
+fn attach_exact_selection(ui: &MainWindow, state: &SharedState, request: &mut Value) -> Result<()> {
+    let min = [ui.get_min_x(), ui.get_min_y(), ui.get_min_z()];
+    let max = [ui.get_max_x(), ui.get_max_y(), ui.get_max_z()];
+    let exact = {
+        let mut guard = state.lock().map_err(|_| anyhow!("exact-selection state lock poisoned"))?;
+        let Some(exact) = guard.exact_selection.clone() else { return Ok(()); };
+        if ui.get_selection_mode() != 0 || !exact.matches_bounds(min, max) {
+            guard.exact_selection = None;
+            ui.set_preview_focus_label("Exact 3D selection cleared because selection bounds changed".into());
+            append_diagnostic(ui, "Exact 3D selection cleared after bounds/mode changed");
+            return Ok(());
+        }
+        exact
+    };
+    let path = selection::write_selection_file(&runtime::cache_root(), &exact)?;
+    let options = request.get_mut("options").and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow!("export request does not contain an options object"))?;
+    options.insert("customSelectionFile".to_string(), Value::String(path.display().to_string()));
+    append_diagnostic(ui, &format!("Exact custom selection attached: {} block(s) · {}", exact.coordinates.len(), path.display()));
+    Ok(())
 }
 
 fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
@@ -1156,9 +1292,17 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                 });
             }
             BlockRequestPurpose::Preview => {
+                let preview_state = state.clone();
                 thread::spawn(move || {
                     let rendered = preview::render_file(&path);
                     let _ = fs::remove_file(&path);
+                    if let Ok(rendered) = &rendered {
+                        if let Ok(mut guard) = preview_state.lock() {
+                            guard.preview_pick_map = Some(rendered.pick_map.clone());
+                        }
+                    } else if let Ok(mut guard) = preview_state.lock() {
+                        guard.preview_pick_map = None;
+                    }
                     let _ = weak.upgrade_in_event_loop(move |ui| match rendered {
                         Ok(rendered) => {
                             let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rendered.rgba, rendered.width, rendered.height);
@@ -1166,6 +1310,7 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                             ui.set_preview_available(true);
                             ui.set_preview_loading(false);
                             ui.set_preview_block_count(rendered.block_count as i32);
+                            ui.set_preview_focus_label("Click a block · Joined Blocks is default · Select by model can group matching IDs".into());
                             ui.set_task_active(false);
                             ui.set_task_progress(1.0);
                             ui.set_task_title("3D PREVIEW READY".into());
@@ -1460,6 +1605,7 @@ fn first_line(value: &str) -> &str { value.lines().next().unwrap_or(value) }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn detects_instance_version_from_world_path() {
@@ -1470,6 +1616,18 @@ mod tests {
     #[test]
     fn sanitizes_windows_export_name() {
         assert_eq!(sanitize_export_name(" chest:test? "), "chest_test_");
+    }
+
+    #[test]
+    fn next_export_path_skips_existing_suffixes() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("minesport-export-path-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let base = root.join("scene.gltf");
+        fs::write(&base, b"old").unwrap();
+        fs::write(root.join("scene_2.gltf"), b"old").unwrap();
+        assert_eq!(next_export_path(&base), root.join("scene_3.gltf"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
