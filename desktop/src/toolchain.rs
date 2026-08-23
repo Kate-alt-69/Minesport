@@ -14,6 +14,11 @@ use std::{
 
 const DOWNLOAD_ATTEMPTS: usize = 3;
 
+enum HttpAttemptError {
+    Retryable(anyhow::Error),
+    Permanent(anyhow::Error),
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolchainProgress {
     pub percent: i32,
@@ -176,7 +181,8 @@ fn http_get_bytes(url: &str, limit: u64, timeout: Duration) -> Result<Vec<u8>> {
     for attempt in 1..=DOWNLOAD_ATTEMPTS {
         match http_get_bytes_once(&agent, url, limit) {
             Ok(data) => return Ok(data),
-            Err(error) => {
+            Err(HttpAttemptError::Permanent(error)) => return Err(error),
+            Err(HttpAttemptError::Retryable(error)) => {
                 last_error = Some(error);
                 if attempt < DOWNLOAD_ATTEMPTS {
                     std::thread::sleep(Duration::from_millis(400 * attempt as u64));
@@ -188,17 +194,37 @@ fn http_get_bytes(url: &str, limit: u64, timeout: Duration) -> Result<Vec<u8>> {
     Err(anyhow!("HTTP request failed for {url} after {DOWNLOAD_ATTEMPTS} attempts: {error:#}"))
 }
 
-fn http_get_bytes_once(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>> {
-    let response = agent
+fn http_get_bytes_once(agent: &ureq::Agent, url: &str, limit: u64) -> std::result::Result<Vec<u8>, HttpAttemptError> {
+    let response = match agent
         .get(url)
         .set("User-Agent", "Minesport-Rust-Toolchain/0.2.0")
         .call()
-        .map_err(|error| anyhow!("HTTP request failed for {url}: {error}"))?;
+    {
+        Ok(response) => response,
+        Err(ureq::Error::Status(code, _)) => {
+            let error = anyhow!("HTTP {code} for {url}");
+            if retryable_http_status(code) {
+                return Err(HttpAttemptError::Retryable(error));
+            }
+            return Err(HttpAttemptError::Permanent(error));
+        }
+        Err(error) => {
+            return Err(HttpAttemptError::Retryable(anyhow!("HTTP request failed for {url}: {error}")));
+        }
+    };
     let mut reader = response.into_reader().take(limit + 1);
     let mut data = Vec::new();
-    reader.read_to_end(&mut data)?;
-    if data.len() as u64 > limit { bail!("HTTP response exceeded {limit} bytes: {url}"); }
+    if let Err(error) = reader.read_to_end(&mut data) {
+        return Err(HttpAttemptError::Retryable(anyhow!("read HTTP response for {url}: {error}")));
+    }
+    if data.len() as u64 > limit {
+        return Err(HttpAttemptError::Permanent(anyhow!("HTTP response exceeded {limit} bytes: {url}")));
+    }
     Ok(data)
+}
+
+fn retryable_http_status(code: u16) -> bool {
+    matches!(code, 408 | 425 | 429) || (500..=599).contains(&code)
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
@@ -308,6 +334,16 @@ mod tests {
         let value = toolchain_root().to_string_lossy().to_ascii_lowercase();
         assert!(value.contains("minesport"));
         assert!(value.contains("toolchains"));
+    }
+
+    #[test]
+    fn metadata_retry_statuses_match_legacy_transport() {
+        for code in [408, 425, 429, 500, 503, 599] {
+            assert!(retryable_http_status(code), "{code}");
+        }
+        for code in [400, 401, 403, 404, 409, 422] {
+            assert!(!retryable_http_status(code), "{code}");
+        }
     }
 
     #[test]
