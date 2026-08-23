@@ -1,10 +1,18 @@
 use anyhow::{Context, Result, bail};
+use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde::Deserialize;
-use std::{collections::{HashMap, HashSet, VecDeque}, fs::File, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    fs::{self, File},
+    path::Path,
+    sync::Arc,
+};
 
 pub const WIDTH: u32 = 1200;
 pub const HEIGHT: u32 = 720;
 const MAX_PREVIEW_BLOCKS: usize = 60_000;
+const PREVIEW_TILE_SIZE: usize = 16;
+const ALPHA_DISCARD_THRESHOLD: u8 = 13;
 
 #[derive(Debug, Clone, Deserialize)]
 struct PreviewBlock {
@@ -13,6 +21,12 @@ struct PreviewBlock {
     z: i32,
     #[serde(default)]
     id: String,
+    #[serde(default, rename = "textureTop")]
+    texture_top: String,
+    #[serde(default, rename = "textureSide")]
+    texture_side: String,
+    #[serde(default, rename = "textureBottom")]
+    texture_bottom: String,
     #[serde(default = "default_color")]
     r: u8,
     #[serde(default = "default_color")]
@@ -105,6 +119,19 @@ pub struct RenderedPreview {
     pub pick_map: PreviewPickMap,
 }
 
+#[derive(Clone)]
+struct TextureTile {
+    pixels: Arc<Vec<[u8; 4]>>,
+}
+
+impl TextureTile {
+    fn pixel(&self, u: f32, v: f32) -> [u8; 4] {
+        let x = (u.clamp(0.0, 0.999_999) * PREVIEW_TILE_SIZE as f32) as usize;
+        let y = (v.clamp(0.0, 0.999_999) * PREVIEW_TILE_SIZE as f32) as usize;
+        self.pixels[y * PREVIEW_TILE_SIZE + x]
+    }
+}
+
 pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     let file = File::open(path).with_context(|| format!("open preview block list {}", path.display()))?;
     let mut blocks: Vec<PreviewBlock> = serde_json::from_reader(file)
@@ -153,6 +180,7 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut hit_indices = vec![-1i32; (WIDTH * HEIGHT) as usize];
     let mut hits = Vec::with_capacity(blocks.len());
+    let mut texture_cache: HashMap<String, TextureTile> = HashMap::new();
     clear(&mut pixels, [11, 16, 21, 255]);
 
     let center_x = WIDTH as i32 / 2;
@@ -175,10 +203,17 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
         let down_bottom = [bottom[0], bottom[1] + cube_h];
         let down_left = [left[0], left[1] + cube_h];
 
-        let base = [block.r, block.g, block.b, 255];
-        let top_color = shade(base, 1.12);
-        let left_color = shade(base, 0.78);
-        let right_color = shade(base, 0.92);
+        let fallback = [block.r, block.g, block.b, 255];
+        let top_texture = preview_texture(
+            &mut texture_cache,
+            texture_key(&block.texture_top, fallback),
+            fallback,
+        );
+        let side_texture = preview_texture(
+            &mut texture_cache,
+            texture_key(&block.texture_side, fallback),
+            fallback,
+        );
 
         let hit_index = hits.len() as i32;
         hits.push(PreviewPick {
@@ -188,9 +223,41 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
             id: normalized_id(&block.id),
         });
 
-        fill_quad(&mut pixels, &mut hit_indices, hit_index, left, bottom, down_bottom, down_left, left_color);
-        fill_quad(&mut pixels, &mut hit_indices, hit_index, bottom, right, down_right, down_bottom, right_color);
-        fill_quad(&mut pixels, &mut hit_indices, hit_index, top, right, bottom, left, top_color);
+        // Fyne's OpenGL shader used 0.65 side-lighting and full brightness on
+        // upward faces. Preserve that appearance in the software renderer.
+        fill_textured_quad(
+            &mut pixels,
+            &mut hit_indices,
+            hit_index,
+            left,
+            bottom,
+            down_bottom,
+            down_left,
+            &side_texture,
+            0.65,
+        );
+        fill_textured_quad(
+            &mut pixels,
+            &mut hit_indices,
+            hit_index,
+            bottom,
+            right,
+            down_right,
+            down_bottom,
+            &side_texture,
+            0.65,
+        );
+        fill_textured_quad(
+            &mut pixels,
+            &mut hit_indices,
+            hit_index,
+            top,
+            right,
+            bottom,
+            left,
+            &top_texture,
+            1.0,
+        );
     }
 
     Ok(RenderedPreview {
@@ -219,6 +286,72 @@ fn normalized_id(id: &str) -> String {
     }
 }
 
+fn texture_key(path: &str, fallback: [u8; 4]) -> String {
+    let path = path.trim();
+    if path.is_empty() {
+        format!("fallback:{:02x}{:02x}{:02x}", fallback[0], fallback[1], fallback[2])
+    } else {
+        path.to_string()
+    }
+}
+
+fn preview_texture(
+    cache: &mut HashMap<String, TextureTile>,
+    key: String,
+    fallback: [u8; 4],
+) -> TextureTile {
+    if let Some(tile) = cache.get(&key) {
+        return tile.clone();
+    }
+    let tile = load_preview_tile(&key, fallback);
+    cache.insert(key, tile.clone());
+    tile
+}
+
+fn load_preview_tile(key: &str, fallback: [u8; 4]) -> TextureTile {
+    let source = if !key.starts_with("fallback:") {
+        fs::read(key)
+            .ok()
+            .and_then(|bytes| image::load_from_memory_with_format(&bytes, ImageFormat::Png).ok())
+            .map(DynamicImage::into_rgba8)
+    } else {
+        None
+    };
+
+    let mut pixels = Vec::with_capacity(PREVIEW_TILE_SIZE * PREVIEW_TILE_SIZE);
+    for y in 0..PREVIEW_TILE_SIZE {
+        for x in 0..PREVIEW_TILE_SIZE {
+            let pixel = source
+                .as_ref()
+                .and_then(|image| sample_first_animation_frame(image, x, y))
+                .unwrap_or_else(|| fallback_preview_pixel(fallback, x, y));
+            pixels.push(pixel);
+        }
+    }
+    TextureTile { pixels: Arc::new(pixels) }
+}
+
+fn sample_first_animation_frame(image: &RgbaImage, x: usize, y: usize) -> Option<[u8; 4]> {
+    if image.width() == 0 || image.height() == 0 {
+        return None;
+    }
+    let frame_height = image.height().min(image.width()).max(1);
+    let sx = ((x as u64 * image.width() as u64) / PREVIEW_TILE_SIZE as u64)
+        .min(image.width().saturating_sub(1) as u64) as u32;
+    let sy = ((y as u64 * frame_height as u64) / PREVIEW_TILE_SIZE as u64)
+        .min(frame_height.saturating_sub(1) as u64) as u32;
+    Some(image.get_pixel(sx, sy).0)
+}
+
+fn fallback_preview_pixel(mut color: [u8; 4], x: usize, y: usize) -> [u8; 4] {
+    if (x + y) % 4 == 0 {
+        color[0] = (color[0] as f32 * 0.88) as u8;
+        color[1] = (color[1] as f32 * 0.88) as u8;
+        color[2] = (color[2] as f32 * 0.88) as u8;
+    }
+    color
+}
+
 fn default_color() -> u8 { 170 }
 
 fn clear(pixels: &mut [u8], color: [u8; 4]) {
@@ -236,7 +369,7 @@ fn shade(color: [u8; 4], factor: f32) -> [u8; 4] {
     ]
 }
 
-fn fill_quad(
+fn fill_textured_quad(
     pixels: &mut [u8],
     hit_indices: &mut [i32],
     hit_index: i32,
@@ -244,20 +377,34 @@ fn fill_quad(
     b: [i32; 2],
     c: [i32; 2],
     d: [i32; 2],
-    color: [u8; 4],
+    texture: &TextureTile,
+    brightness: f32,
 ) {
-    fill_triangle(pixels, hit_indices, hit_index, a, b, c, color);
-    fill_triangle(pixels, hit_indices, hit_index, a, c, d, color);
+    let uv_a = [0.0, 1.0];
+    let uv_b = [1.0, 1.0];
+    let uv_c = [1.0, 0.0];
+    let uv_d = [0.0, 0.0];
+    fill_textured_triangle(
+        pixels, hit_indices, hit_index, a, b, c, uv_a, uv_b, uv_c, texture, brightness,
+    );
+    fill_textured_triangle(
+        pixels, hit_indices, hit_index, a, c, d, uv_a, uv_c, uv_d, texture, brightness,
+    );
 }
 
-fn fill_triangle(
+#[allow(clippy::too_many_arguments)]
+fn fill_textured_triangle(
     pixels: &mut [u8],
     hit_indices: &mut [i32],
     hit_index: i32,
     a: [i32; 2],
     b: [i32; 2],
     c: [i32; 2],
-    color: [u8; 4],
+    uv_a: [f32; 2],
+    uv_b: [f32; 2],
+    uv_c: [f32; 2],
+    texture: &TextureTile,
+    brightness: f32,
 ) {
     let min_x = a[0].min(b[0]).min(c[0]).clamp(0, WIDTH as i32 - 1);
     let max_x = a[0].max(b[0]).max(c[0]).clamp(0, WIDTH as i32 - 1);
@@ -265,6 +412,7 @@ fn fill_triangle(
     let max_y = a[1].max(b[1]).max(c[1]).clamp(0, HEIGHT as i32 - 1);
     let area = edge(a, b, c);
     if area == 0 { return; }
+    let area_f = area as f32;
 
     for y in min_y..=max_y {
         for x in min_x..=max_x {
@@ -277,12 +425,24 @@ fn fill_triangle(
             } else {
                 w0 <= 0 && w1 <= 0 && w2 <= 0
             };
-            if inside {
-                let pixel = (y as u32 * WIDTH + x as u32) as usize;
-                let rgba = pixel * 4;
-                pixels[rgba..rgba + 4].copy_from_slice(&color);
-                hit_indices[pixel] = hit_index;
+            if !inside {
+                continue;
             }
+
+            let b0 = w0 as f32 / area_f;
+            let b1 = w1 as f32 / area_f;
+            let b2 = w2 as f32 / area_f;
+            let u = uv_a[0] * b0 + uv_b[0] * b1 + uv_c[0] * b2;
+            let v = uv_a[1] * b0 + uv_b[1] * b1 + uv_c[1] * b2;
+            let sampled = texture.pixel(u, v);
+            if sampled[3] < ALPHA_DISCARD_THRESHOLD {
+                continue;
+            }
+            let color = shade(sampled, brightness);
+            let pixel = (y as u32 * WIDTH + x as u32) as usize;
+            let rgba = pixel * 4;
+            pixels[rgba..rgba + 4].copy_from_slice(&color);
+            hit_indices[pixel] = hit_index;
         }
     }
 }
@@ -305,6 +465,33 @@ mod tests {
     #[test]
     fn triangle_edge_has_expected_orientation() {
         assert_ne!(edge([0, 0], [2, 0], [0, 2]), 0);
+    }
+
+    #[test]
+    fn fallback_tile_matches_fyne_checker_detail() {
+        let base = [100, 150, 200, 255];
+        assert_eq!(fallback_preview_pixel(base, 1, 0), base);
+        assert_eq!(fallback_preview_pixel(base, 0, 0), [88, 132, 176, 255]);
+    }
+
+    #[test]
+    fn first_animation_frame_sampling_stays_in_top_square_frame() {
+        let mut image = RgbaImage::new(2, 4);
+        for y in 0..2 {
+            for x in 0..2 {
+                image.put_pixel(x, y, image::Rgba([10, 20, 30, 255]));
+            }
+        }
+        for y in 2..4 {
+            for x in 0..2 {
+                image.put_pixel(x, y, image::Rgba([200, 210, 220, 255]));
+            }
+        }
+        for y in 0..PREVIEW_TILE_SIZE {
+            for x in 0..PREVIEW_TILE_SIZE {
+                assert_eq!(sample_first_animation_frame(&image, x, y), Some([10, 20, 30, 255]));
+            }
+        }
     }
 
     #[test]
