@@ -24,6 +24,7 @@ serde_json = "1.0"
 sha2 = "=0.10.9"
 slint = { version = "=1.17.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility"] }
 ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 serde_json = "1.0"
