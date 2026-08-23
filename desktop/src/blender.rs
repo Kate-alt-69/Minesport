@@ -5,12 +5,27 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub const TRANSLATOR_VERSION: &str = "0.1.8";
+
 static ADDON_DIR: Dir<'_> =
     include_dir!("$CARGO_MANIFEST_DIR/assets/blender/minesport_translator");
 
 #[derive(Debug, Clone)]
 pub struct InstallReport {
     pub installed_profiles: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InstallationStatus {
+    pub detected: usize,
+    pub installed: usize,
+    pub up_to_date: usize,
+}
+
+impl InstallationStatus {
+    pub fn complete(self) -> bool {
+        self.detected > 0 && self.up_to_date == self.detected
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +88,57 @@ pub fn detected_profiles() -> Result<Vec<PathBuf>> {
         .into_iter()
         .map(|target| target.profile_dir)
         .collect())
+}
+
+/// Preserve the retired Fyne/Go status contract exactly: a translator counts
+/// as current only when every embedded translator file matches the installed
+/// copy byte-for-byte.
+pub fn current_status() -> Result<InstallationStatus> {
+    let targets = discover_targets()?;
+    let mut status = InstallationStatus {
+        detected: targets.len(),
+        ..InstallationStatus::default()
+    };
+
+    for target in targets {
+        let destination = target
+            .profile_dir
+            .join("scripts")
+            .join("addons")
+            .join("minesport_translator");
+        if destination.join("__init__.py").is_file() {
+            status.installed += 1;
+            if translator_files_current(&destination) {
+                status.up_to_date += 1;
+            }
+        }
+    }
+
+    Ok(status)
+}
+
+pub fn status_text(status: InstallationStatus) -> String {
+    if status.detected == 0 {
+        return format!(
+            "Blender translator {TRANSLATOR_VERSION}: ✕ no Blender 4.3+ profile detected"
+        );
+    }
+    if status.complete() {
+        return format!(
+            "Blender translator {TRANSLATOR_VERSION}: ✓ current for {} profile(s)",
+            status.up_to_date
+        );
+    }
+    if status.installed == status.detected {
+        return format!(
+            "Blender translator {TRANSLATOR_VERSION}: ✕ update required for {} profile(s)",
+            status.detected.saturating_sub(status.up_to_date)
+        );
+    }
+    format!(
+        "Blender translator {TRANSLATOR_VERSION}: ✕ current for {} / {} detected profile(s)",
+        status.up_to_date, status.detected
+    )
 }
 
 fn discover_targets() -> Result<Vec<BlenderTarget>> {
@@ -211,6 +277,30 @@ fn extract_dir(source: &Dir<'_>, target: &Path) -> Result<()> {
     Ok(())
 }
 
+fn translator_files_current(destination: &Path) -> bool {
+    embedded_files_current(&ADDON_DIR, destination)
+}
+
+fn embedded_files_current(source: &Dir<'_>, destination: &Path) -> bool {
+    for entry in source.entries() {
+        match entry {
+            DirEntry::Dir(directory) => {
+                if !embedded_files_current(directory, destination) {
+                    return false;
+                }
+            }
+            DirEntry::File(file) => {
+                let installed = destination.join(file.path());
+                match fs::read(&installed) {
+                    Ok(bytes) if bytes.as_slice() == file.contents() => {}
+                    _ => return false,
+                }
+            }
+        }
+    }
+    true
+}
+
 fn blender_version_at_least_4_3(value: &str) -> bool {
     let mut parts = value.split('.').filter_map(|part| part.parse::<u32>().ok());
     let Some(major) = parts.next() else {
@@ -223,6 +313,7 @@ fn blender_version_at_least_4_3(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn version_filter_matches_addon_minimum() {
@@ -242,5 +333,47 @@ mod tests {
         let left = PathBuf::from("Blender/4.3");
         let right = PathBuf::from("Blender/4.3");
         assert!(same_path(&left, &right));
+    }
+
+    #[test]
+    fn installation_status_matches_fyne_completion_rules() {
+        assert!(!InstallationStatus::default().complete());
+        assert!(InstallationStatus {
+            detected: 2,
+            installed: 2,
+            up_to_date: 2,
+        }
+        .complete());
+        assert!(!InstallationStatus {
+            detected: 2,
+            installed: 1,
+            up_to_date: 1,
+        }
+        .complete());
+        assert!(!InstallationStatus {
+            detected: 2,
+            installed: 2,
+            up_to_date: 1,
+        }
+        .complete());
+    }
+
+    #[test]
+    fn stale_translator_files_are_not_reported_current() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "minesport-blender-status-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        extract_dir(&ADDON_DIR, &root).unwrap();
+        assert!(translator_files_current(&root));
+
+        fs::write(root.join("translate.py"), b"# stale\n").unwrap();
+        assert!(!translator_files_current(&root));
+        let _ = fs::remove_dir_all(root);
     }
 }
