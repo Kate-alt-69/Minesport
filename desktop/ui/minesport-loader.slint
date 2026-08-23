@@ -1,87 +1,170 @@
 import { ProgressIndicator } from "std-widgets.slint";
 
-// One reusable Minesport activity indicator for workbench overlays and
-// auxiliary windows. Callers own placement; this component only owns the
-// animation, text and optional determinate progress presentation.
+// Reusable Minesport loading surface.
+//
+// Working loop:
+//   9 constant-size dots orbit -> collapse -> one large center mass -> the
+//   center mass shrinks while ejecting the 9 normal-size dots -> orbit again.
+// Completion:
+//   dots collapse once more -> snap into a 3x3 Minecraft-style grass-block
+//   pixel mark -> hold -> fade. Callers only toggle `active`; the component
+//   keeps itself alive long enough to play the completion sequence.
 export component MinesportLoader inherits Rectangle {
+    in property <bool> active: false;
     in property <string> title: "Working…";
     in property <string> detail: "";
     in property <float> progress: 0.0;
     in property <bool> determinate: false;
     in property <bool> compact: false;
 
-    min-width: root.compact ? 220px : 300px;
-    preferred-width: root.compact ? 320px : 420px;
-    min-height: root.compact ? 58px : 88px;
-    preferred-height: root.compact ? 64px : 104px;
-    background: #141817ee;
+    private property <float> cycle: 0.0;
+    private property <bool> finishing: false;
+    private property <bool> was-active: false;
+    private property <int> finish-step: 0;
+
+    min-width: root.compact ? 230px : 320px;
+    preferred-width: root.compact ? 320px : 440px;
+    min-height: root.compact ? 68px : 98px;
+    preferred-height: root.compact ? 72px : 112px;
+    visible: root.active || root.finishing;
+    opacity: root.finish-step >= 4 ? 0.0 : 1.0;
+    background: #141817f2;
     border-width: 1px;
     border-color: #3b453f;
-    border-radius: 8px;
+    border-radius: 9px;
 
-    private property <angle> spinner-angle: 0deg;
-    animate spinner-angle {
-        duration: 900ms;
-        iteration-count: infinite;
-        easing: linear;
+    animate opacity {
+        duration: 190ms;
+        easing: ease-out;
     }
-    spinner-angle: 360deg;
+
+    changed active => {
+        if (root.active) {
+            root.was-active = true;
+            root.finishing = false;
+            root.finish-step = 0;
+            root.cycle = 0.0;
+            finish-timer.stop();
+        } else if (root.was-active) {
+            root.was-active = false;
+            root.finishing = true;
+            root.finish-step = 1;
+            finish-timer.restart();
+        }
+    }
+
+    orbit-timer := Timer {
+        interval: 16ms;
+        running: root.active;
+        triggered() => {
+            root.cycle = mod(root.cycle + 0.0089, 1.0);
+        }
+    }
+
+    finish-timer := Timer {
+        interval: 190ms;
+        running: false;
+        triggered() => {
+            if (!root.finishing) {
+                self.stop();
+            } else if (root.finish-step < 5) {
+                root.finish-step += 1;
+            } else {
+                root.finishing = false;
+                root.finish-step = 0;
+                self.stop();
+            }
+        }
+    }
+
+    function working-radius() -> length {
+        let p = root.cycle;
+        if (p < 0.54) {
+            return 17px;
+        }
+        if (p < 0.70) {
+            let t = (p - 0.54) / 0.16;
+            return 17px * (1.0 - t);
+        }
+        let t = (p - 0.70) / 0.30;
+        return 17px * t;
+    }
+
+    function center-mass-size() -> length {
+        if (!root.active || root.cycle < 0.70) {
+            return 0px;
+        }
+        let t = (root.cycle - 0.70) / 0.30;
+        return 27px * (1.0 - t);
+    }
+
+    function dot-x(index: int) -> length {
+        if (root.finishing) {
+            if (root.finish-step <= 1) { return 21px; }
+            return index == 0 || index == 3 || index == 6 ? 13px
+                : index == 1 || index == 4 || index == 7 ? 21px
+                : 29px;
+        }
+        let angle = index * 40deg + root.cycle * 600deg;
+        return 21px + cos(angle) * root.working-radius();
+    }
+
+    function dot-y(index: int) -> length {
+        if (root.finishing) {
+            if (root.finish-step <= 1) { return 21px; }
+            return index <= 2 ? 13px : index <= 5 ? 21px : 29px;
+        }
+        let angle = index * 40deg + root.cycle * 600deg;
+        return 21px + sin(angle) * root.working-radius();
+    }
+
+    function pixel-color(index: int) -> color {
+        return index == 0 ? #6fb24a
+            : index == 1 ? #83c65b
+            : index == 2 ? #5b9b3b
+            : index == 3 ? #80583a
+            : index == 4 ? #936848
+            : index == 5 ? #704a32
+            : index == 6 ? #6b4b37
+            : index == 7 ? #5d4232
+            : #7e5b41;
+    }
 
     HorizontalLayout {
         padding: root.compact ? 10px : 14px;
         spacing: root.compact ? 10px : 14px;
         cross-axis-alignment: center;
 
-        Rectangle {
-            width: root.compact ? 30px : 40px;
-            height: root.compact ? 30px : 40px;
+        indicator := Rectangle {
+            width: 48px;
+            height: 48px;
             background: transparent;
 
-            // Four fading bars produce a Minesport-specific spinner without
-            // relying on the platform widget implementation.
-            Rectangle {
-                x: parent.width / 2 - 2px;
-                y: 1px;
-                width: 4px;
-                height: parent.height * 0.30;
-                border-radius: 2px;
+            center-mass := Rectangle {
+                width: root.center-mass-size();
+                height: self.width;
+                x: 24px - self.width / 2;
+                y: 24px - self.height / 2;
+                border-radius: self.width / 2;
                 background: #69c4ff;
-                transform-origin-x: 2px;
-                transform-origin-y: parent.height / 2 - 1px;
-                rotation-angle: root.spinner-angle;
+                visible: self.width > 0px;
             }
-            Rectangle {
-                x: parent.width / 2 - 2px;
-                y: 1px;
-                width: 4px;
-                height: parent.height * 0.30;
-                border-radius: 2px;
-                background: #69c4ff99;
-                transform-origin-x: 2px;
-                transform-origin-y: parent.height / 2 - 1px;
-                rotation-angle: root.spinner-angle + 90deg;
-            }
-            Rectangle {
-                x: parent.width / 2 - 2px;
-                y: 1px;
-                width: 4px;
-                height: parent.height * 0.30;
-                border-radius: 2px;
-                background: #69c4ff55;
-                transform-origin-x: 2px;
-                transform-origin-y: parent.height / 2 - 1px;
-                rotation-angle: root.spinner-angle + 180deg;
-            }
-            Rectangle {
-                x: parent.width / 2 - 2px;
-                y: 1px;
-                width: 4px;
-                height: parent.height * 0.30;
-                border-radius: 2px;
-                background: #69c4ff2d;
-                transform-origin-x: 2px;
-                transform-origin-y: parent.height / 2 - 1px;
-                rotation-angle: root.spinner-angle + 270deg;
+
+            for dot[index] in 9: Rectangle {
+                x: root.dot-x(index);
+                y: root.dot-y(index);
+                width: 6px;
+                height: 6px;
+                border-radius: root.finishing && root.finish-step >= 2 ? 0px : 3px;
+                background: root.finishing && root.finish-step >= 2
+                    ? root.pixel-color(index)
+                    : #69c4ff;
+
+                animate x, y {
+                    duration: 150ms;
+                    easing: ease-in-out;
+                    enabled: root.finishing;
+                }
             }
         }
 
