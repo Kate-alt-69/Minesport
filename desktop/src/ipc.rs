@@ -367,8 +367,7 @@ fn resolve_overworld_storage_root(world_path: &Path) -> Result<PathBuf> {
     }
     bail!(
         "no Overworld region files found; checked: {}, {}",
-        candidates[0].display(),
-        candidates[1].display()
+        candidates[0].display(), candidates[1].display()
     )
 }
 
@@ -415,10 +414,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     operation.event(
         "JavaEngineRuntimeResolved",
         "resolved Java runtime for embedded engine",
-        &[
-            ("java", java.display().to_string()),
-            ("major", java_major.to_string()),
-        ],
+        &[("java", java.display().to_string()), ("major", java_major.to_string())],
     );
     let mut command = Command::new(&java);
     command
@@ -543,16 +539,12 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                     });
                     match response.kind.as_str() {
                         "log" => diagnostics::append_correlated(
-                            &response.message,
-                            &response.operation_id,
-                            &response.trace_id,
+                            &response.message, &response.operation_id, &response.trace_id,
                         ),
                         "progress" => {
                             let percent = response.percent.clamp(0, 100);
                             let progress_key = (
-                                response.operation_id.clone(),
-                                response.trace_id.clone(),
-                                percent,
+                                response.operation_id.clone(), response.trace_id.clone(), percent,
                             );
                             if last_progress.as_ref() != Some(&progress_key) {
                                 logger.correlated(
@@ -611,9 +603,7 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                 Err(error) => {
                     let message = format!("Minesport backend IPC read failed: {error}");
                     logger.error(
-                        "IpcResponseReadFailed",
-                        &message,
-                        &[("error", error.to_string())],
+                        "IpcResponseReadFailed", &message, &[("error", error.to_string())],
                     );
                     let _ = tx.send(EngineEvent::ReadEnded(message));
                     return;
@@ -632,17 +622,13 @@ fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<E
             match line {
                 Ok(line) if !line.trim().is_empty() => {
                     logger.warn("IpcBackendStderrLine", &line, &[]);
-                    if tx.send(EngineEvent::Stderr(line)).is_err() {
-                        return;
-                    }
+                    if tx.send(EngineEvent::Stderr(line)).is_err() { return; }
                 }
                 Ok(_) => {}
                 Err(error) => {
                     let message = format!("backend stderr read failed: {error}");
                     logger.error(
-                        "IpcBackendStderrReadFailed",
-                        &message,
-                        &[("error", error.to_string())],
+                        "IpcBackendStderrReadFailed", &message, &[("error", error.to_string())],
                     );
                     let _ = tx.send(EngineEvent::Stderr(message));
                     return;
@@ -689,23 +675,20 @@ fn resolve_java() -> Result<PathBuf> {
     }
 
     logger.debug(
-        "JavaRuntimeCandidatesEvaluate",
-        "evaluating Java runtime candidates",
+        "JavaRuntimeCandidatesEvaluate", "evaluating Java runtime candidates",
         &[("count", candidates.len().to_string())],
     );
     for candidate in candidates {
         let major = java_major(&candidate);
         if major >= ENGINE_JAVA_MAJOR {
             logger.info(
-                "JavaRuntimeSelected",
-                "selected Java runtime",
+                "JavaRuntimeSelected", "selected Java runtime",
                 &[("path", candidate.display().to_string()), ("major", major.to_string())],
             );
             return Ok(candidate);
         }
         logger.warn(
-            "JavaRuntimeRejectedTooOld",
-            "Java runtime is below the engine requirement",
+            "JavaRuntimeRejectedTooOld", "Java runtime is below the engine requirement",
             &[
                 ("path", candidate.display().to_string()),
                 ("major", major.to_string()),
@@ -720,7 +703,7 @@ fn resolve_java() -> Result<PathBuf> {
 }
 
 fn push_java_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
-    if !candidate.is_file() {
+    if (!candidate.is_file()) {
         return;
     }
     let duplicate = candidates.iter().any(|existing| {
@@ -730,9 +713,7 @@ fn push_java_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
             existing == &candidate
         }
     });
-    if !duplicate {
-        candidates.push(candidate);
-    }
+    if !duplicate { candidates.push(candidate); }
 }
 
 fn find_on_path(executable: &str) -> Option<PathBuf> {
@@ -800,7 +781,6 @@ mod tests {
         fs::create_dir_all(&legacy).unwrap();
         fs::write(modern.join("r.0.0.mca"), b"modern").unwrap();
         fs::write(legacy.join("r.1.1.mca"), b"legacy").unwrap();
-
         assert_eq!(resolve_overworld_storage_root(&world).unwrap(), world.join("dimensions/minecraft/overworld"));
         let _ = fs::remove_dir_all(world);
     }
@@ -811,7 +791,6 @@ mod tests {
         let legacy = world.join("region");
         fs::create_dir_all(&legacy).unwrap();
         fs::write(legacy.join("r.0.0.mcr"), b"legacy").unwrap();
-
         assert_eq!(resolve_overworld_storage_root(&world).unwrap(), world);
         let _ = fs::remove_dir_all(world);
     }
@@ -822,19 +801,16 @@ mod tests {
         let modern = world.join("dimensions/minecraft/overworld/region");
         fs::create_dir_all(&modern).unwrap();
         fs::write(modern.join("r.0.0.mca"), b"region").unwrap();
-
         let mut heightmap = serde_json::json!({ "command": "heightmap", "worldPath": world });
         prepare_world_storage_payload(&mut heightmap).unwrap();
         assert_eq!(
             heightmap.get("worldPath").and_then(Value::as_str).map(PathBuf::from),
             Some(world.join("dimensions/minecraft/overworld"))
         );
-
         let mut export = serde_json::json!({ "command": "export", "worldPath": world });
         prepare_world_storage_payload(&mut export).unwrap();
         assert_eq!(
-            export.get("worldPath").and_then(Value::as_str).map(PathBuf::from),
-            Some(world.clone())
+            export.get("worldPath").and_then(Value::as_str).map(PathBuf::from), Some(world.clone())
         );
         let _ = fs::remove_dir_all(world);
     }
@@ -859,9 +835,12 @@ mod tests {
 
     #[test]
     fn request_correlation_is_read_from_json() {
-        let correlation = correlation_from_request_line(
-            r#"{"command":"export","operationId":"IpcRequestDispatchExport","traceId":"123-000004"}"#,
-        );
+        let request = serde_json::json!({
+            "command": "export",
+            "operationId": "IpcRequestDispatchExport",
+            "traceId": "123-000004"
+        }).to_string();
+        let correlation = correlation_from_request_line(&request);
         assert_eq!(correlation.operation_id, "IpcRequestDispatchExport");
         assert_eq!(correlation.trace_id, "123-000004");
     }
@@ -872,10 +851,8 @@ mod tests {
             operation_id: "IpcRequestDispatchExport".to_string(),
             trace_id: "123-000004".to_string(),
         };
-        let (line, terminal) = annotate_java_response(
-            r#"{"type":"done","output":"test.obj"}"#,
-            &correlation,
-        );
+        let response = serde_json::json!({ "type": "done", "output": "test.obj" }).to_string();
+        let (line, terminal) = annotate_java_response(&response, &correlation);
         let value: Value = serde_json::from_str(&line).unwrap();
         assert!(terminal);
         assert_eq!(value.get("operationId").and_then(Value::as_str), Some("IpcRequestDispatchExport"));
@@ -888,10 +865,10 @@ mod tests {
             operation_id: "IpcRequestDispatchExport".to_string(),
             trace_id: "123-000004".to_string(),
         };
-        let (_, terminal) = annotate_java_response(
-            r#"{"type":"progress","percent":62,"message":"Building geometry"}"#,
-            &correlation,
-        );
+        let response = serde_json::json!({
+            "type": "progress", "percent": 62, "message": "Building geometry"
+        }).to_string();
+        let (_, terminal) = annotate_java_response(&response, &correlation);
         assert!(!terminal);
     }
 }
