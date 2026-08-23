@@ -315,7 +315,7 @@ public final class RuntimeRegistryIndex {
 
         File temporary = new File(
             parent,
-            destination.getName() + ".tmp-" + ProcessHandle.current().pid() + "-" + Thread.currentThread().getId()
+            destination.getName() + ".tmp-" + ProcessHandle.current().pid() + "-" + Thread.currentThread().threadId()
         );
         List<BlockLocation> locations = buckets.values().stream()
             .flatMap(List::stream)
