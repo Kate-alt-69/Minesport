@@ -237,7 +237,8 @@ fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
 }
 
 fn compiled_bridge_path(version: &str) -> PathBuf {
-    runtime::bridge_data_root()
+    runtime::cache_root()
+        .join("bridge-build")
         .join("compiled")
         .join(safe_version(version))
         .join("minesport-bridge-0.2.0.jar")
