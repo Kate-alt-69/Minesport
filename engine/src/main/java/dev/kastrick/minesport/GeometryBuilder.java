@@ -15,6 +15,7 @@ import dev.kastrick.minesport.resolver.ResolverChain;
 import dev.kastrick.minesport.resolver.RuntimeModelRegistry;
 
 import java.io.File;
+import java.lang.ref.WeakReference;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -38,6 +39,16 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
         "north", new int[]{0,0,-1}
     );
     private static final float FACE_EPSILON = 1.0e-4f;
+
+    /**
+     * Builders participating in the same export (geometry + Blender metadata)
+     * may ask for the same registry path. Share the already-indexed lazy
+     * registry while another builder still owns it, but do not pin registries
+     * for the lifetime of the Java engine: the weak entry disappears naturally
+     * once every export-local strong reference is gone.
+     */
+    private static final Map<String,WeakReference<RuntimeModelRegistry>> SHARED_RUNTIME_REGISTRIES =
+        new ConcurrentHashMap<>();
 
     private Map<Long,BlockData> worldIndex;
     private final Map<String,BlockGeometryKind> kindCache = new HashMap<>();
@@ -185,15 +196,30 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
 
     private RuntimeModelRegistry runtimeRegistry(String path) {
         if (path == null || path.isBlank() || failedRuntimeRegistries.contains(path)) return null;
-        RuntimeModelRegistry cached = runtimeRegistries.get(path);
-        if (cached != null) return cached;
+
+        RuntimeModelRegistry local = runtimeRegistries.get(path);
+        if (local != null) return local;
+
+        WeakReference<RuntimeModelRegistry> sharedRef = SHARED_RUNTIME_REGISTRIES.get(path);
+        RuntimeModelRegistry shared = sharedRef == null ? null : sharedRef.get();
+        if (shared != null) {
+            runtimeRegistries.put(path, shared);
+            return shared;
+        }
+        if (sharedRef != null) {
+            SHARED_RUNTIME_REGISTRIES.remove(path, sharedRef);
+        }
+
         RuntimeModelRegistry loaded = RuntimeModelRegistry.load(new File(path), "", null);
         if (loaded == null) {
             failedRuntimeRegistries.add(path);
             return null;
         }
+
         RuntimeModelRegistry previous = runtimeRegistries.putIfAbsent(path, loaded);
-        return previous != null ? previous : loaded;
+        RuntimeModelRegistry selected = previous != null ? previous : loaded;
+        SHARED_RUNTIME_REGISTRIES.put(path, new WeakReference<>(selected));
+        return selected;
     }
 
     private boolean isFullyEnclosed(BlockData block) {
