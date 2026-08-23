@@ -76,7 +76,7 @@ pub struct Engine {
 impl Engine {
     pub fn start() -> Result<(Self, Receiver<EngineEvent>)> {
         let logger = diagnostics::Logger::new("IPC").child("UI");
-        let operation = logger.operation("backend.start");
+        let operation = logger.operation("IpcBackendWorkerStart");
         let executable = env::current_exe().context("resolve current Minesport executable")?;
         operation.event(
             "backend.spawn",
@@ -162,8 +162,7 @@ impl Engine {
         if !output.is_empty() {
             fields.push(("output", output));
         }
-        let borrowed = fields.iter().map(|(key, value)| (key.as_str(), value.clone())).collect::<Vec<_>>();
-        logger.info("request.send", "sending backend IPC request", &borrowed);
+        logger.info("request.send", "sending backend IPC request", &fields);
 
         let mut stdin = self.inner.stdin.lock().map_err(|_| anyhow!("Minesport backend stdin lock poisoned"))?;
         if let Err(error) = stdin.write_all(&bytes) {
@@ -190,7 +189,7 @@ impl Engine {
 
     pub fn shutdown(&self) {
         let logger = diagnostics::Logger::new("IPC").child("UI");
-        let operation = logger.operation("backend.shutdown");
+        let operation = logger.operation("IpcBackendWorkerShutdown");
         operation.event("backend.quit_requested", "requesting backend shutdown", &[]);
         let _ = self.send_value(serde_json::json!({ "command": "quit" }));
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -310,7 +309,7 @@ fn has_region_files(region_dir: &Path) -> bool {
 pub fn run_engine_worker(jar: &Path) -> Result<()> {
     let logger = diagnostics::Logger::new("IPC").child("WORKER");
     let operation = logger
-        .operation("java_engine.run")
+        .operation("JavaEngineWorkerLifecycle")
         .field("jar", jar.display());
     if !jar.is_file() {
         operation.failure(
@@ -443,7 +442,7 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                         ..Response::default()
                     });
                     match response.kind.as_str() {
-                        "log" => logger.info("java.log", &response.message, &[]),
+                        "log" => diagnostics::append(&response.message),
                         "progress" => logger.info(
                             "response.progress",
                             &response.message,
