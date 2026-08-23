@@ -1,12 +1,12 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    f32::consts::FRAC_PI_4,
+    f32::consts::{FRAC_PI_4, PI},
     fs::File,
     path::Path,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 pub const WIDTH: u32 = 1200;
@@ -17,6 +17,8 @@ const ALPHA_DISCARD_THRESHOLD: u8 = 13;
 const ISOMETRIC_PITCH: f32 = -0.615_479_7;
 const HORIZONTAL_CAMERA_SCALE: f32 = 1.414_213_5;
 const VERTICAL_CAMERA_SCALE: f32 = 1.224_744_9;
+const CAMERA_LOOK_SENSITIVITY: f32 = 0.0025;
+const MAX_CAMERA_PITCH: f32 = PI / 2.0 - 0.01;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Vec3 {
@@ -56,6 +58,9 @@ impl Vec3 {
 struct PreviewCamera {
     yaw: f32,
     pitch: f32,
+    zoom: f32,
+    pan_x: f32,
+    pan_y: f32,
 }
 
 impl PreviewCamera {
@@ -63,7 +68,38 @@ impl PreviewCamera {
     /// real camera basis so the renderer can grow into the retired Fyne
     /// viewer's orbit/free-camera controls without another mesh rewrite.
     fn isometric_compat() -> Self {
-        Self { yaw: -FRAC_PI_4, pitch: ISOMETRIC_PITCH }
+        Self {
+            yaw: -FRAC_PI_4,
+            pitch: ISOMETRIC_PITCH,
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+        }
+    }
+
+    fn orbit(mut self, dx: f32, dy: f32) -> Self {
+        self.yaw += dx * CAMERA_LOOK_SENSITIVITY;
+        self.pitch = (self.pitch - dy * CAMERA_LOOK_SENSITIVITY)
+            .clamp(-MAX_CAMERA_PITCH, MAX_CAMERA_PITCH);
+        self
+    }
+
+    fn pan(mut self, dx: f32, dy: f32) -> Self {
+        // The retired perspective viewer moved the camera in its right/up
+        // plane. The software renderer is orthographic for now, so equivalent
+        // screen-space pan preserves the same drag direction without a costly
+        // fake perspective translation.
+        self.pan_x += dx;
+        self.pan_y += dy;
+        self
+    }
+
+    fn dolly(mut self, wheel_steps: f32) -> Self {
+        if wheel_steps != 0.0 {
+            self.zoom = (self.zoom * 1.1_f32.powf(wheel_steps.clamp(-20.0, 20.0)))
+                .clamp(0.05, 64.0);
+        }
+        self
     }
 
     fn forward(self) -> Vec3 {
@@ -99,11 +135,10 @@ impl PreviewCamera {
         let up = self.up();
         let forward = self.forward();
         ProjectedVertex {
-            x: screen_x + right.dot(delta) * horizontal_scale,
-            y: screen_y - up.dot(delta) * vertical_scale,
-            // The camera looks along `forward`. With the orthographic camera
-            // conceptually located at -infinity along that axis, smaller view
-            // depth is closer and wins the software depth test.
+            x: screen_x + self.pan_x + right.dot(delta) * horizontal_scale * self.zoom,
+            y: screen_y + self.pan_y - up.dot(delta) * vertical_scale * self.zoom,
+            // The camera looks along `forward`. Smaller view depth is closer
+            // to the orthographic camera and wins the software depth test.
             depth: forward.dot(delta),
         }
     }
@@ -194,6 +229,14 @@ struct PreviewBlock {
     b: u8,
 }
 
+#[derive(Debug)]
+struct PreviewScene {
+    blocks: Vec<PreviewBlock>,
+    by_id: HashMap<String, Vec<[i32; 3]>>,
+    occupied: HashSet<[i32; 3]>,
+    texture_cache: Mutex<HashMap<String, TextureTile>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewPick {
     pub x: i32,
@@ -208,8 +251,8 @@ pub struct PreviewPickMap {
     height: u32,
     indices: Arc<Vec<i32>>,
     hits: Arc<Vec<PreviewPick>>,
-    by_id: Arc<HashMap<String, Vec<[i32; 3]>>>,
-    occupied: Arc<HashSet<[i32; 3]>>,
+    scene: Arc<PreviewScene>,
+    camera: PreviewCamera,
 }
 
 impl PreviewPickMap {
@@ -226,7 +269,7 @@ impl PreviewPickMap {
     }
 
     pub fn coordinates_for_id(&self, id: &str) -> Vec<[i32; 3]> {
-        self.by_id.get(id).cloned().unwrap_or_default()
+        self.scene.by_id.get(id).cloned().unwrap_or_default()
     }
 
     /// Fyne parity: select face-connected solid blocks without crossing air.
@@ -235,7 +278,7 @@ impl PreviewPickMap {
     /// native viewer's FloodFill selection. The retired Go viewer treated a
     /// power below 1 as 1, so a zero value still selects the starting block.
     pub fn joined_blocks(&self, start: [i32; 3], max_blocks: usize) -> Vec<[i32; 3]> {
-        if !self.occupied.contains(&start) {
+        if !self.scene.occupied.contains(&start) {
             return Vec::new();
         }
         let max_blocks = max_blocks.max(1);
@@ -255,7 +298,7 @@ impl PreviewPickMap {
                 let Some(y) = current[1].checked_add(offset[1]) else { continue; };
                 let Some(z) = current[2].checked_add(offset[2]) else { continue; };
                 let next = [x, y, z];
-                if self.occupied.contains(&next) && seen.insert(next) {
+                if self.scene.occupied.contains(&next) && seen.insert(next) {
                     queue.push_back(next);
                 }
             }
@@ -265,6 +308,29 @@ impl PreviewPickMap {
 
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Re-render the retained Rust scene after an MMB orbit gesture. This is
+    /// intentionally independent from Java/IPC; the source JSON may already
+    /// have been deleted by the time this runs.
+    pub fn orbit(&self, dx: f32, dy: f32) -> Result<RenderedPreview> {
+        render_scene(self.scene.clone(), self.camera.orbit(dx, dy))
+    }
+
+    /// Shift+MMB parity for the current orthographic software renderer.
+    pub fn pan(&self, dx: f32, dy: f32) -> Result<RenderedPreview> {
+        render_scene(self.scene.clone(), self.camera.pan(dx, dy))
+    }
+
+    /// Wheel dolly parity. Until the GPU perspective path replaces the
+    /// software fallback, dolly maps to orthographic zoom with the same wheel
+    /// direction as the retired viewer.
+    pub fn dolly(&self, wheel_steps: f32) -> Result<RenderedPreview> {
+        render_scene(self.scene.clone(), self.camera.dolly(wheel_steps))
+    }
+
+    pub fn fit(&self) -> Result<RenderedPreview> {
+        render_scene(self.scene.clone(), PreviewCamera::isometric_compat())
     }
 }
 
@@ -278,7 +344,7 @@ pub struct RenderedPreview {
     pub pick_map: PreviewPickMap,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct TextureTile {
     pixels: Arc<Vec<[u8; 4]>>,
 }
@@ -293,15 +359,14 @@ impl TextureTile {
 
 pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     let file = File::open(path).with_context(|| format!("open preview block list {}", path.display()))?;
-    let mut blocks: Vec<PreviewBlock> = serde_json::from_reader(file)
+    let blocks: Vec<PreviewBlock> = serde_json::from_reader(file)
         .with_context(|| format!("parse preview block list {}", path.display()))?;
     if blocks.is_empty() {
         bail!("No solid blocks were found in the current selection");
     }
 
-    let block_count = blocks.len();
     let mut by_id: HashMap<String, Vec<[i32; 3]>> = HashMap::new();
-    let mut occupied = HashSet::with_capacity(block_count);
+    let mut occupied = HashSet::with_capacity(blocks.len());
     for block in &blocks {
         let coordinate = [block.x, block.y, block.z];
         occupied.insert(coordinate);
@@ -311,27 +376,43 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
             .push(coordinate);
     }
 
-    blocks.sort_by_key(|block| (block.x + block.z, block.y, block.x));
-    if blocks.len() > MAX_PREVIEW_BLOCKS {
-        let stride = blocks.len().div_ceil(MAX_PREVIEW_BLOCKS);
-        blocks = blocks.into_iter().step_by(stride).collect();
+    let scene = Arc::new(PreviewScene {
+        blocks,
+        by_id,
+        occupied,
+        texture_cache: Mutex::new(HashMap::new()),
+    });
+    render_scene(scene, PreviewCamera::isometric_compat())
+}
+
+fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<RenderedPreview> {
+    let block_count = scene.blocks.len();
+    if block_count == 0 {
+        bail!("No solid blocks were found in the current selection");
+    }
+
+    let mut render_blocks: Vec<&PreviewBlock> = scene.blocks.iter().collect();
+    render_blocks.sort_by_key(|block| (block.x + block.z, block.y, block.x));
+    if render_blocks.len() > MAX_PREVIEW_BLOCKS {
+        let stride = render_blocks.len().div_ceil(MAX_PREVIEW_BLOCKS);
+        render_blocks = render_blocks.into_iter().step_by(stride).collect();
     }
 
     // Face culling must use the blocks that will actually be rasterized. If
     // the >60k safety sampler drops a neighbor, treating that absent neighbor
     // as an occluder punches a hole into the visible sampled preview. Keep the
-    // full `occupied` set above for Joined Blocks / exact-selection semantics.
-    let rendered_occupied: HashSet<[i32; 3]> = blocks
+    // full scene occupancy for Joined Blocks / exact-selection semantics.
+    let rendered_occupied: HashSet<[i32; 3]> = render_blocks
         .iter()
         .map(|block| [block.x, block.y, block.z])
         .collect();
 
-    let min_x = blocks.iter().map(|block| block.x).min().unwrap_or(0);
-    let max_x = blocks.iter().map(|block| block.x).max().unwrap_or(0);
-    let min_y = blocks.iter().map(|block| block.y).min().unwrap_or(0);
-    let max_y = blocks.iter().map(|block| block.y).max().unwrap_or(0);
-    let min_z = blocks.iter().map(|block| block.z).min().unwrap_or(0);
-    let max_z = blocks.iter().map(|block| block.z).max().unwrap_or(0);
+    let min_x = render_blocks.iter().map(|block| block.x).min().unwrap_or(0);
+    let max_x = render_blocks.iter().map(|block| block.x).max().unwrap_or(0);
+    let min_y = render_blocks.iter().map(|block| block.y).min().unwrap_or(0);
+    let max_y = render_blocks.iter().map(|block| block.y).max().unwrap_or(0);
+    let min_z = render_blocks.iter().map(|block| block.z).min().unwrap_or(0);
+    let max_z = render_blocks.iter().map(|block| block.z).max().unwrap_or(0);
 
     let extent_x = (max_x - min_x + 1).max(1) as f32;
     let extent_y = (max_y - min_y + 1).max(1) as f32;
@@ -345,11 +426,9 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let mut depth = vec![f32::INFINITY; (WIDTH * HEIGHT) as usize];
     let mut hit_indices = vec![-1i32; (WIDTH * HEIGHT) as usize];
-    let mut hits = Vec::with_capacity(blocks.len());
-    let mut texture_cache: HashMap<String, TextureTile> = HashMap::new();
+    let mut hits = Vec::with_capacity(render_blocks.len());
     clear(&mut pixels, [11, 16, 21, 255]);
 
-    let camera = PreviewCamera::isometric_compat();
     let camera_forward = camera.forward();
     let screen_x = WIDTH as f32 / 2.0;
     let screen_y = HEIGHT as f32 * 0.72;
@@ -360,8 +439,10 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     };
     let horizontal_scale = tile.max(2) as f32 * HORIZONTAL_CAMERA_SCALE;
     let vertical_scale = tile.max(2) as f32 * VERTICAL_CAMERA_SCALE;
+    let mut texture_cache = scene.texture_cache.lock()
+        .map_err(|_| anyhow!("preview texture cache lock poisoned"))?;
 
-    for block in &blocks {
+    for block in &render_blocks {
         let fallback = [block.r, block.g, block.b, 255];
         let top_texture = preview_texture(
             &mut texture_cache,
@@ -434,19 +515,20 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
         }
     }
 
+    drop(texture_cache);
     Ok(RenderedPreview {
         width: WIDTH,
         height: HEIGHT,
         rgba: pixels,
         block_count,
-        rendered_count: blocks.len(),
+        rendered_count: render_blocks.len(),
         pick_map: PreviewPickMap {
             width: WIDTH,
             height: HEIGHT,
             indices: Arc::new(hit_indices),
             hits: Arc::new(hits),
-            by_id: Arc::new(by_id),
-            occupied: Arc::new(occupied),
+            scene,
+            camera,
         },
     })
 }
@@ -705,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_preview_can_pick_group_and_flood_joined_solids() {
+    fn rendered_preview_can_pick_group_flood_and_rerender_without_source_file() {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir().join(format!("minesport-preview-{}-{stamp}.json", std::process::id()));
         fs::write(
@@ -729,6 +811,13 @@ mod tests {
         assert!(rendered.pick_map.indices.iter().any(|value| *value >= 0));
         let picked = rendered.pick_map.indices.iter().find(|value| **value >= 0).copied().unwrap();
         assert!(rendered.pick_map.hits.get(picked as usize).is_some());
-        let _ = fs::remove_file(path);
+
+        fs::remove_file(&path).unwrap();
+        let orbited = rendered.pick_map.orbit(24.0, -10.0).unwrap();
+        let panned = orbited.pick_map.pan(12.0, 8.0).unwrap();
+        let zoomed = panned.pick_map.dolly(1.0).unwrap();
+        let fitted = zoomed.pick_map.fit().unwrap();
+        assert_eq!(fitted.block_count, 4);
+        assert_eq!(fitted.pick_map.coordinates_for_id("minecraft:stone").len(), 3);
     }
 }
