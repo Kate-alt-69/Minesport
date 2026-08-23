@@ -79,7 +79,7 @@ impl Engine {
         let operation = logger.operation("IpcBackendWorkerStart");
         let executable = env::current_exe().context("resolve current Minesport executable")?;
         operation.event(
-            "backend.spawn",
+            "IpcBackendWorkerSpawn",
             "starting isolated Minesport backend worker",
             &[("executable", executable.display().to_string())],
         );
@@ -152,30 +152,43 @@ impl Engine {
             .unwrap_or_default()
             .to_string();
         let logger = diagnostics::Logger::new("IPC").child("TX");
-        let mut fields = vec![
-            ("command", command.clone()),
-            ("bytes", bytes.len().to_string()),
-        ];
+        let mut operation = logger
+            .operation(request_operation_id(&command))
+            .field("command", &command)
+            .field("bytes", bytes.len());
         if !world.is_empty() {
-            fields.push(("world", world));
+            operation = operation.field("world", &world);
         }
         if !output.is_empty() {
-            fields.push(("output", output));
+            operation = operation.field("output", &output);
         }
-        logger.info("request.send", "sending backend IPC request", &fields);
+        operation.event("IpcRequestWrite", "writing backend IPC request", &[]);
 
-        let mut stdin = self.inner.stdin.lock().map_err(|_| anyhow!("Minesport backend stdin lock poisoned"))?;
-        if let Err(error) = stdin.write_all(&bytes) {
-            logger.error(
-                "request.write_failed",
-                "could not write backend IPC request",
-                &[("command", command), ("error", error.to_string())],
-            );
-            return Err(error).context("write backend IPC request");
+        let result = (|| -> Result<()> {
+            let mut stdin = self
+                .inner
+                .stdin
+                .lock()
+                .map_err(|_| anyhow!("Minesport backend stdin lock poisoned"))?;
+            stdin.write_all(&bytes).context("write backend IPC request")?;
+            stdin.write_all(b"\n").context("terminate backend IPC request")?;
+            stdin.flush().context("flush backend IPC request")?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                operation.success("backend IPC request dispatched", &[]);
+                Ok(())
+            }
+            Err(error) => {
+                operation.failure(
+                    "backend IPC request dispatch failed",
+                    &[("error", format!("{error:#}"))],
+                );
+                Err(error)
+            }
         }
-        stdin.write_all(b"\n").context("terminate backend IPC request")?;
-        stdin.flush().context("flush backend IPC request")?;
-        Ok(())
     }
 
     pub fn send_value(&self, mut request: Value) -> Result<()> {
@@ -190,7 +203,7 @@ impl Engine {
     pub fn shutdown(&self) {
         let logger = diagnostics::Logger::new("IPC").child("UI");
         let operation = logger.operation("IpcBackendWorkerShutdown");
-        operation.event("backend.quit_requested", "requesting backend shutdown", &[]);
+        operation.event("IpcBackendWorkerQuitRequested", "requesting backend shutdown", &[]);
         let _ = self.send_value(serde_json::json!({ "command": "quit" }));
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -210,7 +223,7 @@ impl Engine {
             if Instant::now() >= deadline {
                 if let Ok(mut child) = self.inner.child.lock() {
                     logger.warn(
-                        "backend.shutdown_timeout",
+                        "IpcBackendWorkerShutdownTimeout",
                         "backend did not exit within 3 seconds; terminating worker",
                         &[("pid", child.id().to_string())],
                     );
@@ -227,6 +240,17 @@ impl Engine {
             }
             thread::sleep(Duration::from_millis(25));
         }
+    }
+}
+
+fn request_operation_id(command: &str) -> &'static str {
+    match command {
+        "export" => "IpcRequestDispatchExport",
+        "heightmap" => "IpcRequestDispatchHeightmap",
+        "listBlocks" => "IpcRequestDispatchBlockList",
+        "ping" => "IpcRequestPingBackend",
+        "quit" => "IpcRequestQuitBackend",
+        _ => "IpcRequestDispatchUnknownCommand",
     }
 }
 
@@ -249,7 +273,7 @@ fn prepare_world_storage_payload(request: &mut Value) -> Result<()> {
 
     let storage_root = resolve_overworld_storage_root(Path::new(world_path))?;
     diagnostics::Logger::new("IPC").child("WORLD").debug(
-        "heightmap.storage_rewrite",
+        "IpcHeightmapStorageRewrite",
         "resolved Overworld storage root",
         &[
             ("world", world_path.to_string()),
@@ -328,7 +352,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     };
     let java_major = java_major(&java);
     operation.event(
-        "java.resolved",
+        "JavaEngineRuntimeResolved",
         "resolved Java runtime for embedded engine",
         &[
             ("java", java.display().to_string()),
@@ -357,7 +381,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     };
     let java_pid = child.id();
     operation.event(
-        "java.started",
+        "JavaEngineProcessStarted",
         "Java engine process started",
         &[("pid", java_pid.to_string()), ("java", java.display().to_string())],
     );
@@ -399,9 +423,6 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         Ok(())
     });
 
-    // Do not join this thread: if Java crashes while the parent UI remains
-    // alive, stdin may legitimately remain blocked. Returning from worker main
-    // terminates the whole process and therefore this relay thread as well.
     thread::spawn(move || {
         let reader = BufReader::new(std::io::stdin());
         for line in reader.lines() {
@@ -433,6 +454,7 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
     thread::spawn(move || {
         let logger = diagnostics::Logger::new("IPC").child("RX");
         let reader = BufReader::new(stdout);
+        let mut last_progress_percent: Option<i32> = None;
         for line in reader.lines() {
             match line {
                 Ok(line) if !line.trim().is_empty() => {
@@ -443,34 +465,42 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                     });
                     match response.kind.as_str() {
                         "log" => diagnostics::append(&response.message),
-                        "progress" => logger.info(
-                            "response.progress",
-                            &response.message,
-                            &[("percent", response.percent.to_string())],
-                        ),
-                        "done" => logger.info(
-                            "response.done",
-                            "engine operation completed",
-                            &[
-                                ("output", response.output.clone()),
-                                ("blocks", response.block_count.to_string()),
-                                ("faces", response.quad_count.to_string()),
-                                ("vertices", response.vertex_count.to_string()),
-                            ],
-                        ),
-                        "error" => logger.error(
-                            "response.error",
-                            &response.message,
-                            &[],
-                        ),
+                        "progress" => {
+                            let percent = response.percent.clamp(0, 100);
+                            if last_progress_percent != Some(percent) {
+                                logger.info(
+                                    "IpcResponseProgress",
+                                    &response.message,
+                                    &[("percent", percent.to_string())],
+                                );
+                                last_progress_percent = Some(percent);
+                            }
+                        }
+                        "done" => {
+                            last_progress_percent = None;
+                            logger.info(
+                                "IpcResponseDone",
+                                "engine operation completed",
+                                &[
+                                    ("output", response.output.clone()),
+                                    ("blocks", response.block_count.to_string()),
+                                    ("faces", response.quad_count.to_string()),
+                                    ("vertices", response.vertex_count.to_string()),
+                                ],
+                            );
+                        }
+                        "error" => {
+                            last_progress_percent = None;
+                            logger.error("IpcResponseError", &response.message, &[]);
+                        }
                         kind => logger.debug(
-                            "response.received",
+                            "IpcResponseReceived",
                             "backend response received",
                             &[("type", kind.to_string())],
                         ),
                     }
                     if tx.send(EngineEvent::Response(response)).is_err() {
-                        logger.warn("response.consumer_closed", "UI event receiver closed", &[]);
+                        logger.warn("IpcResponseConsumerClosed", "UI event receiver closed", &[]);
                         return;
                     }
                 }
@@ -478,7 +508,7 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                 Err(error) => {
                     let message = format!("Minesport backend IPC read failed: {error}");
                     logger.error(
-                        "response.read_failed",
+                        "IpcResponseReadFailed",
                         &message,
                         &[("error", error.to_string())],
                     );
@@ -487,7 +517,7 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                 }
             }
         }
-        logger.info("response.stream_closed", "Minesport backend output closed", &[]);
+        logger.info("IpcResponseStreamClosed", "Minesport backend output closed", &[]);
         let _ = tx.send(EngineEvent::ReadEnded("Minesport backend output closed".to_string()));
     });
 }
@@ -498,7 +528,7 @@ fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<E
         for line in BufReader::new(stderr).lines() {
             match line {
                 Ok(line) if !line.trim().is_empty() => {
-                    logger.warn("backend.stderr", &line, &[]);
+                    logger.warn("IpcBackendStderrLine", &line, &[]);
                     if tx.send(EngineEvent::Stderr(line)).is_err() {
                         return;
                     }
@@ -507,7 +537,7 @@ fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<E
                 Err(error) => {
                     let message = format!("backend stderr read failed: {error}");
                     logger.error(
-                        "backend.stderr_read_failed",
+                        "IpcBackendStderrReadFailed",
                         &message,
                         &[("error", error.to_string())],
                     );
@@ -530,8 +560,6 @@ fn resolve_java() -> Result<PathBuf> {
         push_java_candidate(&mut candidates, path_java);
     }
 
-    // Preserve the retired Go wrapper's launcher-Java fallback. Some Windows
-    // machines have no system Java because the Minecraft launcher owns it.
     if cfg!(windows) {
         if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
             for runtime_name in ["java-runtime-delta", "java-runtime-gamma"] {
@@ -558,7 +586,7 @@ fn resolve_java() -> Result<PathBuf> {
     }
 
     logger.debug(
-        "java.candidates",
+        "JavaRuntimeCandidatesEvaluate",
         "evaluating Java runtime candidates",
         &[("count", candidates.len().to_string())],
     );
@@ -566,14 +594,14 @@ fn resolve_java() -> Result<PathBuf> {
         let major = java_major(&candidate);
         if major >= ENGINE_JAVA_MAJOR {
             logger.info(
-                "java.selected",
+                "JavaRuntimeSelected",
                 "selected Java runtime",
                 &[("path", candidate.display().to_string()), ("major", major.to_string())],
             );
             return Ok(candidate);
         }
         logger.warn(
-            "java.rejected",
+            "JavaRuntimeRejectedTooOld",
             "Java runtime is below the engine requirement",
             &[
                 ("path", candidate.display().to_string()),
@@ -714,5 +742,15 @@ mod tests {
         assert_eq!(parse_java_major("openjdk version \"17.0.12\" 2024-07-16"), Some(17));
         assert_eq!(parse_java_major("openjdk version \"22.0.2\" 2024-07-16"), Some(22));
         assert_eq!(parse_java_major("openjdk 25.0.1"), Some(25));
+    }
+
+    #[test]
+    fn IPC_command_operation_ids_are_hardcoded_and_searchable() {
+        assert_eq!(request_operation_id("export"), "IpcRequestDispatchExport");
+        assert_eq!(request_operation_id("heightmap"), "IpcRequestDispatchHeightmap");
+        assert_eq!(request_operation_id("listBlocks"), "IpcRequestDispatchBlockList");
+        assert_eq!(request_operation_id("ping"), "IpcRequestPingBackend");
+        assert_eq!(request_operation_id("quit"), "IpcRequestQuitBackend");
+        assert_eq!(request_operation_id("mystery"), "IpcRequestDispatchUnknownCommand");
     }
 }
