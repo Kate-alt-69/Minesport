@@ -100,6 +100,7 @@ where
 
     let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);
     let (capture_tx, capture_rx) = mpsc::sync_channel::<Result<PathBuf>>(1);
+    let (capture_progress_tx, capture_progress_rx) = mpsc::channel::<usize>();
     let capture_root = cache_root.clone();
     let capture_version = version.clone();
     let capture_fingerprint = fingerprint.clone();
@@ -110,11 +111,15 @@ where
             &capture_root,
             &capture_version,
             &capture_fingerprint,
-            |notice| {
-                if matches!(notice, registry::CaptureNotice::Listening(_)) && !announced {
+            |notice| match notice {
+                registry::CaptureNotice::Listening(_) if !announced => {
                     announced = true;
                     let _ = listen_tx.send(Ok(()));
                 }
+                registry::CaptureNotice::Progress { blocks } => {
+                    let _ = capture_progress_tx.send(blocks);
+                }
+                _ => {}
             },
         );
         if !announced { let _ = listen_tx.send(Err(anyhow!("registry receiver stopped before listening"))); }
@@ -126,13 +131,27 @@ where
     progress(Progress { percent: 55, message: format!("Receiver ready · starting Minecraft {version} with JDK {}", plan.java) });
     let log_path = workspace.join("runtime-worker.log");
     let mut child = start_gradle_worker(&workspace, &log_path, &java_home)?;
-    progress(Progress { percent: 62, message: format!("Minecraft {version} worker started · loading full registered model registry") });
+    progress(Progress { percent: 62, message: format!("Minecraft {version} worker started · loading baked model registry") });
 
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
+    let mut last_captured_blocks = 0usize;
     loop {
         if cancel.load(Ordering::Relaxed) {
             stop_child(&mut child);
             bail!("runtime model-cache generation cancelled");
+        }
+
+        while let Ok(blocks) = capture_progress_rx.try_recv() {
+            if blocks <= last_captured_blocks { continue; }
+            last_captured_blocks = blocks;
+            // The wire protocol currently reports completed block count but not
+            // total progress. Keep the bar moving through the capture segment
+            // without pretending the heuristic is an exact percentage.
+            let capture_percent = (62 + (blocks / 64) as i32).clamp(63, 94);
+            progress(Progress {
+                percent: capture_percent,
+                message: format!("Receiving baked model registry · {blocks} block types captured"),
+            });
         }
 
         match capture_rx.try_recv() {
