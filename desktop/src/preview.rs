@@ -371,10 +371,6 @@ impl PreviewPickMap {
         (self.width, self.height)
     }
 
-    pub fn camera_forward(&self) -> [f32; 3] {
-        self.camera.forward().as_array()
-    }
-
     pub fn highlight_box(&self, min: [i32; 3], max: [i32; 3]) -> Result<RenderedPreview> {
         let low = [min[0].min(max[0]), min[1].min(max[1]), min[2].min(max[2])];
         let high = [min[0].max(max[0]), min[1].max(max[1]), min[2].max(max[2])];
