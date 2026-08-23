@@ -1,3 +1,4 @@
+use crate::preview_picking;
 use anyhow::{Context, Result, anyhow, bail};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde::Deserialize;
@@ -28,8 +29,16 @@ struct Vec3 {
 }
 
 impl Vec3 {
+    fn add(self, other: Self) -> Self {
+        Self { x: self.x + other.x, y: self.y + other.y, z: self.z + other.z }
+    }
+
     fn sub(self, other: Self) -> Self {
         Self { x: self.x - other.x, y: self.y - other.y, z: self.z - other.z }
+    }
+
+    fn scale(self, scalar: f32) -> Self {
+        Self { x: self.x * scalar, y: self.y * scalar, z: self.z * scalar }
     }
 
     fn dot(self, other: Self) -> f32 {
@@ -51,6 +60,10 @@ impl Vec3 {
         } else {
             Self { x: self.x / length, y: self.y / length, z: self.z / length }
         }
+    }
+
+    fn as_array(self) -> [f32; 3] {
+        [self.x, self.y, self.z]
     }
 }
 
@@ -145,6 +158,38 @@ impl PreviewCamera {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct PreviewView {
+    anchor: Vec3,
+    screen_x: f32,
+    screen_y: f32,
+    horizontal_scale: f32,
+    vertical_scale: f32,
+    ray_start_depth: f32,
+    ray_distance: f32,
+}
+
+impl PreviewView {
+    /// Reverse the exact orthographic projection used by `PreviewCamera::project`
+    /// into a world-space ray. The origin is placed just in front of the scene's
+    /// camera-depth bounds and then the retired viewer's DDA walks forward.
+    fn ray_for_pixel(self, camera: PreviewCamera, x: u32, y: u32) -> ([f32; 3], [f32; 3], f32) {
+        let zoom = camera.zoom.max(0.000_001);
+        let horizontal = (self.horizontal_scale * zoom).max(0.000_001);
+        let vertical = (self.vertical_scale * zoom).max(0.000_001);
+        let pixel_x = x as f32 + 0.5;
+        let pixel_y = y as f32 + 0.5;
+        let right_offset = (pixel_x - self.screen_x - camera.pan_x) / horizontal;
+        let up_offset = -(pixel_y - self.screen_y - camera.pan_y) / vertical;
+        let forward = camera.forward();
+        let plane = self.anchor
+            .add(camera.right().scale(right_offset))
+            .add(camera.up().scale(up_offset));
+        let origin = plane.add(forward.scale(self.ray_start_depth));
+        (origin.as_array(), forward.as_array(), self.ray_distance)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 struct ProjectedVertex {
     x: f32,
     y: f32,
@@ -233,6 +278,7 @@ struct PreviewBlock {
 struct PreviewScene {
     blocks: Vec<PreviewBlock>,
     by_id: HashMap<String, Vec<[i32; 3]>>,
+    by_position: HashMap<[i32; 3], String>,
     occupied: HashSet<[i32; 3]>,
     texture_cache: Mutex<HashMap<String, TextureTile>>,
 }
@@ -251,8 +297,10 @@ pub struct PreviewPickMap {
     height: u32,
     indices: Arc<Vec<i32>>,
     hits: Arc<Vec<PreviewPick>>,
+    raycast_occupied: Arc<HashSet<[i32; 3]>>,
     scene: Arc<PreviewScene>,
     camera: PreviewCamera,
+    view: PreviewView,
 }
 
 impl PreviewPickMap {
@@ -260,6 +308,24 @@ impl PreviewPickMap {
         if x >= self.width || y >= self.height {
             return None;
         }
+
+        let (origin, direction, max_distance) = self.view.ray_for_pixel(self.camera, x, y);
+        if let Some([block_x, block_y, block_z]) = preview_picking::raycast_occupied(
+            &self.raycast_occupied,
+            origin,
+            direction,
+            max_distance,
+        ) {
+            let id = self.scene.by_position
+                .get(&[block_x, block_y, block_z])
+                .cloned()
+                .unwrap_or_else(|| "minecraft:unknown".to_string());
+            return Some(PreviewPick { x: block_x, y: block_y, z: block_z, id });
+        }
+
+        // Keep the raster hit map as a compatibility fallback while the Rust
+        // viewer remains orthographic. DDA is authoritative when it intersects
+        // the same rendered voxel set used to draw this frame.
         let pixel = (y * self.width + x) as usize;
         let hit = *self.indices.get(pixel)?;
         if hit < 0 {
@@ -270,6 +336,18 @@ impl PreviewPickMap {
 
     pub fn coordinates_for_id(&self, id: &str) -> Vec<[i32; 3]> {
         self.scene.by_id.get(id).cloned().unwrap_or_default()
+    }
+
+    pub fn blocks_in_box(&self, min: [i32; 3], max: [i32; 3]) -> Vec<[i32; 3]> {
+        let low = [min[0].min(max[0]), min[1].min(max[1]), min[2].min(max[2])];
+        let high = [min[0].max(max[0]), min[1].max(max[1]), min[2].max(max[2])];
+        let mut result: Vec<[i32; 3]> = self.scene.occupied.iter().copied().filter(|position| {
+            position[0] >= low[0] && position[0] <= high[0]
+                && position[1] >= low[1] && position[1] <= high[1]
+                && position[2] >= low[2] && position[2] <= high[2]
+        }).collect();
+        result.sort_unstable();
+        result
     }
 
     /// Fyne parity: select face-connected solid blocks without crossing air.
@@ -366,19 +444,20 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     }
 
     let mut by_id: HashMap<String, Vec<[i32; 3]>> = HashMap::new();
+    let mut by_position: HashMap<[i32; 3], String> = HashMap::new();
     let mut occupied = HashSet::with_capacity(blocks.len());
     for block in &blocks {
         let coordinate = [block.x, block.y, block.z];
+        let id = normalized_id(&block.id);
         occupied.insert(coordinate);
-        by_id
-            .entry(normalized_id(&block.id))
-            .or_default()
-            .push(coordinate);
+        by_position.insert(coordinate, id.clone());
+        by_id.entry(id).or_default().push(coordinate);
     }
 
     let scene = Arc::new(PreviewScene {
         blocks,
         by_id,
+        by_position,
         occupied,
         texture_cache: Mutex::new(HashMap::new()),
     });
@@ -398,14 +477,12 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<Rende
         render_blocks = render_blocks.into_iter().step_by(stride).collect();
     }
 
-    // Face culling must use the blocks that will actually be rasterized. If
-    // the >60k safety sampler drops a neighbor, treating that absent neighbor
-    // as an occluder punches a hole into the visible sampled preview. Keep the
-    // full scene occupancy for Joined Blocks / exact-selection semantics.
-    let rendered_occupied: HashSet<[i32; 3]> = render_blocks
+    // Face culling and DDA picking must use the blocks that are actually drawn.
+    // Keep the full scene occupancy separately for exact box/flood selections.
+    let rendered_occupied = Arc::new(render_blocks
         .iter()
         .map(|block| [block.x, block.y, block.z])
-        .collect();
+        .collect::<HashSet<[i32; 3]>>());
 
     let min_x = render_blocks.iter().map(|block| block.x).min().unwrap_or(0);
     let max_x = render_blocks.iter().map(|block| block.x).max().unwrap_or(0);
@@ -439,6 +516,21 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<Rende
     };
     let horizontal_scale = tile.max(2) as f32 * HORIZONTAL_CAMERA_SCALE;
     let vertical_scale = tile.max(2) as f32 * VERTICAL_CAMERA_SCALE;
+    let (min_depth, max_depth) = scene_depth_span(
+        camera,
+        anchor,
+        [min_x, min_y, min_z],
+        [max_x + 1, max_y + 1, max_z + 1],
+    );
+    let view = PreviewView {
+        anchor,
+        screen_x,
+        screen_y,
+        horizontal_scale,
+        vertical_scale,
+        ray_start_depth: min_depth - 2.0,
+        ray_distance: (max_depth - min_depth).abs() + 4.0,
+    };
     let mut texture_cache = scene.texture_cache.lock()
         .map_err(|_| anyhow!("preview texture cache lock poisoned"))?;
 
@@ -527,10 +619,37 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<Rende
             height: HEIGHT,
             indices: Arc::new(hit_indices),
             hits: Arc::new(hits),
+            raycast_occupied: rendered_occupied,
             scene,
             camera,
+            view,
         },
     })
+}
+
+fn scene_depth_span(
+    camera: PreviewCamera,
+    anchor: Vec3,
+    min: [i32; 3],
+    max_exclusive: [i32; 3],
+) -> (f32, f32) {
+    let forward = camera.forward();
+    let mut min_depth = f32::INFINITY;
+    let mut max_depth = f32::NEG_INFINITY;
+    for x in [min[0] as f32, max_exclusive[0] as f32] {
+        for y in [min[1] as f32, max_exclusive[1] as f32] {
+            for z in [min[2] as f32, max_exclusive[2] as f32] {
+                let depth = forward.dot(Vec3 { x, y, z }.sub(anchor));
+                min_depth = min_depth.min(depth);
+                max_depth = max_depth.max(depth);
+            }
+        }
+    }
+    if !min_depth.is_finite() || !max_depth.is_finite() {
+        (0.0, 1.0)
+    } else {
+        (min_depth, max_depth)
+    }
 }
 
 fn normalized_id(id: &str) -> String {
@@ -787,7 +906,17 @@ mod tests {
     }
 
     #[test]
-    fn rendered_preview_can_pick_group_flood_and_rerender_without_source_file() {
+    fn scene_depth_span_contains_all_box_corners() {
+        let camera = PreviewCamera::isometric_compat();
+        let anchor = Vec3::default();
+        let (min_depth, max_depth) = scene_depth_span(camera, anchor, [-2, -1, -3], [4, 6, 5]);
+        assert!(min_depth.is_finite());
+        assert!(max_depth.is_finite());
+        assert!(max_depth > min_depth);
+    }
+
+    #[test]
+    fn rendered_preview_can_pick_group_flood_box_and_rerender_without_source_file() {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir().join(format!("minesport-preview-{}-{stamp}.json", std::process::id()));
         fs::write(
@@ -802,6 +931,7 @@ mod tests {
         let rendered = render_file(&path).unwrap();
         assert_eq!(rendered.block_count, 4);
         assert_eq!(rendered.pick_map.coordinates_for_id("minecraft:stone").len(), 3);
+        assert_eq!(rendered.pick_map.blocks_in_box([0, 64, 0], [1, 65, 0]).len(), 3);
         let mut joined = rendered.pick_map.joined_blocks([0, 64, 0], 64);
         joined.sort_unstable();
         assert_eq!(joined, vec![[0, 64, 0], [0, 65, 0], [1, 64, 0]]);
