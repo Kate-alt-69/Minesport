@@ -93,6 +93,8 @@ struct WireMessage {
     mc_version: String,
     #[serde(rename = "loaderVersion")]
     loader_version: String,
+    #[serde(rename = "totalBlocks")]
+    total_blocks: usize,
     #[serde(rename = "loadedMods")]
     loaded_mods: Vec<String>,
     #[serde(rename = "blockId")]
@@ -110,7 +112,7 @@ pub enum CaptureNotice {
     Listening(String),
     Connected(String),
     WorkerMessage(String),
-    Progress { blocks: usize },
+    Progress { blocks: usize, total_blocks: usize },
     Complete { path: PathBuf, blocks: usize },
 }
 
@@ -143,6 +145,7 @@ where
         ..Snapshot::default()
     };
     let mut complete = false;
+    let mut total_blocks = 0usize;
     let mut reader = BufReader::new(stream);
     let mut line = Vec::with_capacity(64 * 1024);
 
@@ -169,6 +172,7 @@ where
                 snapshot.minecraft_version = message.mc_version.trim().to_string();
                 snapshot.loader_version = message.loader_version.trim().to_string();
                 snapshot.loaded_mods = message.loaded_mods;
+                total_blocks = message.total_blocks.min(MAX_BLOCKS);
             }
             "block" => {
                 let block_id = message.block_id.trim();
@@ -178,7 +182,10 @@ where
                 entry.loader_type = message.loader_type.trim().to_string();
                 entry.variants = sanitize_variants(message.variants);
                 if snapshot.blocks.len() % 128 == 0 {
-                    notice(CaptureNotice::Progress { blocks: snapshot.blocks.len() });
+                    notice(CaptureNotice::Progress {
+                        blocks: snapshot.blocks.len(),
+                        total_blocks,
+                    });
                 }
             }
             "block_light" => {
