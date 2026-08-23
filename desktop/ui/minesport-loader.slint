@@ -20,7 +20,7 @@ export component MinesportLoader inherits Rectangle {
     callback finished();
 
     private property <float> cycle: 0.0;
-    private property <bool> was-active: false;
+    private property <bool> was-active: root.active;
     private property <int> finish-step: 0;
 
     min-width: root.compact ? 240px : 340px;
