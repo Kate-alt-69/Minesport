@@ -723,9 +723,58 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     });
 
     let weak = ui.as_weak();
+    let clear_state = state.clone();
+    ui.on_preview_clear(move || {
+        viewer_selection::reset();
+        rerender_preview_selection(
+            weak.clone(),
+            clear_state.clone(),
+            None,
+            "SELECTION CLEARED · LMB chooses point A".to_string(),
+            "3D point A/B selection cleared".to_string(),
+        );
+    });
+
+    let weak = ui.as_weak();
+    let resize_state = state.clone();
+    ui.on_preview_resize(move |delta| {
+        if delta == 0 { return; }
+        let Some(ui) = weak.upgrade() else { return; };
+        if ui.get_preview_loading() { return; }
+        let pick_map = resize_state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+        let Some(pick_map) = pick_map else {
+            ui.set_preview_focus_label("Preview scene is not ready yet".into());
+            return;
+        };
+        let Some(box_selection) = viewer_selection::resize_point_b(pick_map.look_direction(), delta) else {
+            ui.set_preview_focus_label("Set point A and point B before using E + wheel".into());
+            return;
+        };
+        let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
+        let label = format!(
+            "BOX RESIZED · {} solid block(s) · B {},{},{} · E+wheel resize · LMB confirms · C clears",
+            count,
+            box_selection.point_b[0], box_selection.point_b[1], box_selection.point_b[2],
+        );
+        let diagnostic = format!(
+            "3D point B resized: {},{},{} · box X {}..{} Y {}..{} Z {}..{} · {} solid block(s)",
+            box_selection.point_b[0], box_selection.point_b[1], box_selection.point_b[2],
+            box_selection.min[0], box_selection.max[0],
+            box_selection.min[1], box_selection.max[1],
+            box_selection.min[2], box_selection.max[2],
+            count,
+        );
+        drop(ui);
+        rerender_preview_selection(
+            weak.clone(), resize_state.clone(), Some(box_selection), label, diagnostic,
+        );
+    });
+
+    let weak = ui.as_weak();
+    let click_state = state;
     ui.on_preview_click(move |mouse_x, mouse_y, view_width, view_height| {
         let Some(ui) = weak.upgrade() else { return; };
-        let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+        let pick_map = click_state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
         let Some(pick_map) = pick_map else {
             ui.set_preview_focus_label("Preview voxel picker is not ready yet".into());
             return;
@@ -735,7 +784,7 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         if button == 1 {
             if let viewer_selection::PrimaryAction::Confirm(box_selection) = viewer_selection::primary_action() {
                 let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
-                apply_viewer_box_selection(&ui, &state, box_selection, count);
+                apply_viewer_box_selection(&ui, &click_state, box_selection, count);
                 return;
             }
         } else if button == 2 {
@@ -774,18 +823,22 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
             return;
         };
         let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
-        ui.set_preview_focus_label(format!(
-            "POINT B · {},{},{} · {} solid block(s) · LMB confirms · C clears",
+        let label = format!(
+            "POINT B · {},{},{} · {} solid block(s) · E+wheel resize · LMB confirms · C clears",
             point[0], point[1], point[2], count
-        ).into());
-        append_diagnostic(&ui, &format!(
+        );
+        let diagnostic = format!(
             "3D point B set: {},{},{} · box X {}..{} Y {}..{} Z {}..{} · {} solid block(s)",
             point[0], point[1], point[2],
             box_selection.min[0], box_selection.max[0],
             box_selection.min[1], box_selection.max[1],
             box_selection.min[2], box_selection.max[2],
             count,
-        ));
+        );
+        drop(ui);
+        rerender_preview_selection(
+            weak.clone(), click_state.clone(), Some(box_selection), label, diagnostic,
+        );
     });
 }
 
@@ -822,6 +875,57 @@ fn apply_viewer_box_selection(
         box_selection.min[2], box_selection.max[2],
         count,
     ));
+}
+
+fn rerender_preview_selection(
+    weak: slint::Weak<MainWindow>,
+    state: SharedState,
+    selection: Option<viewer_selection::BoxSelection>,
+    label: String,
+    diagnostic: String,
+) {
+    let Some(ui) = weak.upgrade() else { return; };
+    if ui.get_preview_loading() { return; }
+    let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+    let Some(pick_map) = pick_map else {
+        ui.set_preview_focus_label("Preview scene is not ready yet".into());
+        return;
+    };
+
+    ui.set_preview_loading(true);
+    drop(ui);
+    thread::spawn(move || {
+        let rendered = match selection {
+            Some(box_selection) => pick_map.highlight_box(box_selection.min, box_selection.max),
+            None => pick_map.clear_highlight(),
+        };
+        if let Ok(rendered) = &rendered {
+            if let Ok(mut guard) = state.lock() {
+                guard.preview_pick_map = Some(rendered.pick_map.clone());
+            }
+        }
+
+        let _ = weak.upgrade_in_event_loop(move |ui| match rendered {
+            Ok(rendered) => {
+                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                    &rendered.rgba,
+                    rendered.width,
+                    rendered.height,
+                );
+                ui.set_preview_image(Image::from_rgba8(buffer));
+                ui.set_preview_available(true);
+                ui.set_preview_loading(false);
+                ui.set_preview_block_count(rendered.block_count as i32);
+                ui.set_preview_focus_label(label.into());
+                append_diagnostic(&ui, &diagnostic);
+            }
+            Err(error) => {
+                ui.set_preview_loading(false);
+                ui.set_preview_focus_label(format!("3D selection update failed: {error:#}").into());
+                append_diagnostic(&ui, &format!("3D selection rerender failed: {error:#}"));
+            }
+        });
+    });
 }
 
 fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: PreviewCameraAction) {
