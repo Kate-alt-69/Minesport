@@ -20,8 +20,8 @@ slint::slint! {
 
     export component LauncherWorldPicker inherits Window {
         title: "Select Minecraft World";
-        width: 760px;
-        height: 560px;
+        preferred-width: 760px;
+        preferred-height: 560px;
         min-width: 640px;
         min-height: 460px;
         background: #11171d;
