@@ -1,6 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
+mod aux_windows;
 mod blender;
 mod bridge_build;
 mod bridge_cli;
