@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::{
     env, fs,
     path::{Component, Path, PathBuf},
-    sync::{RwLock, RwLockReadGuard},
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError},
 };
 
 const VENDOR_DIR: &str = "kastrick's_software";
@@ -123,21 +123,30 @@ pub fn bridge_data_root() -> PathBuf {
 }
 
 /// Hold this lease while any runtime worker, compatibility build, or other
-/// operation depends on generated cache/toolchain files. Destructive cleanup
-/// waits for all leases to be released instead of deleting live workspaces.
+/// operation depends on generated cache/toolchain files.
 pub(crate) fn acquire_generated_cache_lease() -> Result<RwLockReadGuard<'static, ()>> {
     GENERATED_CACHE_USE
         .read()
         .map_err(|_| anyhow!("Minesport generated-cache lease lock is poisoned"))
 }
 
+fn acquire_generated_cache_cleanup() -> Result<RwLockWriteGuard<'static, ()>> {
+    match GENERATED_CACHE_USE.try_write() {
+        Ok(guard) => Ok(guard),
+        Err(TryLockError::WouldBlock) => {
+            bail!("Minesport generated cache is currently in use; stop runtime preparation before clearing it")
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            bail!("Minesport generated-cache cleanup lock is poisoned")
+        }
+    }
+}
+
 /// Remove only Minesport-owned, regenerable data. The validation mirrors the
 /// retired Go cacheclean package: custom cache overrides are allowed, but broad
 /// roots, the user home, and paths containing durable Minesport data fail shut.
 pub fn remove_generated_cache() -> Result<()> {
-    let _exclusive = GENERATED_CACHE_USE
-        .write()
-        .map_err(|_| anyhow!("Minesport generated-cache cleanup lock is poisoned"))?;
+    let _exclusive = acquire_generated_cache_cleanup()?;
     let cache = clean_path(&cache_root());
     validate_cache_root(&cache)?;
 
@@ -276,6 +285,14 @@ mod tests {
         if let Some(parent) = durable.parent() {
             assert!(validate_cache_root(parent).is_err());
         }
+    }
+
+    #[test]
+    fn cleanup_refuses_while_runtime_cache_is_leased() {
+        let lease = acquire_generated_cache_lease().unwrap();
+        assert!(acquire_generated_cache_cleanup().is_err());
+        drop(lease);
+        assert!(acquire_generated_cache_cleanup().is_ok());
     }
 
     #[test]
