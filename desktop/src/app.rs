@@ -31,6 +31,25 @@ enum BlockRequestPurpose {
     Preview,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PreviewCameraAction {
+    Orbit { dx: f32, dy: f32 },
+    Pan { dx: f32, dy: f32 },
+    Dolly(f32),
+    Fit,
+}
+
+impl PreviewCameraAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Orbit { .. } => "orbiting",
+            Self::Pan { .. } => "panning",
+            Self::Dolly(_) => "dollying",
+            Self::Fit => "fitting",
+        }
+    }
+}
+
 #[derive(Default)]
 struct AppState {
     resource_packs: Vec<PathBuf>,
@@ -101,6 +120,7 @@ pub fn run() -> Result<()> {
     append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover the manifest-supported Fabric version families");
     append_diagnostic(&ui, "World context: launcher/instance discovery is authoritative when available; folder inference is fallback-only");
     append_diagnostic(&ui, "3D selection: Rust hit-map + Joined Blocks flood fill + exact custom-selection export");
+    append_diagnostic(&ui, "3D camera: retained Rust scene supports MMB orbit, Shift+MMB pan, wheel dolly and F6 fit without IPC reruns");
 
     let ping_engine = engine.clone();
     let ping_weak = ui.as_weak();
@@ -650,6 +670,30 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     });
 
     let weak = ui.as_weak();
+    let orbit_state = state.clone();
+    ui.on_preview_orbit(move |dx, dy| {
+        rerender_preview(weak.clone(), orbit_state.clone(), PreviewCameraAction::Orbit { dx, dy });
+    });
+
+    let weak = ui.as_weak();
+    let pan_state = state.clone();
+    ui.on_preview_pan(move |dx, dy| {
+        rerender_preview(weak.clone(), pan_state.clone(), PreviewCameraAction::Pan { dx, dy });
+    });
+
+    let weak = ui.as_weak();
+    let dolly_state = state.clone();
+    ui.on_preview_dolly(move |steps| {
+        rerender_preview(weak.clone(), dolly_state.clone(), PreviewCameraAction::Dolly(steps));
+    });
+
+    let weak = ui.as_weak();
+    let fit_state = state.clone();
+    ui.on_preview_fit(move || {
+        rerender_preview(weak.clone(), fit_state.clone(), PreviewCameraAction::Fit);
+    });
+
+    let weak = ui.as_weak();
     ui.on_preview_click(move |mouse_x, mouse_y, view_width, view_height| {
         let Some(ui) = weak.upgrade() else { return; };
         let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
@@ -704,6 +748,60 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         if let Ok(mut guard) = state.lock() {
             guard.exact_selection = Some(exact);
         }
+    });
+}
+
+fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: PreviewCameraAction) {
+    let Some(ui) = weak.upgrade() else { return; };
+    if ui.get_preview_loading() {
+        return;
+    }
+    let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+    let Some(pick_map) = pick_map else {
+        ui.set_preview_focus_label("Preview scene is not ready yet".into());
+        return;
+    };
+
+    ui.set_preview_loading(true);
+    ui.set_preview_focus_label(format!("3D camera · {}…", action.label()).into());
+    drop(ui);
+
+    thread::spawn(move || {
+        let rendered = match action {
+            PreviewCameraAction::Orbit { dx, dy } => pick_map.orbit(dx, dy),
+            PreviewCameraAction::Pan { dx, dy } => pick_map.pan(dx, dy),
+            PreviewCameraAction::Dolly(steps) => pick_map.dolly(steps),
+            PreviewCameraAction::Fit => pick_map.fit(),
+        };
+
+        if let Ok(rendered) = &rendered {
+            if let Ok(mut guard) = state.lock() {
+                guard.preview_pick_map = Some(rendered.pick_map.clone());
+            }
+        }
+
+        let _ = weak.upgrade_in_event_loop(move |ui| match rendered {
+            Ok(rendered) => {
+                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                    &rendered.rgba,
+                    rendered.width,
+                    rendered.height,
+                );
+                ui.set_preview_image(Image::from_rgba8(buffer));
+                ui.set_preview_available(true);
+                ui.set_preview_loading(false);
+                ui.set_preview_block_count(rendered.block_count as i32);
+                ui.set_preview_focus_label(format!(
+                    "3D camera · {} complete · LMB select · MMB orbit · Shift+MMB pan · wheel dolly",
+                    action.label()
+                ).into());
+            }
+            Err(error) => {
+                ui.set_preview_loading(false);
+                ui.set_preview_focus_label(format!("3D camera update failed: {error:#}").into());
+                append_diagnostic(&ui, &format!("3D camera rerender failed: {error:#}"));
+            }
+        });
     });
 }
 
@@ -1329,7 +1427,14 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                 Ok((raster, _)) => {
                     apply_map_raster(&ui, raster, bounds.0, bounds.1, bounds.2, bounds.3, bounds.4);
                     ui.set_task_title("MAP READY".into());
-                    ui.set_task_detail(format!("X {}..{} · Z {}..{} · scale {}", bounds.0, bounds.2, bounds.1, bounds.3, bounds.4).into());
+                    ui.set_task_detail(format!(
+                        "X {}..{} · Z {}..{} · scale {}",
+                        bounds.0,
+                        bounds.2.saturating_sub(1),
+                        bounds.1,
+                        bounds.3.saturating_sub(1),
+                        bounds.4,
+                    ).into());
                     append_diagnostic(&ui, "IPC <- heightmap");
                     if let Some(note) = cache_note { append_diagnostic(&ui, &note); }
                 }
@@ -1390,7 +1495,7 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                             ui.set_preview_available(true);
                             ui.set_preview_loading(false);
                             ui.set_preview_block_count(rendered.block_count as i32);
-                            ui.set_preview_focus_label("Click a block · Joined Blocks is default · Select by model can group matching IDs".into());
+                            ui.set_preview_focus_label("Click a block · Joined Blocks default · MMB orbit · Shift+MMB pan · wheel dolly".into());
                             ui.set_task_active(false);
                             ui.set_task_progress(1.0);
                             ui.set_task_title("3D PREVIEW READY".into());
@@ -1523,9 +1628,9 @@ fn apply_map_raster(ui: &MainWindow, raster: DecodedRaster, min_x: i32, min_z: i
     ui.set_map_scale(scale);
     if ui.get_min_x() == -256 && ui.get_max_x() == 256 {
         ui.set_min_x(min_x);
-        ui.set_max_x(max_x);
+        ui.set_max_x(max_x.saturating_sub(1));
         ui.set_min_z(min_z);
-        ui.set_max_z(max_z);
+        ui.set_max_z(max_z.saturating_sub(1));
     }
 }
 
