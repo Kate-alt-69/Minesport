@@ -107,12 +107,14 @@ impl RuntimeCacheManager {
         }).unwrap_or(false)
     }
 
-    pub fn ready_path(&self, version: &str, mods_path: &Path) -> Option<PathBuf> {
-        let state = self.state.lock().ok()?;
-        if state.version != version || !same_path(&state.mods_path, mods_path) || state.ready_path.as_os_str().is_empty() {
-            return None;
-        }
-        state.ready_path.is_file().then(|| state.ready_path.clone())
+    /// A remembered registry path is deliberately not authoritative for a new
+    /// export. A mod JAR can be replaced in-place while Minesport stays open,
+    /// leaving the same version/path but a different exact content identity.
+    /// Call `start` instead: its background worker hashes the current JAR set
+    /// and cheaply returns `reused=true` when the exact fingerprint still
+    /// matches, without launching Minecraft again.
+    pub fn ready_path(&self, _version: &str, _mods_path: &Path) -> Option<PathBuf> {
+        None
     }
 
     pub fn fingerprint(&self, version: &str, mods_path: &Path) -> Option<String> {
@@ -199,6 +201,19 @@ mod tests {
     fn idle_manager_has_no_ready_registry() {
         let manager = RuntimeCacheManager::default();
         assert!(!manager.is_running());
+        assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
+    }
+
+    #[test]
+    fn remembered_registry_is_not_export_authoritative_without_rehash() {
+        let manager = RuntimeCacheManager::default();
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.version = "1.21.10".into();
+            state.mods_path = PathBuf::from("mods");
+            state.fingerprint = "old-exact-fingerprint".into();
+            state.ready_path = PathBuf::from("runtime-registry/old/registry.data");
+        }
         assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
     }
 }
