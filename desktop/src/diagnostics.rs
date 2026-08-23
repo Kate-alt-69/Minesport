@@ -337,7 +337,7 @@ fn emit_human(
     operation_id: Option<&str>,
     trace_id: Option<&str>,
     message: &str,
-    fields: &[(impl AsRef<str>, String)],
+    fields: &[(String, String)],
 ) -> (u128, String, String, String) {
     let now = SystemTime::now();
     let epoch_ms = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
@@ -345,7 +345,7 @@ fn emit_human(
     let repaired = repair_common_mojibake(message);
     let rendered_fields = fields
         .iter()
-        .map(|(key, value)| format!("{}={}", key.as_ref(), quote_human_value(&repair_common_mojibake(value))))
+        .map(|(key, value)| format!("{key}={}", quote_human_value(&repair_common_mojibake(value))))
         .collect::<Vec<_>>();
     let operation_text = operation_id.map(|id| format!(" operation={id}")).unwrap_or_default();
     let trace_text = trace_id.map(|id| format!(" trace={id}")).unwrap_or_default();
