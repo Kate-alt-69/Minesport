@@ -14,6 +14,7 @@ mod runtime_cache;
 mod runtime_worker;
 mod settings;
 mod toolchain;
+mod world_context;
 
 slint::include_modules!();
 
