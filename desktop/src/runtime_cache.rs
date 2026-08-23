@@ -41,7 +41,7 @@ impl RuntimeCacheManager {
         if state.running {
             if state.version != version || !same_path(&state.mods_path, &mods_path) {
                 logger.warn(
-                    "registry.join_rejected",
+                    "RuntimeRegistryJoinRejectedDifferentInstance",
                     "another runtime registry worker is already running for a different Minecraft instance",
                     &[
                         ("requested_version", version),
@@ -52,12 +52,17 @@ impl RuntimeCacheManager {
                 );
                 return Err(anyhow!("another runtime registry worker is already running for a different Minecraft instance"));
             }
-            let operation_id = state.operation.as_ref().map(|operation| operation.id().to_string()).unwrap_or_default();
+            let (operation_id, trace_id) = state
+                .operation
+                .as_ref()
+                .map(|operation| (operation.operation_id().to_string(), operation.trace_id().to_string()))
+                .unwrap_or_default();
             logger.info(
-                "registry.listener_joined",
+                "RuntimeRegistryListenerJoinedExistingJob",
                 "listener joined existing runtime registry job",
                 &[
                     ("operation_id", operation_id),
+                    ("trace_id", trace_id),
                     ("version", version),
                     ("mods_path", mods_path.display().to_string()),
                 ],
@@ -67,7 +72,7 @@ impl RuntimeCacheManager {
         }
 
         let operation = logger
-            .operation("runtime_registry.prepare")
+            .operation("RuntimeRegistryPrepareFullModelCache")
             .field("version", &version)
             .field("mods_path", mods_path.display())
             .field("force", force);
@@ -116,7 +121,7 @@ impl RuntimeCacheManager {
             cancel.store(true, Ordering::Relaxed);
             if let Some(operation) = state.operation.as_ref() {
                 operation.warn(
-                    "registry.cancel_requested",
+                    "RuntimeRegistryCancellationRequested",
                     "runtime registry cancellation requested",
                     &[],
                 );
@@ -160,7 +165,7 @@ impl RuntimeCacheManager {
             state.ready_path = PathBuf::new();
         }
         diagnostics::Logger::new("RUNTIME").child("REGISTRY").info(
-            "registry.invalidate",
+            "RuntimeRegistryReadyStateInvalidated",
             "runtime registry ready-state invalidated",
             &[],
         );
@@ -173,7 +178,7 @@ impl RuntimeCacheManager {
         };
         if let Some(operation) = state.operation.as_ref() {
             operation.event(
-                "registry.progress",
+                "RuntimeRegistryPreparationProgress",
                 &progress.message,
                 &[("percent", progress.percent.clamp(0, 100).to_string())],
             );
