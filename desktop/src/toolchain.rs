@@ -12,6 +12,8 @@ use std::{
     time::Duration,
 };
 
+const DOWNLOAD_ATTEMPTS: usize = 3;
+
 #[derive(Debug, Clone)]
 pub struct ToolchainProgress {
     pub percent: i32,
@@ -58,7 +60,10 @@ pub fn find_installed_jdk(required: u32) -> Option<PathBuf> {
     // Resolve launcher shims to the real java.home, but accept it only when
     // that home also contains javac and satisfies the requested major.
     if let Some(java) = find_on_path(java_name()) {
-        if let Ok(output) = Command::new(java).args(["-XshowSettings:properties", "-version"]).output() {
+        let mut command = Command::new(java);
+        command.args(["-XshowSettings:properties", "-version"]);
+        hide_console_window(&mut command);
+        if let Ok(output) = command.output() {
             let text = String::from_utf8_lossy(&output.stderr);
             for line in text.lines() {
                 let Some(value) = line.trim().strip_prefix("java.home =") else { continue; };
@@ -136,18 +141,19 @@ fn download_file(url: &str, destination: &Path) -> Result<()> {
         .timeout_read(Duration::from_secs(180))
         .build();
     let mut last_error = None;
-    for attempt in 1..=3 {
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
         let _ = fs::remove_file(destination);
         match download_file_once(&agent, url, destination) {
             Ok(()) => return Ok(()),
             Err(error) => {
                 last_error = Some(error);
-                if attempt < 3 { std::thread::sleep(Duration::from_millis(500 * attempt)); }
+                if attempt < DOWNLOAD_ATTEMPTS { std::thread::sleep(Duration::from_millis(500 * attempt as u64)); }
             }
         }
     }
+    let _ = fs::remove_file(destination);
     let error = last_error.unwrap_or_else(|| anyhow!("unknown download failure"));
-    Err(anyhow!("download {url} failed after 3 attempts: {error:#}"))
+    Err(anyhow!("download {url} failed after {DOWNLOAD_ATTEMPTS} attempts: {error:#}"))
 }
 
 fn download_file_once(agent: &ureq::Agent, url: &str, destination: &Path) -> Result<()> {
@@ -161,8 +167,32 @@ fn download_file_once(agent: &ureq::Agent, url: &str, destination: &Path) -> Res
 }
 
 fn http_get_bytes(url: &str, limit: u64, timeout: Duration) -> Result<Vec<u8>> {
-    let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(20)).timeout_read(timeout).build();
-    let response = agent.get(url).set("User-Agent", "Minesport-Rust-Toolchain/0.2.0").call()
+    if !url.starts_with("https://") { bail!("HTTP metadata URL must use HTTPS: {url}"); }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(20))
+        .timeout_read(timeout)
+        .build();
+    let mut last_error = None;
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        match http_get_bytes_once(&agent, url, limit) {
+            Ok(data) => return Ok(data),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < DOWNLOAD_ATTEMPTS {
+                    std::thread::sleep(Duration::from_millis(400 * attempt as u64));
+                }
+            }
+        }
+    }
+    let error = last_error.unwrap_or_else(|| anyhow!("unknown HTTP failure"));
+    Err(anyhow!("HTTP request failed for {url} after {DOWNLOAD_ATTEMPTS} attempts: {error:#}"))
+}
+
+fn http_get_bytes_once(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>> {
+    let response = agent
+        .get(url)
+        .set("User-Agent", "Minesport-Rust-Toolchain/0.2.0")
+        .call()
         .map_err(|error| anyhow!("HTTP request failed for {url}: {error}"))?;
     let mut reader = response.into_reader().take(limit + 1);
     let mut data = Vec::new();
@@ -189,13 +219,14 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
 
 fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
     if cfg!(windows) {
-        let status = Command::new("powershell.exe")
+        let mut command = Command::new("powershell.exe");
+        command
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
             .arg("param($archive,$dest) Expand-Archive -LiteralPath $archive -DestinationPath $dest -Force")
             .arg(archive)
-            .arg(destination)
-            .status()
-            .context("launch PowerShell Expand-Archive for JDK")?;
+            .arg(destination);
+        hide_console_window(&mut command);
+        let status = command.status().context("launch PowerShell Expand-Archive for JDK")?;
         if !status.success() { bail!("PowerShell failed to extract downloaded JDK: {status}"); }
         return Ok(());
     }
@@ -232,7 +263,10 @@ pub fn valid_jdk_home(home: &Path, required: u32) -> bool {
 fn javac_path(home: &Path) -> PathBuf { home.join("bin").join(javac_name()) }
 
 pub fn javac_major(javac: &Path) -> u32 {
-    let output = match Command::new(javac).arg("-version").output() {
+    let mut command = Command::new(javac);
+    command.arg("-version");
+    hide_console_window(&mut command);
+    let output = match command.output() {
         Ok(output) => output,
         Err(_) => return 0,
     };
@@ -250,6 +284,16 @@ fn java_name() -> &'static str { if cfg!(windows) { "java.exe" } else { "java" }
 fn javac_name() -> &'static str { if cfg!(windows) { "javac.exe" } else { "javac" } }
 fn toolchain_root() -> PathBuf { runtime::cache_root().join("toolchains") }
 
+#[cfg(windows)]
+fn hide_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_command: &mut Command) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +308,10 @@ mod tests {
         let value = toolchain_root().to_string_lossy().to_ascii_lowercase();
         assert!(value.contains("minesport"));
         assert!(value.contains("toolchains"));
+    }
+
+    #[test]
+    fn metadata_download_attempt_count_matches_legacy_hardening() {
+        assert_eq!(DOWNLOAD_ATTEMPTS, 3);
     }
 }
