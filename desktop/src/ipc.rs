@@ -1,9 +1,9 @@
 use crate::diagnostics;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    env,
+    env, fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -123,7 +123,8 @@ impl Engine {
         Ok(())
     }
 
-    pub fn send_value(&self, request: Value) -> Result<()> {
+    pub fn send_value(&self, mut request: Value) -> Result<()> {
+        prepare_world_storage_payload(&mut request)?;
         self.send(&request)
     }
 
@@ -158,6 +159,68 @@ impl Engine {
             thread::sleep(Duration::from_millis(25));
         }
     }
+}
+
+/// Preserve the retired Go IPC behavior for Minecraft 26.1+ Overworld storage.
+/// Java heightmap generation expects `<worldPath>/region`, while modern worlds
+/// store the Overworld under `dimensions/minecraft/overworld/region`. Rewrite
+/// only heightmap requests to the storage root that actually owns region files.
+/// Export/listBlocks continue receiving the real world root because Java's
+/// WorldCopier performs the same modern-first normalization for those commands.
+fn prepare_world_storage_payload(request: &mut Value) -> Result<()> {
+    if request.get("command").and_then(Value::as_str) != Some("heightmap") {
+        return Ok(());
+    }
+    let Some(world_path) = request.get("worldPath").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if world_path.trim().is_empty() {
+        return Ok(());
+    }
+
+    let storage_root = resolve_overworld_storage_root(Path::new(world_path))?;
+    let Some(object) = request.as_object_mut() else {
+        return Ok(());
+    };
+    object.insert(
+        "worldPath".to_string(),
+        Value::String(storage_root.display().to_string()),
+    );
+    Ok(())
+}
+
+fn resolve_overworld_storage_root(world_path: &Path) -> Result<PathBuf> {
+    let candidates = [
+        world_path.join("dimensions").join("minecraft").join("overworld").join("region"),
+        world_path.join("region"),
+    ];
+    for candidate in &candidates {
+        if has_region_files(candidate) {
+            return candidate
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| anyhow!("Overworld region path has no storage root: {}", candidate.display()));
+        }
+    }
+    bail!(
+        "no Overworld region files found; checked: {}, {}",
+        candidates[0].display(),
+        candidates[1].display()
+    )
+}
+
+fn has_region_files(region_dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(region_dir) else { return false; };
+    entries.flatten().any(|entry| {
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            return false;
+        }
+        entry
+            .path()
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mca") || extension.eq_ignore_ascii_case("mcr"))
+    })
 }
 
 /// Headless mode used by the self-spawned Minesport backend process.
@@ -332,3 +395,64 @@ fn hide_console_window(command: &mut Command) {
 
 #[cfg(not(windows))]
 fn hide_console_window(_command: &mut Command) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_world(name: &str) -> PathBuf {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = env::temp_dir().join(format!("minesport-ipc-{name}-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn modern_overworld_storage_wins_over_stale_legacy_region() {
+        let world = temp_world("modern-overworld");
+        let modern = world.join("dimensions/minecraft/overworld/region");
+        let legacy = world.join("region");
+        fs::create_dir_all(&modern).unwrap();
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(modern.join("r.0.0.mca"), b"modern").unwrap();
+        fs::write(legacy.join("r.1.1.mca"), b"legacy").unwrap();
+
+        assert_eq!(resolve_overworld_storage_root(&world).unwrap(), world.join("dimensions/minecraft/overworld"));
+        let _ = fs::remove_dir_all(world);
+    }
+
+    #[test]
+    fn legacy_overworld_storage_remains_supported() {
+        let world = temp_world("legacy-overworld");
+        let legacy = world.join("region");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("r.0.0.mcr"), b"legacy").unwrap();
+
+        assert_eq!(resolve_overworld_storage_root(&world).unwrap(), world);
+        let _ = fs::remove_dir_all(world);
+    }
+
+    #[test]
+    fn heightmap_payload_is_rewritten_but_export_payload_is_not() {
+        let world = temp_world("payload");
+        let modern = world.join("dimensions/minecraft/overworld/region");
+        fs::create_dir_all(&modern).unwrap();
+        fs::write(modern.join("r.0.0.mca"), b"region").unwrap();
+
+        let mut heightmap = serde_json::json!({ "command": "heightmap", "worldPath": world });
+        prepare_world_storage_payload(&mut heightmap).unwrap();
+        assert_eq!(
+            heightmap.get("worldPath").and_then(Value::as_str).map(PathBuf::from),
+            Some(world.join("dimensions/minecraft/overworld"))
+        );
+
+        let mut export = serde_json::json!({ "command": "export", "worldPath": world });
+        prepare_world_storage_payload(&mut export).unwrap();
+        assert_eq!(
+            export.get("worldPath").and_then(Value::as_str).map(PathBuf::from),
+            Some(world.clone())
+        );
+        let _ = fs::remove_dir_all(world);
+    }
+}
