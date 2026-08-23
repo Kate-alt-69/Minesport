@@ -3,6 +3,7 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    f32::consts::FRAC_PI_4,
     fs::File,
     path::Path,
     sync::Arc,
@@ -13,6 +14,164 @@ pub const HEIGHT: u32 = 720;
 const MAX_PREVIEW_BLOCKS: usize = 60_000;
 const PREVIEW_TILE_SIZE: usize = 16;
 const ALPHA_DISCARD_THRESHOLD: u8 = 13;
+const ISOMETRIC_PITCH: f32 = -0.615_479_7;
+const HORIZONTAL_CAMERA_SCALE: f32 = 1.414_213_5;
+const VERTICAL_CAMERA_SCALE: f32 = 1.224_744_9;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct Vec3 {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+impl Vec3 {
+    fn sub(self, other: Self) -> Self {
+        Self { x: self.x - other.x, y: self.y - other.y, z: self.z - other.z }
+    }
+
+    fn dot(self, other: Self) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+
+    fn cross(self, other: Self) -> Self {
+        Self {
+            x: self.y * other.z - self.z * other.y,
+            y: self.z * other.x - self.x * other.z,
+            z: self.x * other.y - self.y * other.x,
+        }
+    }
+
+    fn normalize(self) -> Self {
+        let length = (self.x * self.x + self.y * self.y + self.z * self.z).sqrt();
+        if length < 1.0e-6 {
+            Self::default()
+        } else {
+            Self { x: self.x / length, y: self.y / length, z: self.z / length }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PreviewCamera {
+    yaw: f32,
+    pitch: f32,
+}
+
+impl PreviewCamera {
+    /// The existing Slint preview looks from +X/+Y/+Z. Express that view as a
+    /// real camera basis so the renderer can grow into the retired Fyne
+    /// viewer's orbit/free-camera controls without another mesh rewrite.
+    fn isometric_compat() -> Self {
+        Self { yaw: -FRAC_PI_4, pitch: ISOMETRIC_PITCH }
+    }
+
+    fn forward(self) -> Vec3 {
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        Vec3 {
+            x: cos_pitch * sin_yaw,
+            y: sin_pitch,
+            z: -cos_pitch * cos_yaw,
+        }
+        .normalize()
+    }
+
+    fn right(self) -> Vec3 {
+        self.forward().cross(Vec3 { x: 0.0, y: 1.0, z: 0.0 }).normalize()
+    }
+
+    fn up(self) -> Vec3 {
+        self.right().cross(self.forward()).normalize()
+    }
+
+    fn project(
+        self,
+        point: Vec3,
+        anchor: Vec3,
+        screen_x: f32,
+        screen_y: f32,
+        horizontal_scale: f32,
+        vertical_scale: f32,
+    ) -> ProjectedVertex {
+        let delta = point.sub(anchor);
+        let right = self.right();
+        let up = self.up();
+        let forward = self.forward();
+        ProjectedVertex {
+            x: screen_x + right.dot(delta) * horizontal_scale,
+            y: screen_y - up.dot(delta) * vertical_scale,
+            // The camera looks along `forward`. With the orthographic camera
+            // conceptually located at -infinity along that axis, smaller view
+            // depth is closer and wins the software depth test.
+            depth: forward.dot(delta),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectedVertex {
+    x: f32,
+    y: f32,
+    depth: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FaceTexture {
+    Side,
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CubeFace {
+    corners: [[f32; 3]; 4],
+    normal: Vec3,
+    neighbor: [i32; 3],
+    texture: FaceTexture,
+}
+
+// Byte-for-byte geometry semantics from the retired Go viewer's cubeFaces
+// table. Keeping one canonical face table also fixes the old software
+// preview limitation where only +X/+Y/+Z were structurally representable.
+const CUBE_FACES: [CubeFace; 6] = [
+    CubeFace {
+        corners: [[1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]],
+        normal: Vec3 { x: 1.0, y: 0.0, z: 0.0 },
+        neighbor: [1, 0, 0],
+        texture: FaceTexture::Side,
+    },
+    CubeFace {
+        corners: [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
+        normal: Vec3 { x: -1.0, y: 0.0, z: 0.0 },
+        neighbor: [-1, 0, 0],
+        texture: FaceTexture::Side,
+    },
+    CubeFace {
+        corners: [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]],
+        normal: Vec3 { x: 0.0, y: 1.0, z: 0.0 },
+        neighbor: [0, 1, 0],
+        texture: FaceTexture::Top,
+    },
+    CubeFace {
+        corners: [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        normal: Vec3 { x: 0.0, y: -1.0, z: 0.0 },
+        neighbor: [0, -1, 0],
+        texture: FaceTexture::Bottom,
+    },
+    CubeFace {
+        corners: [[1.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        normal: Vec3 { x: 0.0, y: 0.0, z: 1.0 },
+        neighbor: [0, 0, 1],
+        texture: FaceTexture::Side,
+    },
+    CubeFace {
+        corners: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        normal: Vec3 { x: 0.0, y: 0.0, z: -1.0 },
+        neighbor: [0, 0, -1],
+        texture: FaceTexture::Side,
+    },
+];
 
 #[derive(Debug, Clone, Deserialize)]
 struct PreviewBlock {
@@ -25,6 +184,8 @@ struct PreviewBlock {
     texture_top: String,
     #[serde(default, rename = "textureSide")]
     texture_side: String,
+    #[serde(default, rename = "textureBottom")]
+    texture_bottom: String,
     #[serde(default = "default_color")]
     r: u8,
     #[serde(default = "default_color")]
@@ -180,36 +341,27 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     let tile = ((WIDTH as f32 * 0.82 / horizontal_units)
         .min(HEIGHT as f32 * 0.82 / vertical_units)
         .clamp(2.0, 28.0)) as i32;
-    let half_w = tile.max(2);
-    let half_h = (tile / 2).max(1);
-    let cube_h = tile.max(2);
 
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut depth = vec![f32::INFINITY; (WIDTH * HEIGHT) as usize];
     let mut hit_indices = vec![-1i32; (WIDTH * HEIGHT) as usize];
     let mut hits = Vec::with_capacity(blocks.len());
     let mut texture_cache: HashMap<String, TextureTile> = HashMap::new();
     clear(&mut pixels, [11, 16, 21, 255]);
 
-    let center_x = WIDTH as i32 / 2;
-    let base_y = (HEIGHT as f32 * 0.72) as i32;
-    let center_world_x = (min_x + max_x) as f32 / 2.0;
-    let center_world_z = (min_z + max_z) as f32 / 2.0;
+    let camera = PreviewCamera::isometric_compat();
+    let camera_forward = camera.forward();
+    let screen_x = WIDTH as f32 / 2.0;
+    let screen_y = HEIGHT as f32 * 0.72;
+    let anchor = Vec3 {
+        x: (min_x + max_x) as f32 / 2.0,
+        y: min_y as f32,
+        z: (min_z + max_z) as f32 / 2.0,
+    };
+    let horizontal_scale = tile.max(2) as f32 * HORIZONTAL_CAMERA_SCALE;
+    let vertical_scale = tile.max(2) as f32 * VERTICAL_CAMERA_SCALE;
 
     for block in &blocks {
-        let dx = block.x as f32 - center_world_x;
-        let dz = block.z as f32 - center_world_z;
-        let dy = block.y - min_y;
-        let sx = center_x + ((dx - dz) * half_w as f32) as i32;
-        let sy = base_y + ((dx + dz) * half_h as f32) as i32 - dy * cube_h;
-
-        let top = [sx, sy - cube_h];
-        let right = [sx + half_w, sy - cube_h + half_h];
-        let bottom = [sx, sy - cube_h + half_h * 2];
-        let left = [sx - half_w, sy - cube_h + half_h];
-        let down_right = [right[0], right[1] + cube_h];
-        let down_bottom = [bottom[0], bottom[1] + cube_h];
-        let down_left = [left[0], left[1] + cube_h];
-
         let fallback = [block.r, block.g, block.b, 255];
         let top_texture = preview_texture(
             &mut texture_cache,
@@ -221,6 +373,11 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
             texture_key(&block.texture_side, fallback),
             fallback,
         );
+        let bottom_texture = preview_texture(
+            &mut texture_cache,
+            texture_key(&block.texture_bottom, fallback),
+            fallback,
+        );
 
         let hit_index = hits.len() as i32;
         hits.push(PreviewPick {
@@ -230,46 +387,49 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
             id: normalized_id(&block.id),
         });
 
-        // The fixed isometric camera looks from +X/+Y/+Z, so only those three
-        // outward faces can be visible. Match the old OpenGL mesh's occupancy
-        // culling, but only against the subset that is actually rasterized.
-        if !rendered_occupied.contains(&[block.x, block.y, block.z + 1]) {
+        for face in CUBE_FACES {
+            let neighbor = [
+                block.x + face.neighbor[0],
+                block.y + face.neighbor[1],
+                block.z + face.neighbor[2],
+            ];
+            if rendered_occupied.contains(&neighbor) {
+                continue;
+            }
+            // The outward normal must face opposite the camera's look vector.
+            // This is the software equivalent of GPU back-face rejection.
+            if face.normal.dot(camera_forward) >= -1.0e-6 {
+                continue;
+            }
+
+            let texture = match face.texture {
+                FaceTexture::Side => &side_texture,
+                FaceTexture::Top => &top_texture,
+                FaceTexture::Bottom => &bottom_texture,
+            };
+            let brightness = face_brightness(face.normal);
+            let projected = face.corners.map(|corner| {
+                camera.project(
+                    Vec3 {
+                        x: block.x as f32 + corner[0],
+                        y: block.y as f32 + corner[1],
+                        z: block.z as f32 + corner[2],
+                    },
+                    anchor,
+                    screen_x,
+                    screen_y,
+                    horizontal_scale,
+                    vertical_scale,
+                )
+            });
             fill_textured_quad(
                 &mut pixels,
+                &mut depth,
                 &mut hit_indices,
                 hit_index,
-                left,
-                bottom,
-                down_bottom,
-                down_left,
-                &side_texture,
-                0.65,
-            );
-        }
-        if !rendered_occupied.contains(&[block.x + 1, block.y, block.z]) {
-            fill_textured_quad(
-                &mut pixels,
-                &mut hit_indices,
-                hit_index,
-                bottom,
-                right,
-                down_right,
-                down_bottom,
-                &side_texture,
-                0.65,
-            );
-        }
-        if !rendered_occupied.contains(&[block.x, block.y + 1, block.z]) {
-            fill_textured_quad(
-                &mut pixels,
-                &mut hit_indices,
-                hit_index,
-                top,
-                right,
-                bottom,
-                left,
-                &top_texture,
-                1.0,
+                projected,
+                texture,
+                brightness,
             );
         }
     }
@@ -383,87 +543,98 @@ fn shade(color: [u8; 4], factor: f32) -> [u8; 4] {
     ]
 }
 
+// Matches the retired GLSL fragment shader exactly for axis-aligned voxel
+// normals: side faces 0.65, top 1.0, bottom 0.5.
+fn face_brightness(normal: Vec3) -> f32 {
+    if normal.y < -0.5 {
+        0.5
+    } else {
+        0.65 + 0.35 * normal.y.max(0.0)
+    }
+}
+
 fn fill_textured_quad(
     pixels: &mut [u8],
+    depth: &mut [f32],
     hit_indices: &mut [i32],
     hit_index: i32,
-    a: [i32; 2],
-    b: [i32; 2],
-    c: [i32; 2],
-    d: [i32; 2],
+    vertices: [ProjectedVertex; 4],
     texture: &TextureTile,
     brightness: f32,
 ) {
-    let uv_a = [0.0, 1.0];
-    let uv_b = [1.0, 1.0];
-    let uv_c = [1.0, 0.0];
-    let uv_d = [0.0, 0.0];
+    let uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     fill_textured_triangle(
-        pixels, hit_indices, hit_index, a, b, c, uv_a, uv_b, uv_c, texture, brightness,
+        pixels, depth, hit_indices, hit_index,
+        [vertices[0], vertices[1], vertices[2]],
+        [uv[0], uv[1], uv[2]], texture, brightness,
     );
     fill_textured_triangle(
-        pixels, hit_indices, hit_index, a, c, d, uv_a, uv_c, uv_d, texture, brightness,
+        pixels, depth, hit_indices, hit_index,
+        [vertices[0], vertices[2], vertices[3]],
+        [uv[0], uv[2], uv[3]], texture, brightness,
     );
 }
 
 #[allow(clippy::too_many_arguments)]
 fn fill_textured_triangle(
     pixels: &mut [u8],
+    depth: &mut [f32],
     hit_indices: &mut [i32],
     hit_index: i32,
-    a: [i32; 2],
-    b: [i32; 2],
-    c: [i32; 2],
-    uv_a: [f32; 2],
-    uv_b: [f32; 2],
-    uv_c: [f32; 2],
+    vertices: [ProjectedVertex; 3],
+    uv: [[f32; 2]; 3],
     texture: &TextureTile,
     brightness: f32,
 ) {
-    let min_x = a[0].min(b[0]).min(c[0]).clamp(0, WIDTH as i32 - 1);
-    let max_x = a[0].max(b[0]).max(c[0]).clamp(0, WIDTH as i32 - 1);
-    let min_y = a[1].min(b[1]).min(c[1]).clamp(0, HEIGHT as i32 - 1);
-    let max_y = a[1].max(b[1]).max(c[1]).clamp(0, HEIGHT as i32 - 1);
-    let area = edge(a, b, c);
-    if area == 0 { return; }
-    let area_f = area as f32;
+    let min_x = vertices.iter().map(|vertex| vertex.x.floor() as i32).min().unwrap_or(0).clamp(0, WIDTH as i32 - 1);
+    let max_x = vertices.iter().map(|vertex| vertex.x.ceil() as i32).max().unwrap_or(0).clamp(0, WIDTH as i32 - 1);
+    let min_y = vertices.iter().map(|vertex| vertex.y.floor() as i32).min().unwrap_or(0).clamp(0, HEIGHT as i32 - 1);
+    let max_y = vertices.iter().map(|vertex| vertex.y.ceil() as i32).max().unwrap_or(0).clamp(0, HEIGHT as i32 - 1);
+    let area = edge(vertices[0], vertices[1], vertices[2]);
+    if area.abs() < 1.0e-6 { return; }
 
     for y in min_y..=max_y {
         for x in min_x..=max_x {
-            let point = [x, y];
-            let w0 = edge(b, c, point);
-            let w1 = edge(c, a, point);
-            let w2 = edge(a, b, point);
-            let inside = if area > 0 {
-                w0 >= 0 && w1 >= 0 && w2 >= 0
+            let point = ProjectedVertex { x: x as f32 + 0.5, y: y as f32 + 0.5, depth: 0.0 };
+            let w0 = edge(vertices[1], vertices[2], point);
+            let w1 = edge(vertices[2], vertices[0], point);
+            let w2 = edge(vertices[0], vertices[1], point);
+            let inside = if area > 0.0 {
+                w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
             } else {
-                w0 <= 0 && w1 <= 0 && w2 <= 0
+                w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
             };
             if !inside {
                 continue;
             }
 
-            let b0 = w0 as f32 / area_f;
-            let b1 = w1 as f32 / area_f;
-            let b2 = w2 as f32 / area_f;
-            let u = uv_a[0] * b0 + uv_b[0] * b1 + uv_c[0] * b2;
-            let v = uv_a[1] * b0 + uv_b[1] * b1 + uv_c[1] * b2;
+            let b0 = w0 / area;
+            let b1 = w1 / area;
+            let b2 = w2 / area;
+            let fragment_depth = vertices[0].depth * b0 + vertices[1].depth * b1 + vertices[2].depth * b2;
+            let pixel = (y as u32 * WIDTH + x as u32) as usize;
+            if fragment_depth >= depth[pixel] {
+                continue;
+            }
+
+            let u = uv[0][0] * b0 + uv[1][0] * b1 + uv[2][0] * b2;
+            let v = uv[0][1] * b0 + uv[1][1] * b1 + uv[2][1] * b2;
             let sampled = texture.pixel(u, v);
             if sampled[3] < ALPHA_DISCARD_THRESHOLD {
                 continue;
             }
+
             let color = shade(sampled, brightness);
-            let pixel = (y as u32 * WIDTH + x as u32) as usize;
             let rgba = pixel * 4;
             pixels[rgba..rgba + 4].copy_from_slice(&color);
+            depth[pixel] = fragment_depth;
             hit_indices[pixel] = hit_index;
         }
     }
 }
 
-fn edge(a: [i32; 2], b: [i32; 2], p: [i32; 2]) -> i64 {
-    (p[0] - a[0]) as i64 * (b[1] - a[1]) as i64
-        - (p[1] - a[1]) as i64 * (b[0] - a[0]) as i64
+fn edge(a: ProjectedVertex, b: ProjectedVertex, p: ProjectedVertex) -> f32 {
+    (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)
 }
 
 #[cfg(test)]
@@ -478,7 +649,32 @@ mod tests {
 
     #[test]
     fn triangle_edge_has_expected_orientation() {
-        assert_ne!(edge([0, 0], [2, 0], [0, 2]), 0);
+        let a = ProjectedVertex { x: 0.0, y: 0.0, depth: 0.0 };
+        let b = ProjectedVertex { x: 2.0, y: 0.0, depth: 0.0 };
+        let c = ProjectedVertex { x: 0.0, y: 2.0, depth: 0.0 };
+        assert!(edge(a, b, c).abs() > 0.0);
+    }
+
+    #[test]
+    fn legacy_camera_projection_preserves_isometric_axes() {
+        let camera = PreviewCamera::isometric_compat();
+        let anchor = Vec3::default();
+        let scale_x = 10.0 * HORIZONTAL_CAMERA_SCALE;
+        let scale_y = 10.0 * VERTICAL_CAMERA_SCALE;
+        let project = |point| camera.project(point, anchor, 0.0, 0.0, scale_x, scale_y);
+        let x = project(Vec3 { x: 1.0, y: 0.0, z: 0.0 });
+        let y = project(Vec3 { x: 0.0, y: 1.0, z: 0.0 });
+        let z = project(Vec3 { x: 0.0, y: 0.0, z: 1.0 });
+        assert!((x.x - 10.0).abs() < 0.01 && (x.y - 5.0).abs() < 0.01);
+        assert!(y.x.abs() < 0.01 && (y.y + 10.0).abs() < 0.01);
+        assert!((z.x + 10.0).abs() < 0.01 && (z.y - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn face_brightness_matches_retired_glsl() {
+        assert!((face_brightness(Vec3 { x: 1.0, y: 0.0, z: 0.0 }) - 0.65).abs() < f32::EPSILON);
+        assert!((face_brightness(Vec3 { x: 0.0, y: 1.0, z: 0.0 }) - 1.0).abs() < f32::EPSILON);
+        assert!((face_brightness(Vec3 { x: 0.0, y: -1.0, z: 0.0 }) - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
