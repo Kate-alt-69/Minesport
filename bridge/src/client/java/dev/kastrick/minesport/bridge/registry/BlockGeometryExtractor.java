@@ -26,10 +26,13 @@ public class BlockGeometryExtractor {
         var variants = new ArrayList<BlockVariant>();
         var shaper = client.getModelManager().getBlockModelShaper();
 
-        // Every state remains addressable in the runtime registry. Multiple
-        // states are allowed to share identical baked geometry, but we must not
-        // erase their property keys merely because Minecraft reused one model
-        // object internally.
+        // Minecraft commonly reuses immutable BakedQuad objects across several
+        // states of the same block. Conversion to Minesport's packed float form
+        // is pure, so cache it by object identity + requested cull direction for
+        // the lifetime of this block extraction. State property keys remain
+        // separate and are never deduplicated.
+        var convertedQuads = new IdentityHashMap<BakedQuad, BakedQuadData[]>();
+
         for (BlockState state : block.getStateDefinition().getPossibleStates()) {
             BlockStateModel model = shaper.getBlockModel(state);
             if (model == null) continue;
@@ -38,7 +41,11 @@ public class BlockGeometryExtractor {
             state.getValues().forEach((prop, val) ->
                 props.put(prop.getName(), val.toString()));
 
-            List<BakedQuadData> quads = extractQuads(model, stableSeed(block, state));
+            List<BakedQuadData> quads = extractQuads(
+                model,
+                stableSeed(block, state),
+                convertedQuads
+            );
             variants.add(new BlockVariant(props, quads));
         }
 
@@ -54,7 +61,11 @@ public class BlockGeometryExtractor {
         return seed;
     }
 
-    private static List<BakedQuadData> extractQuads(BlockStateModel model, long seed) {
+    private static List<BakedQuadData> extractQuads(
+        BlockStateModel model,
+        long seed,
+        IdentityHashMap<BakedQuad, BakedQuadData[]> convertedQuads
+    ) {
         var quads = new ArrayList<BakedQuadData>();
         List<BlockModelPart> parts;
 
@@ -65,6 +76,7 @@ public class BlockGeometryExtractor {
         }
 
         for (Direction dir : DIRECTIONS) {
+            int directionSlot = dir == null ? 0 : dir.ordinal() + 1;
             for (BlockModelPart part : parts) {
                 List<BakedQuad> baked;
                 try {
@@ -75,7 +87,15 @@ public class BlockGeometryExtractor {
                 if (baked == null) continue;
 
                 for (BakedQuad quad : baked) {
-                    BakedQuadData data = convertQuad(quad, dir);
+                    BakedQuadData[] cache = convertedQuads.computeIfAbsent(
+                        quad,
+                        ignored -> new BakedQuadData[7]
+                    );
+                    BakedQuadData data = cache[directionSlot];
+                    if (data == null) {
+                        data = convertQuad(quad, dir);
+                        if (data != null) cache[directionSlot] = data;
+                    }
                     if (data != null) quads.add(data);
                 }
             }
