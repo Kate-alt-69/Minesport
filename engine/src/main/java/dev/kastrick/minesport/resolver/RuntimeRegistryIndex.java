@@ -1,13 +1,23 @@
 package dev.kastrick.minesport.resolver;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,17 +26,23 @@ import java.util.Map;
 /**
  * Lightweight seek index for schema-4 registry.data.
  *
- * The registry stays as one complete on-disk cache. Opening it scans only the
- * record structure and remembers block-record byte offsets; baked quad arrays
- * are decoded later, only for block IDs the current world/export actually uses.
+ * The registry stays as one complete on-disk cache. Opening it remembers
+ * block-record byte offsets; baked quad arrays are decoded later, only for
+ * block IDs the current world/export actually uses.
  *
  * Lookup buckets use the first 64 bits of SHA-256 for compact/fast lookup, but
  * the full namespaced block ID is always verified before a record is accepted.
  * A truncated hash is therefore never treated as identity and collisions are
  * harmless.
+ *
+ * The expensive structural scan is persisted in a small sibling .idx file.
+ * Existing schema-4 data remains unchanged. A missing/stale/corrupt index is an
+ * optimization miss only: Minesport rebuilds it safely from registry.data.
  */
 public final class RuntimeRegistryIndex {
     private static final byte[] MAGIC = "MSREGD01".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] INDEX_MAGIC = "MSRIDX01".getBytes(StandardCharsets.US_ASCII);
+    private static final int INDEX_SCHEMA = 1;
     private static final int SCHEMA = RuntimeRegistryDataReader.SCHEMA;
     private static final int MAX_STRING_BYTES = 4 << 20;
     private static final int MAX_BLOCKS = 1_000_000;
@@ -75,25 +91,16 @@ public final class RuntimeRegistryIndex {
         }
 
         try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
-            validateMagic(input);
-            int schema = input.readInt();
-            if (schema != SCHEMA) {
-                throw new IOException("unsupported runtime registry schema " + schema + "; expected " + SCHEMA);
+            Header header = readHeader(input);
+            Map<Long, List<BlockLocation>> persisted = readPersistentIndex(file, header);
+            if (persisted != null) {
+                return new RuntimeRegistryIndex(file, header, persisted);
             }
 
-            String minecraftVersion = readString(input);
-            String loaderVersion = readString(input);
-            String modsFingerprint = readString(input);
-            String capturedAt = readString(input);
-
-            int loadedModCount = readCount(input, MAX_LOADED_MODS, "loaded mods");
-            for (int index = 0; index < loadedModCount; index++) {
-                skipString(input);
-            }
-
-            int blockCount = readCount(input, MAX_BLOCKS, "blocks");
-            Map<Long, List<BlockLocation>> buckets = new HashMap<>(Math.max(16, Math.min(blockCount * 2, 1_000_000)));
-            for (int blockIndex = 0; blockIndex < blockCount; blockIndex++) {
+            Map<Long, List<BlockLocation>> buckets = new HashMap<>(
+                Math.max(16, Math.min(header.blockCount() * 2, 1_000_000))
+            );
+            for (int blockIndex = 0; blockIndex < header.blockCount(); blockIndex++) {
                 long offset = input.getFilePointer();
                 String blockId = readString(input);
                 if (blockId.isBlank()) {
@@ -104,18 +111,8 @@ public final class RuntimeRegistryIndex {
                 skipBlockPayload(input);
             }
 
-            Header header = new Header(
-                schema,
-                minecraftVersion,
-                loaderVersion,
-                modsFingerprint,
-                capturedAt,
-                blockCount
-            );
-            Map<Long, List<BlockLocation>> frozen = new HashMap<>(buckets.size());
-            for (var entry : buckets.entrySet()) {
-                frozen.put(entry.getKey(), List.copyOf(entry.getValue()));
-            }
+            Map<Long, List<BlockLocation>> frozen = freezeBuckets(buckets);
+            writePersistentIndex(file, header, frozen);
             return new RuntimeRegistryIndex(file, header, frozen);
         }
     }
@@ -232,6 +229,168 @@ public final class RuntimeRegistryIndex {
             if (candidate.blockId().equals(blockId)) return candidate;
         }
         return null;
+    }
+
+    private static Header readHeader(RandomAccessFile input) throws IOException {
+        validateMagic(input);
+        int schema = input.readInt();
+        if (schema != SCHEMA) {
+            throw new IOException("unsupported runtime registry schema " + schema + "; expected " + SCHEMA);
+        }
+
+        String minecraftVersion = readString(input);
+        String loaderVersion = readString(input);
+        String modsFingerprint = readString(input);
+        String capturedAt = readString(input);
+        int loadedModCount = readCount(input, MAX_LOADED_MODS, "loaded mods");
+        for (int index = 0; index < loadedModCount; index++) {
+            skipString(input);
+        }
+        int blockCount = readCount(input, MAX_BLOCKS, "blocks");
+        return new Header(
+            schema,
+            minecraftVersion,
+            loaderVersion,
+            modsFingerprint,
+            capturedAt,
+            blockCount
+        );
+    }
+
+    private static File indexFile(File dataFile) {
+        return new File(dataFile.getAbsolutePath() + ".idx");
+    }
+
+    private static Map<Long, List<BlockLocation>> readPersistentIndex(File dataFile, Header header) {
+        File indexFile = indexFile(dataFile);
+        if (!indexFile.isFile()) return null;
+
+        try (DataInputStream input = new DataInputStream(
+            new BufferedInputStream(new FileInputStream(indexFile), 64 * 1024)
+        )) {
+            byte[] magic = new byte[INDEX_MAGIC.length];
+            input.readFully(magic);
+            for (int index = 0; index < INDEX_MAGIC.length; index++) {
+                if (magic[index] != INDEX_MAGIC[index]) return null;
+            }
+            if (input.readInt() != INDEX_SCHEMA) return null;
+            if (input.readLong() != dataFile.length()) return null;
+            if (input.readLong() != dataFile.lastModified()) return null;
+            if (input.readInt() != header.schema()) return null;
+            if (!readIndexString(input).equals(header.minecraftVersion())) return null;
+            if (!readIndexString(input).equals(header.loaderVersion())) return null;
+            if (!readIndexString(input).equals(header.modsFingerprint())) return null;
+            if (!readIndexString(input).equals(header.capturedAt())) return null;
+
+            int entryCount = input.readInt();
+            if (entryCount != header.blockCount() || entryCount < 0 || entryCount > MAX_BLOCKS) return null;
+            Map<Long, List<BlockLocation>> buckets = new HashMap<>(
+                Math.max(16, Math.min(entryCount * 2, 1_000_000))
+            );
+            long dataLength = dataFile.length();
+            for (int index = 0; index < entryCount; index++) {
+                long hash = input.readLong();
+                long offset = input.readLong();
+                String blockId = readIndexString(input);
+                if (blockId.isBlank() || hash != hash64(blockId) || offset < 0 || offset >= dataLength) {
+                    return null;
+                }
+                buckets.computeIfAbsent(hash, ignored -> new ArrayList<>(1))
+                    .add(new BlockLocation(blockId, offset));
+            }
+            return freezeBuckets(buckets);
+        } catch (IOException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static void writePersistentIndex(
+        File dataFile,
+        Header header,
+        Map<Long, List<BlockLocation>> buckets
+    ) {
+        File destination = indexFile(dataFile);
+        File parent = destination.getAbsoluteFile().getParentFile();
+        if (parent == null || (!parent.isDirectory() && !parent.mkdirs())) return;
+
+        File temporary = new File(
+            parent,
+            destination.getName() + ".tmp-" + ProcessHandle.current().pid() + "-" + Thread.currentThread().getId()
+        );
+        List<BlockLocation> locations = buckets.values().stream()
+            .flatMap(List::stream)
+            .sorted(Comparator.comparingLong(BlockLocation::offset))
+            .toList();
+        if (locations.size() != header.blockCount()) return;
+
+        try (DataOutputStream output = new DataOutputStream(
+            new BufferedOutputStream(new FileOutputStream(temporary), 64 * 1024)
+        )) {
+            output.write(INDEX_MAGIC);
+            output.writeInt(INDEX_SCHEMA);
+            output.writeLong(dataFile.length());
+            output.writeLong(dataFile.lastModified());
+            output.writeInt(header.schema());
+            writeIndexString(output, header.minecraftVersion());
+            writeIndexString(output, header.loaderVersion());
+            writeIndexString(output, header.modsFingerprint());
+            writeIndexString(output, header.capturedAt());
+            output.writeInt(locations.size());
+            for (BlockLocation location : locations) {
+                output.writeLong(hash64(location.blockId()));
+                output.writeLong(location.offset());
+                writeIndexString(output, location.blockId());
+            }
+        } catch (IOException ignored) {
+            try { Files.deleteIfExists(temporary.toPath()); } catch (IOException ignoredDelete) {}
+            return;
+        }
+
+        try {
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE
+                );
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(
+                    temporary.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+                );
+            }
+        } catch (IOException ignored) {
+            try { Files.deleteIfExists(temporary.toPath()); } catch (IOException ignoredDelete) {}
+        }
+    }
+
+    private static Map<Long, List<BlockLocation>> freezeBuckets(Map<Long, List<BlockLocation>> buckets) {
+        Map<Long, List<BlockLocation>> frozen = new HashMap<>(buckets.size());
+        for (var entry : buckets.entrySet()) {
+            frozen.put(entry.getKey(), List.copyOf(entry.getValue()));
+        }
+        return Map.copyOf(frozen);
+    }
+
+    private static String readIndexString(DataInputStream input) throws IOException {
+        int length = input.readInt();
+        if (length < 0 || length > MAX_STRING_BYTES) {
+            throw new IOException("invalid runtime registry index string length " + length);
+        }
+        byte[] bytes = new byte[length];
+        input.readFully(bytes);
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static void writeIndexString(DataOutputStream output, String value) throws IOException {
+        byte[] bytes = (value == null ? "" : value).getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_STRING_BYTES) {
+            throw new IOException("runtime registry index string exceeds limit");
+        }
+        output.writeInt(bytes.length);
+        output.write(bytes);
     }
 
     private static void verifyStoredId(RandomAccessFile input, String expected) throws IOException {
