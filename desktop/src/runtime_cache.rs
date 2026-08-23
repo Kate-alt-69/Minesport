@@ -50,7 +50,7 @@ impl RuntimeCacheManager {
                         ("running_mods", state.mods_path.display().to_string()),
                     ],
                 );
-                return Err(anyhow!("another runtime registry worker is already running for a different Minecraft instance"));
+                return Err(anyhow!("runtime cache is already running for another instance"));
             }
             let (operation_id, trace_id) = state
                 .operation
@@ -141,12 +141,6 @@ impl RuntimeCacheManager {
         }).unwrap_or(false)
     }
 
-    /// A remembered registry path is deliberately not authoritative for a new
-    /// export. A mod JAR can be replaced in-place while Minesport stays open,
-    /// leaving the same version/path but a different exact content identity.
-    /// Call `start` instead: its background worker hashes the current JAR set
-    /// and cheaply returns `reused=true` when the exact fingerprint still
-    /// matches, without launching Minecraft again.
     pub fn ready_path(&self, _version: &str, _mods_path: &Path) -> Option<PathBuf> {
         None
     }
@@ -232,11 +226,17 @@ impl RuntimeCacheManager {
             }
         }
 
-        let event = RuntimeCacheEvent::Complete(result);
+        let event = RuntimeCacheEvent::Complete(
+            result.map_err(|error| first_line(&error).to_string())
+        );
         for listener in listeners {
             listener(event.clone());
         }
     }
+}
+
+fn first_line(value: &str) -> &str {
+    value.lines().next().unwrap_or(value)
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -280,5 +280,11 @@ mod tests {
             state.ready_path = PathBuf::from("runtime-registry/old/registry.data");
         }
         assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
+    }
+
+    #[test]
+    fn listener_error_is_single_line_but_operation_error_can_stay_detailed() {
+        assert_eq!(first_line("download failed\nstack\ntrace"), "download failed");
+        assert_eq!(first_line("cancelled"), "cancelled");
     }
 }
