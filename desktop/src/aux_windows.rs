@@ -124,15 +124,15 @@ slint::slint! {
     }
 
     export component RuntimeCacheWindow inherits Window {
-        title: "Minesport — Preparing runtime models";
+        title: "Minesport — Runtime cache";
         preferred-width: 540px;
-        preferred-height: 200px;
+        preferred-height: 160px;
         min-width: 480px;
-        min-height: 190px;
+        min-height: 150px;
         background: #171b18;
 
-        in-out property <string> stage: "Preparing Minecraft runtime models…";
-        in-out property <string> detail: "Exact current mod set";
+        in-out property <string> stage: "Preparing runtime…";
+        in-out property <string> detail: "";
         in-out property <float> progress: 0.0;
         in-out property <bool> cancelling: false;
         in-out property <bool> working: true;
@@ -153,15 +153,7 @@ slint::slint! {
                 finished => { root.loader-finished(); }
             }
             HorizontalLayout {
-                spacing: 8px;
-                Text {
-                    horizontal-stretch: 1;
-                    text: "Caching Minecraft's exact registered baked models. Your real world and mods folder are never modified.";
-                    color: #939d97;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                    vertical-alignment: center;
-                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
                 Button {
                     text: root.cancelling ? "Cancelling…" : "Cancel";
                     enabled: root.working && !root.cancelling;
@@ -258,10 +250,6 @@ where
 {
     RUNTIME_WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();
-        // Fingerprint verification reports 1% before the cache-hit check. A
-        // cache hit then jumps straight to 100%. Neither event should create a
-        // second window or hide the workbench. Only genuine cache-miss work in
-        // the open interval [4%, 100%) is allowed to create the progress UI.
         if slot.is_none() && (progress < 0.04 || progress >= 1.0) {
             return;
         }
@@ -276,8 +264,8 @@ where
             window.on_cancel(move || {
                 if let Some(window) = weak.upgrade() {
                     window.set_cancelling(true);
-                    window.set_stage("Cancelling runtime-model cache…".into());
-                    window.set_detail("Stopping the disposable Minecraft worker safely.".into());
+                    window.set_stage("Cancelling…".into());
+                    window.set_detail("".into());
                 }
                 on_cancel();
             });
@@ -302,8 +290,8 @@ where
                 move || {
                     if let Some(window) = weak.upgrade() {
                         window.set_cancelling(true);
-                        window.set_stage("Cancelling runtime-model cache…".into());
-                        window.set_detail("Stopping the disposable Minecraft worker safely.".into());
+                        window.set_stage("Cancelling…".into());
+                        window.set_detail("".into());
                         window.invoke_cancel();
                     }
                     CloseRequestResponse::KeepWindowShown
@@ -319,13 +307,10 @@ where
             if !window.get_cancelling() {
                 window.set_working(true);
                 window.set_stage(stage.into());
-                window.set_detail(format!("Minecraft {version} · exact current mod set").into());
+                window.set_detail(format!("Minecraft {version}").into());
             }
             window.set_progress(progress.clamp(0.0, 1.0));
             if created {
-                // Keep at least one top-level window visible at all times. On
-                // Windows/Slint, hiding the last visible window can terminate
-                // the event loop cleanly before the replacement is shown.
                 if let Err(error) = window.show() {
                     diagnostics::append(&format!("Could not show runtime-cache window: {error}"));
                     return;
@@ -340,8 +325,8 @@ pub fn mark_runtime_cache_cancelling() {
     RUNTIME_WINDOW.with(|slot| {
         if let Some(window) = slot.borrow().as_ref() {
             window.set_cancelling(true);
-            window.set_stage("Cancelling runtime-model cache…".into());
-            window.set_detail("Stopping the disposable Minecraft worker safely.".into());
+            window.set_stage("Cancelling…".into());
+            window.set_detail("".into());
         }
     });
 }
@@ -352,14 +337,12 @@ pub fn close_runtime_cache(main: &MainWindow) {
         if let Some(window) = slot.borrow().as_ref() {
             had_window = true;
             window.set_progress(1.0);
-            window.set_stage("Runtime model task complete".into());
-            window.set_detail("Finalizing Minesport runtime model state…".into());
+            window.set_stage("Done".into());
+            window.set_detail("".into());
             window.set_working(false);
         }
     });
     if !had_window {
-        // A cache hit never hid the workbench, so there is nothing to animate
-        // or restore here. Keep this branch explicit for future callers.
         let _ = main;
     }
 }

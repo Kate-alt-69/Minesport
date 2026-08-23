@@ -187,10 +187,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - name: Validate translator project and syntax
+      - name: Validate translator syntax
         run: |
-          python -c "import pathlib,tomllib; tomllib.loads(pathlib.Path('wrapper/blendertranslator/pyproject.toml').read_text(encoding='utf-8')); print('pyproject.toml OK')"
-          python -m compileall -q wrapper/blendertranslator/minesport_translator
+          test -f desktop/assets/blender/minesport_translator/__init__.py
+          python -m compileall -q desktop/assets/blender/minesport_translator
 
   desktop:
     name: Rust + Slint desktop · ${{ matrix.name }}

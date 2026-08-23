@@ -38,6 +38,7 @@ const _: fn(
 ) -> anyhow::Result<preview::RenderedPreview> = preview::PreviewPickMap::highlight_box;
 const _: fn(&preview::PreviewPickMap) -> anyhow::Result<preview::RenderedPreview> =
     preview::PreviewPickMap::clear_highlight;
+const _: fn(&preview::PreviewPickMap) -> [f32; 3] = preview::PreviewPickMap::look_direction;
 const _: fn([f32; 3], i32) -> Option<viewer_selection::BoxSelection> =
     viewer_selection::resize_point_b;
 
