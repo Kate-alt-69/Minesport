@@ -1,9 +1,10 @@
 use crate::{bridge_compat, diagnostics, registry, runtime, toolchain};
 use anyhow::{Context, Result, anyhow, bail};
+use serde::Deserialize;
 use std::{
     env,
     fs::{self, File},
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc},
@@ -20,6 +21,7 @@ const MC_1_21_10: &str = "1.21.10";
 const LOADER_1_21_10: &str = "0.18.5";
 const FABRIC_API_1_21_10: &str = "0.138.4+1.21.10";
 const LOOM_1_21_10: &str = "1.11.7";
+const FABRIC_MOD_JSON_LIMIT: u64 = 1 << 20;
 
 #[derive(Debug, Clone)]
 pub struct CacheResult {
@@ -306,12 +308,51 @@ fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
         if !entry.file_type()?.is_file() { continue; }
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()).is_none_or(|value| !value.eq_ignore_ascii_case("jar")) { continue; }
-        let lower = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-") || lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") { continue; }
+        let filename = entry.file_name().to_string_lossy().to_string();
+        let lower = filename.to_ascii_lowercase();
+        if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-") { continue; }
+        if should_skip_runtime_worker_mod(&path, &filename) { continue; }
         fs::copy(&path, target.join(entry.file_name())).with_context(|| format!("copy worker mod {}", path.display()))?;
         count += 1;
     }
     Ok(count)
+}
+
+// Crash Assistant treats Minesport's intentionally short-lived registry worker
+// like a crashed normal client and may spawn its own UI. It contributes nothing
+// to block/model registration, so identify it by Fabric mod ID first, with the
+// filename check retained as a fallback for malformed/unreadable JARs.
+fn should_skip_runtime_worker_mod(jar_path: &Path, filename: &str) -> bool {
+    let lower = filename.to_ascii_lowercase();
+    if lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") {
+        return true;
+    }
+    runtime_worker_fabric_mod_id(jar_path)
+        .is_some_and(|id| id.eq_ignore_ascii_case("crash_assistant"))
+}
+
+fn runtime_worker_fabric_mod_id(jar_path: &Path) -> Option<String> {
+    let file = File::open(jar_path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let mut entry = archive.by_name("fabric.mod.json").ok()?;
+    let mut bytes = Vec::new();
+    entry
+        .by_ref()
+        .take(FABRIC_MOD_JSON_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > FABRIC_MOD_JSON_LIMIT {
+        return None;
+    }
+
+    #[derive(Deserialize)]
+    struct FabricMetadata {
+        #[serde(default)]
+        id: String,
+    }
+    let metadata: FabricMetadata = serde_json::from_slice(&bytes).ok()?;
+    let id = metadata.id.trim();
+    if id.is_empty() { None } else { Some(id.to_string()) }
 }
 
 fn copy_directory(source: &Path, target: &Path) -> Result<()> {
@@ -444,6 +485,7 @@ fn hide_console_window(_command: &mut Command) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     #[test]
     fn fast_worker_versions_are_pinned() {
@@ -477,5 +519,30 @@ mod tests {
         let path = diagnostics::folder().join("runtime-workers");
         assert!(path.starts_with(runtime::data_root()));
         assert!(!path.starts_with(runtime::cache_root()));
+    }
+
+    #[test]
+    fn renamed_crash_assistant_is_skipped_by_fabric_mod_id() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = env::temp_dir().join(format!("minesport-crash-assistant-id-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let jar = root.join("totally-normal-mod.jar");
+        let file = File::create(&jar).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("fabric.mod.json", options).unwrap();
+        writer.write_all(br#"{"schemaVersion":1,"id":"crash_assistant","version":"1.0.0"}"#).unwrap();
+        writer.finish().unwrap();
+
+        assert_eq!(runtime_worker_fabric_mod_id(&jar).as_deref(), Some("crash_assistant"));
+        assert!(should_skip_runtime_worker_mod(&jar, "totally-normal-mod.jar"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn crash_assistant_filename_fallback_survives_unreadable_jar() {
+        assert!(should_skip_runtime_worker_mod(Path::new("missing.jar"), "CrashAssistant-fabric-26.2.jar"));
+        assert!(should_skip_runtime_worker_mod(Path::new("missing.jar"), "crash-assistant-26.2.jar"));
     }
 }
