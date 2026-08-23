@@ -9,10 +9,6 @@ mod diagnostics;
 mod heightmap_cache;
 mod ipc;
 mod launcher;
-// These modules intentionally expose migration-parity APIs before every Slint
-// call site is wired. Keep dead-code warnings strict for the rest of the crate
-// and remove these narrow allowances as each migration slice is completed.
-#[allow(dead_code)]
 mod preview;
 #[allow(dead_code)]
 mod registry;
@@ -21,7 +17,6 @@ mod runtime;
 mod runtime_cache;
 #[allow(dead_code)]
 mod runtime_worker;
-#[allow(dead_code)]
 mod selection;
 mod settings;
 mod toolchain;
