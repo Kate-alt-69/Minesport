@@ -703,7 +703,7 @@ fn resolve_java() -> Result<PathBuf> {
 }
 
 fn push_java_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
-    if (!candidate.is_file()) {
+    if !candidate.is_file() {
         return;
     }
     let duplicate = candidates.iter().any(|existing| {
