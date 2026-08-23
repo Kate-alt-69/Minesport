@@ -18,5 +18,9 @@ mod toolchain;
 slint::include_modules!();
 
 fn main() -> anyhow::Result<()> {
-    app::run()
+    let log = diagnostics::initialize()?;
+    diagnostics::append(&format!("Persistent diagnostics log: {}", log.display()));
+    let result = app::run();
+    diagnostics::append(if result.is_ok() { "Minesport desktop exited cleanly" } else { "Minesport desktop exited with an error" });
+    result
 }
