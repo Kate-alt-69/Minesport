@@ -284,16 +284,17 @@ where
 
             let main_weak = main.as_weak();
             window.on_loader_finished(move || {
+                if let Some(main) = main_weak.upgrade() {
+                    if let Err(error) = main.show() {
+                        diagnostics::append(&format!("Could not restore Minesport workbench: {error}"));
+                        return;
+                    }
+                }
                 RUNTIME_WINDOW.with(|slot| {
                     if let Some(window) = slot.borrow_mut().take() {
                         let _ = window.hide();
                     }
                 });
-                if let Some(main) = main_weak.upgrade() {
-                    if let Err(error) = main.show() {
-                        diagnostics::append(&format!("Could not restore Minesport workbench: {error}"));
-                    }
-                }
             });
 
             window.window().on_close_requested({
