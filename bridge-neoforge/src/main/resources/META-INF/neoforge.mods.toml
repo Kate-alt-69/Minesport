@@ -1,0 +1,22 @@
+license="All Rights Reserved"
+
+[[mods]]
+modId="minesport_bridge"
+version="0.2.0"
+displayName="Minesport Bridge"
+authors="Kastrick"
+description='''Minesport runtime-registry bridge for NeoForge. Captures registered block states, baked geometry, texture identifiers and light metadata through an isolated client worker, then exits.'''
+
+[[dependencies.minesport_bridge]]
+modId="neoforge"
+type="required"
+versionRange="[21.10.64,)"
+ordering="NONE"
+side="CLIENT"
+
+[[dependencies.minesport_bridge]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.10,1.21.11)"
+ordering="NONE"
+side="CLIENT"
