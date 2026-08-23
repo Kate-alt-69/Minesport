@@ -6,6 +6,7 @@ mod bridge_compat;
 mod ipc;
 mod launcher;
 mod preview;
+#[allow(unused_imports)]
 mod registry;
 mod runtime;
 mod runtime_cache;
