@@ -11,6 +11,7 @@ mod heightmap_cache;
 mod ipc;
 mod launcher;
 mod preview;
+mod preview_picking;
 #[allow(dead_code)]
 mod registry;
 mod runtime;
