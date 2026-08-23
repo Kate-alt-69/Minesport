@@ -124,6 +124,11 @@ pub struct CompatProgress {
     pub detail: String,
 }
 
+enum HttpAttemptError {
+    Retryable(anyhow::Error),
+    Permanent(anyhow::Error),
+}
+
 pub fn manifest() -> Result<Manifest> {
     let parsed: Manifest = serde_json::from_str(MANIFEST_JSON).context("parse embedded bridge compatibility manifest")?;
     if parsed.schema != 1 {
@@ -506,7 +511,8 @@ fn http_get_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
     for attempt in 1..=DOWNLOAD_ATTEMPTS {
         match http_get_limited_once(&agent, url, max_bytes) {
             Ok(data) => return Ok(data),
-            Err(error) => {
+            Err(HttpAttemptError::Permanent(error)) => return Err(error),
+            Err(HttpAttemptError::Retryable(error)) => {
                 last_error = Some(error);
                 if attempt < DOWNLOAD_ATTEMPTS {
                     std::thread::sleep(Duration::from_millis(400 * attempt as u64));
@@ -529,17 +535,37 @@ fn http_get_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
     Err(anyhow!("HTTP request failed for {url} after {DOWNLOAD_ATTEMPTS} attempts: {primary:#}"))
 }
 
-fn http_get_limited_once(agent: &ureq::Agent, url: &str, max_bytes: u64) -> Result<Vec<u8>> {
-    let response = agent
+fn http_get_limited_once(agent: &ureq::Agent, url: &str, max_bytes: u64) -> std::result::Result<Vec<u8>, HttpAttemptError> {
+    let response = match agent
         .get(url)
         .set("User-Agent", "Minesport-Rust-Bridge-Builder/0.2.0")
         .call()
-        .map_err(|error| anyhow!("HTTP request failed for {url}: {error}"))?;
+    {
+        Ok(response) => response,
+        Err(ureq::Error::Status(code, _)) => {
+            let error = anyhow!("HTTP {code} for {url}");
+            if retryable_http_status(code) {
+                return Err(HttpAttemptError::Retryable(error));
+            }
+            return Err(HttpAttemptError::Permanent(error));
+        }
+        Err(error) => {
+            return Err(HttpAttemptError::Retryable(anyhow!("HTTP request failed for {url}: {error}")));
+        }
+    };
     let mut reader = response.into_reader().take(max_bytes + 1);
     let mut data = Vec::new();
-    reader.read_to_end(&mut data)?;
-    if data.len() as u64 > max_bytes { bail!("network resource exceeds {max_bytes} byte limit: {url}"); }
+    if let Err(error) = reader.read_to_end(&mut data) {
+        return Err(HttpAttemptError::Retryable(anyhow!("read HTTP response for {url}: {error}")));
+    }
+    if data.len() as u64 > max_bytes {
+        return Err(HttpAttemptError::Permanent(anyhow!("network resource exceeds {max_bytes} byte limit: {url}")));
+    }
     Ok(data)
+}
+
+fn retryable_http_status(code: u16) -> bool {
+    matches!(code, 408 | 425 | 429) || (500..=599).contains(&code)
 }
 
 fn github_contents_fallback(raw_url: &str, max_bytes: u64) -> Result<Vec<u8>> {
@@ -655,14 +681,72 @@ mod tests {
     #[test]
     fn profile_java_requirements_match_manifest_families() {
         assert_eq!(required_java("1.19.4").unwrap(), 17);
+        assert_eq!(required_java("1.20.4").unwrap(), 17);
+        assert_eq!(required_java("1.20.5").unwrap(), 21);
         assert_eq!(required_java("1.21.10").unwrap(), 21);
         assert_eq!(required_java("26.2").unwrap(), 25);
+    }
+
+    #[test]
+    fn compatibility_profile_ids_match_retired_go_contract() {
+        let manifest = manifest().unwrap();
+        let cases = [
+            ("1.19", "1.19.0-1.19.1"),
+            ("1.19.2", "1.19.2"),
+            ("1.19.4", "1.19.3-1.19.4"),
+            ("1.20", "1.20.0-1.20.1"),
+            ("1.20.2", "1.20.2"),
+            ("1.20.4", "1.20.3-1.20.4"),
+            ("1.20.6", "1.20.5-1.20.6"),
+            ("1.21", "1.21.0-1.21.1"),
+            ("1.21.4", "1.21.2-1.21.4"),
+            ("1.21.5", "1.21.5"),
+            ("1.21.6", "1.21.6"),
+            ("1.21.8", "1.21.7-1.21.8"),
+            ("1.21.11", "1.21.11"),
+            ("26.1.2", "26.1"),
+            ("26.2", "26.2"),
+            ("26.3-snapshot-7", "26.3-snapshot-experimental"),
+        ];
+        for (version, expected) in cases {
+            let normalized = normalize_version(version).unwrap();
+            assert_eq!(profile_for(&manifest, &normalized).unwrap().id, expected, "{version}");
+        }
+        assert!(is_bundled_compatible("1.21.9").unwrap());
+        assert!(is_bundled_compatible("1.21.10").unwrap());
+    }
+
+    #[test]
+    fn legacy_profile_fabric_api_pins_match_retired_go_contract() {
+        let manifest = manifest().unwrap();
+        let pinned = [
+            ("1.19", "0.58.0+1.19"),
+            ("1.19.1", "0.58.5+1.19.1"),
+            ("1.19.2", "0.77.0+1.19.2"),
+            ("1.19.3", "0.76.1+1.19.3"),
+            ("1.19.4", "0.87.2+1.19.4"),
+            ("1.20.1", "0.91.0+1.20.1"),
+            ("1.20.4", "0.91.3+1.20.4"),
+        ];
+        for (version, expected) in pinned {
+            let profile = profile_for(&manifest, version).unwrap();
+            assert_eq!(profile.fabric_api, expected, "{version}");
+        }
+        for version in ["1.20", "1.20.2", "1.20.3", "1.20.5", "1.20.6"] {
+            assert_eq!(profile_for(&manifest, version).unwrap().fabric_api, "dynamic", "{version}");
+        }
     }
 
     #[test]
     fn safe_join_rejects_parent_escape() {
         assert!(safe_join(Path::new("root"), Path::new("../nope")).is_err());
         assert!(safe_join(Path::new("root"), Path::new("ok/file.txt")).is_ok());
+    }
+
+    #[test]
+    fn module_download_requires_https_and_pinned_sha() {
+        assert!(download_pinned_module("http://example.com/Compat.java", &"a".repeat(64)).is_err());
+        assert!(download_pinned_module("https://example.com/Compat.java", "not-a-sha").is_err());
     }
 
     #[test]
@@ -681,6 +765,16 @@ mod tests {
         let parsed = parse_raw_github_url("https://raw.githubusercontent.com/Kate-alt-69/Minesport/main/bridge/file.java").unwrap();
         assert_eq!(parsed, ("Kate-alt-69", "Minesport", "main", "bridge/file.java"));
         assert_eq!(percent_encode_segment("a b"), "a%20b");
+    }
+
+    #[test]
+    fn retryable_http_status_matches_retired_go_transport() {
+        for code in [408, 425, 429, 500, 503, 599] {
+            assert!(retryable_http_status(code), "{code}");
+        }
+        for code in [400, 401, 403, 404, 409, 422] {
+            assert!(!retryable_http_status(code), "{code}");
+        }
     }
 
     #[test]
