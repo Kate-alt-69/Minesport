@@ -19,7 +19,6 @@ pub struct DesktopSettings {
     pub select_by_model: bool,
     pub debug_mode: bool,
     pub blender_animation_index: i32,
-    pub blender_translator_prompted: bool,
     pub resource_packs: Vec<PathBuf>,
     pub data_packs: Vec<PathBuf>,
 }
@@ -40,7 +39,6 @@ impl Default for DesktopSettings {
             select_by_model: false,
             debug_mode: false,
             blender_animation_index: 0,
-            blender_translator_prompted: false,
             resource_packs: Vec::new(),
             data_packs: Vec::new(),
         }
@@ -81,6 +79,5 @@ mod tests {
         assert!(value.flatter_enabled);
         assert_eq!(value.flatter_cell_index, 3);
         assert!(value.blender_export);
-        assert!(!value.blender_translator_prompted);
     }
 }
