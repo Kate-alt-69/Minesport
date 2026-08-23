@@ -5,6 +5,9 @@ mod bridge_build;
 #[path = "../bridge_compat.rs"]
 mod bridge_compat;
 #[allow(dead_code)]
+#[path = "../bridge_java.rs"]
+mod bridge_java;
+#[allow(dead_code)]
 #[path = "../runtime.rs"]
 mod runtime;
 #[allow(dead_code)]
@@ -73,7 +76,11 @@ fn main() -> Result<()> {
     }
 
     let _cleanup = Cleanup(workspace);
-    let java_home = toolchain::ensure_jdk(prepared.java, |progress| {
+    let build_java = bridge_java::tooling_java(
+        prepared.java,
+        prepared.variables.get("loom_version").map(String::as_str),
+    );
+    let java_home = toolchain::ensure_jdk(build_java, |progress| {
         eprintln!(
             "[{:>3}%] {}",
             progress.percent.clamp(0, 100),
@@ -81,9 +88,10 @@ fn main() -> Result<()> {
         );
     })?;
     eprintln!(
-        "[Minesport] Compiling {} with JDK {} at {}",
+        "[Minesport] Compiling {} targeting Java {} with build JDK {} at {}",
         prepared.profile_id,
         prepared.java,
+        build_java,
         java_home.display()
     );
 

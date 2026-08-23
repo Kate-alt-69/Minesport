@@ -1,4 +1,4 @@
-use crate::{bridge_compat, diagnostics, registry, runtime, toolchain};
+use crate::{bridge_compat, bridge_java, diagnostics, registry, runtime, toolchain};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use std::{
@@ -223,7 +223,10 @@ where
         21
     } else {
         let prepared = bridge_compat::prepare_source(version, &workspace, &mut progress)?;
-        prepared.java
+        bridge_java::tooling_java(
+            prepared.java,
+            prepared.variables.get("loom_version").map(String::as_str),
+        )
     };
 
     let run_dir = workspace.join("run");

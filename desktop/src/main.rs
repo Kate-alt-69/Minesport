@@ -6,6 +6,7 @@ mod blender;
 mod bridge_build;
 mod bridge_cli;
 mod bridge_compat;
+mod bridge_java;
 mod diagnostics;
 mod error_reporter;
 mod heightmap_cache;

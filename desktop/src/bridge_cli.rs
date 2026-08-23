@@ -1,4 +1,4 @@
-use crate::{bridge_build, bridge_compat, launcher, runtime, toolchain};
+use crate::{bridge_build, bridge_compat, bridge_java, launcher, runtime, toolchain};
 use anyhow::{Context, Result, anyhow, bail};
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
@@ -80,17 +80,22 @@ fn ensure_bridge(raw_version: &str) -> Result<PathBuf> {
             prepared.java
         );
     }
+    let build_java = bridge_java::tooling_java(
+        required_java,
+        prepared.variables.get("loom_version").map(String::as_str),
+    );
 
     println!(
-        "Prepared profile {} for Minecraft {} · Java {} · {} variable(s) · {}",
+        "Prepared profile {} for Minecraft {} · target Java {} · build JDK {} · {} variable(s) · {}",
         prepared.profile_id,
         prepared.version,
         required_java,
+        build_java,
         prepared.variables.len(),
         prepared.workspace.display()
     );
 
-    let java_home = toolchain::ensure_jdk(required_java, |update| {
+    let java_home = toolchain::ensure_jdk(build_java, |update| {
         print_progress(update.percent, "JDK", &update.message);
     })?;
     println!("Building compatibility Bridge with {}", java_home.display());
