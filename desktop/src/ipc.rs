@@ -12,6 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const ENGINE_JAVA_MAJOR: u32 = 22;
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Response {
     #[serde(rename = "type")]
@@ -234,7 +236,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         return Err(anyhow!("embedded Java engine is unavailable: {}", jar.display()));
     }
 
-    let java = resolve_java();
+    let java = resolve_java()?;
     diagnostics::append(&format!("Engine worker Java executable: {}", java.display()));
     let mut command = Command::new(&java);
     command
@@ -370,16 +372,103 @@ fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<E
     });
 }
 
-fn resolve_java() -> PathBuf {
+fn resolve_java() -> Result<PathBuf> {
+    let mut candidates = Vec::new();
+
     if let Some(home) = env::var_os("JAVA_HOME") {
-        let home_path = PathBuf::from(&home);
-        let candidate = home_path.join("bin").join(java_executable_name());
-        if candidate.is_file() {
-            return candidate;
-        }
-        diagnostics::append(&format!("Ignoring invalid JAVA_HOME: {}", home_path.display()));
+        push_java_candidate(&mut candidates, PathBuf::from(home).join("bin").join(java_executable_name()));
     }
-    PathBuf::from(java_executable_name())
+    if let Some(path_java) = find_on_path(java_executable_name()) {
+        push_java_candidate(&mut candidates, path_java);
+    }
+
+    // Preserve the retired Go wrapper's launcher-Java fallback. Some Windows
+    // machines have no system Java because the Minecraft launcher owns it.
+    if cfg!(windows) {
+        if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
+            for runtime_name in ["java-runtime-delta", "java-runtime-gamma"] {
+                push_java_candidate(
+                    &mut candidates,
+                    appdata.join("FreesmLauncher").join("java").join(runtime_name).join("bin").join("java.exe"),
+                );
+            }
+        }
+        if let Some(program_files) = env::var_os("ProgramFiles").map(PathBuf::from) {
+            for base in [program_files.join("Java"), program_files.join("Eclipse Adoptium")] {
+                let Ok(entries) = fs::read_dir(base) else { continue; };
+                let mut homes = entries
+                    .flatten()
+                    .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                    .map(|entry| entry.path())
+                    .collect::<Vec<_>>();
+                homes.sort_by(|left, right| right.file_name().cmp(&left.file_name()));
+                for home in homes {
+                    push_java_candidate(&mut candidates, home.join("bin").join("java.exe"));
+                }
+            }
+        }
+    }
+
+    for candidate in candidates {
+        let major = java_major(&candidate);
+        if major >= ENGINE_JAVA_MAJOR {
+            return Ok(candidate);
+        }
+        diagnostics::append(&format!(
+            "Ignoring Java candidate {} because major version {} is below required {}",
+            candidate.display(), major, ENGINE_JAVA_MAJOR
+        ));
+    }
+
+    bail!(
+        "Java {ENGINE_JAVA_MAJOR}+ is required for the Minesport engine; checked JAVA_HOME, PATH, launcher Java, and standard JDK folders"
+    )
+}
+
+fn push_java_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !candidate.is_file() {
+        return;
+    }
+    let duplicate = candidates.iter().any(|existing| {
+        if cfg!(windows) {
+            existing.to_string_lossy().eq_ignore_ascii_case(&candidate.to_string_lossy())
+        } else {
+            existing == &candidate
+        }
+    });
+    if !duplicate {
+        candidates.push(candidate);
+    }
+}
+
+fn find_on_path(executable: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .map(|folder| folder.join(executable))
+        .find(|candidate| candidate.is_file())
+}
+
+fn java_major(java: &Path) -> u32 {
+    let mut command = Command::new(java);
+    command.arg("-version");
+    hide_console_window(&mut command);
+    let Ok(output) = command.output() else { return 0; };
+    let text = format!("{} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    parse_java_major(&text).unwrap_or(0)
+}
+
+fn parse_java_major(text: &str) -> Option<u32> {
+    let quoted = text.split('"').nth(1);
+    let version = quoted.or_else(|| {
+        text.split_whitespace().find(|token| token.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+    })?;
+    let mut parts = version.split('.');
+    let first = parts.next()?.trim_matches(|ch: char| !ch.is_ascii_digit()).parse::<u32>().ok()?;
+    if first == 1 {
+        parts.next()?.trim_matches(|ch: char| !ch.is_ascii_digit()).parse::<u32>().ok()
+    } else {
+        Some(first)
+    }
 }
 
 fn java_executable_name() -> &'static str {
@@ -454,5 +543,13 @@ mod tests {
             Some(world.clone())
         );
         let _ = fs::remove_dir_all(world);
+    }
+
+    #[test]
+    fn java_major_parser_handles_legacy_and_modern_version_strings() {
+        assert_eq!(parse_java_major("java version \"1.8.0_401\""), Some(8));
+        assert_eq!(parse_java_major("openjdk version \"17.0.12\" 2024-07-16"), Some(17));
+        assert_eq!(parse_java_major("openjdk version \"22.0.2\" 2024-07-16"), Some(22));
+        assert_eq!(parse_java_major("openjdk 25.0.1"), Some(25));
     }
 }
