@@ -15,6 +15,7 @@ mod runtime_worker;
 mod settings;
 mod toolchain;
 mod world_context;
+mod world_picker;
 
 slint::include_modules!();
 
