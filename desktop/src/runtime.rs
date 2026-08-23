@@ -1,13 +1,15 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use std::{
     env, fs,
     path::{Component, Path, PathBuf},
+    sync::{RwLock, RwLockReadGuard},
 };
 
 const VENDOR_DIR: &str = "kastrick's_software";
 const APP_DIR: &str = "minesport";
 const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
 const BRIDGE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge.jar"));
+static GENERATED_CACHE_USE: RwLock<()> = RwLock::new(());
 
 pub fn materialize_engine() -> Result<PathBuf> {
     materialize_runtime_asset(
@@ -120,10 +122,22 @@ pub fn bridge_data_root() -> PathBuf {
     data_root().join("bridge-data")
 }
 
+/// Hold this lease while any runtime worker, compatibility build, or other
+/// operation depends on generated cache/toolchain files. Destructive cleanup
+/// waits for all leases to be released instead of deleting live workspaces.
+pub(crate) fn acquire_generated_cache_lease() -> Result<RwLockReadGuard<'static, ()>> {
+    GENERATED_CACHE_USE
+        .read()
+        .map_err(|_| anyhow!("Minesport generated-cache lease lock is poisoned"))
+}
+
 /// Remove only Minesport-owned, regenerable data. The validation mirrors the
 /// retired Go cacheclean package: custom cache overrides are allowed, but broad
 /// roots, the user home, and paths containing durable Minesport data fail shut.
 pub fn remove_generated_cache() -> Result<()> {
+    let _exclusive = GENERATED_CACHE_USE
+        .write()
+        .map_err(|_| anyhow!("Minesport generated-cache cleanup lock is poisoned"))?;
     let cache = clean_path(&cache_root());
     validate_cache_root(&cache)?;
 

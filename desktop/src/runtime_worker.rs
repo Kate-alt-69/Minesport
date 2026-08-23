@@ -1,4 +1,4 @@
-use crate::{bridge_compat, registry, runtime, toolchain};
+use crate::{bridge_compat, diagnostics, registry, runtime, toolchain};
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
     env,
@@ -63,6 +63,10 @@ where
     }
     if !mods_path.is_dir() { bail!("mods folder is unavailable: {}", mods_path.display()); }
     if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
+
+    // Keep generated cache/toolchain/workspace paths alive for the entire
+    // operation. Destructive cleanup takes the write side of the same lease.
+    let _cache_lease = runtime::acquire_generated_cache_lease()?;
 
     progress(Progress { percent: 1, message: "Verifying exact mod contents…".into() });
     let fingerprint = registry::mods_fingerprint(mods_path)?;
@@ -139,13 +143,23 @@ where
             }
             Ok(Err(error)) => {
                 stop_child(&mut child);
-                let tail = tail_file(&log_path, 60);
-                if tail.is_empty() { return Err(error); }
-                return Err(anyhow!("{error:#}\nRuntime worker tail:\n{tail}"));
+                return Err(runtime_worker_failure(
+                    &workspace,
+                    &version,
+                    &log_path,
+                    format!("{error:#}"),
+                    60,
+                ));
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 stop_child(&mut child);
-                bail!("runtime registry receiver terminated unexpectedly");
+                return Err(runtime_worker_failure(
+                    &workspace,
+                    &version,
+                    &log_path,
+                    "runtime registry receiver terminated unexpectedly".into(),
+                    60,
+                ));
             }
             Err(mpsc::TryRecvError::Empty) => {}
         }
@@ -156,10 +170,23 @@ where
                     progress(Progress { percent: 100, message: "Full registered Minecraft block/model registry ready".into() });
                     return Ok(CacheResult { fingerprint, registry_path: path, reused: false });
                 }
-                Ok(Err(error)) => return Err(error),
+                Ok(Err(error)) => {
+                    return Err(runtime_worker_failure(
+                        &workspace,
+                        &version,
+                        &log_path,
+                        format!("{error:#}"),
+                        80,
+                    ));
+                }
                 Err(_) => {
-                    let tail = tail_file(&log_path, 80);
-                    bail!("runtime Minecraft worker exited with {status} before the full registry was received\n{tail}");
+                    return Err(runtime_worker_failure(
+                        &workspace,
+                        &version,
+                        &log_path,
+                        format!("runtime Minecraft worker exited with {status} before the full registry was received"),
+                        80,
+                    ));
                 }
             }
         }
@@ -313,6 +340,46 @@ fn stop_child(child: &mut Child) {
     }
 }
 
+fn runtime_worker_failure(workspace: &Path, version: &str, log_path: &Path, message: String, tail_lines: usize) -> anyhow::Error {
+    let tail = tail_file(log_path, tail_lines);
+    let diagnostics = preserve_runtime_worker_diagnostics(workspace, version);
+    let mut detail = message;
+    if let Some(path) = diagnostics {
+        detail.push_str(&format!("\nDiagnostics preserved at: {}", path.display()));
+    }
+    if !tail.is_empty() {
+        detail.push_str("\nRuntime worker tail:\n");
+        detail.push_str(&tail);
+    }
+    anyhow!(detail)
+}
+
+fn preserve_runtime_worker_diagnostics(workspace: &Path, version: &str) -> Option<PathBuf> {
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis();
+    let destination = diagnostics::folder()
+        .join("runtime-workers")
+        .join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
+    fs::create_dir_all(&destination).ok()?;
+
+    let files = [
+        (workspace.join("runtime-worker.log"), "runtime-worker.log"),
+        (workspace.join("run").join("logs").join("latest.log"), "minecraft-latest.log"),
+    ];
+    let mut copied = false;
+    for (source, name) in files {
+        if !source.is_file() { continue; }
+        if fs::copy(&source, destination.join(name)).is_ok() {
+            copied = true;
+        }
+    }
+    if copied {
+        Some(destination)
+    } else {
+        let _ = fs::remove_dir_all(&destination);
+        None
+    }
+}
+
 fn tail_file(path: &Path, lines: usize) -> String {
     let Ok(file) = File::open(path) else { return String::new(); };
     let values: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
@@ -403,5 +470,12 @@ mod tests {
         assert!(bridge_compat::is_supported("1.19.4"));
         assert!(bridge_compat::is_supported("1.21.11"));
         assert!(bridge_compat::is_supported("26.2"));
+    }
+
+    #[test]
+    fn worker_diagnostics_path_is_durable_not_cache_owned() {
+        let path = diagnostics::folder().join("runtime-workers");
+        assert!(path.starts_with(runtime::data_root()));
+        assert!(!path.starts_with(runtime::cache_root()));
     }
 }
