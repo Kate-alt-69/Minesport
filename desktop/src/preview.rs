@@ -59,11 +59,13 @@ impl PreviewPickMap {
     /// Fyne parity: select face-connected solid blocks without crossing air.
     /// Block IDs are intentionally ignored, so a touching glass block and
     /// stone block are part of the same joined structure just like the old
-    /// native viewer's FloodFill selection.
+    /// native viewer's FloodFill selection. The retired Go viewer treated a
+    /// power below 1 as 1, so a zero value still selects the starting block.
     pub fn joined_blocks(&self, start: [i32; 3], max_blocks: usize) -> Vec<[i32; 3]> {
-        if max_blocks == 0 || !self.occupied.contains(&start) {
+        if !self.occupied.contains(&start) {
             return Vec::new();
         }
+        let max_blocks = max_blocks.max(1);
         const OFFSETS: [[i32; 3]; 6] = [
             [1, 0, 0], [-1, 0, 0],
             [0, 1, 0], [0, -1, 0],
@@ -325,6 +327,7 @@ mod tests {
         joined.sort_unstable();
         assert_eq!(joined, vec![[0, 64, 0], [0, 65, 0], [1, 64, 0]]);
         assert_eq!(rendered.pick_map.joined_blocks([0, 64, 0], 2).len(), 2);
+        assert_eq!(rendered.pick_map.joined_blocks([0, 64, 0], 0), vec![[0, 64, 0]]);
         assert_eq!(rendered.pick_map.dimensions(), (WIDTH, HEIGHT));
         assert!(rendered.pick_map.indices.iter().any(|value| *value >= 0));
         let picked = rendered.pick_map.indices.iter().find(|value| **value >= 0).copied().unwrap();
