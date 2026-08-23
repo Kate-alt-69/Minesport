@@ -309,11 +309,12 @@ fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<E
 
 fn resolve_java() -> PathBuf {
     if let Some(home) = env::var_os("JAVA_HOME") {
-        let candidate = PathBuf::from(home).join("bin").join(java_executable_name());
+        let home_path = PathBuf::from(&home);
+        let candidate = home_path.join("bin").join(java_executable_name());
         if candidate.is_file() {
             return candidate;
         }
-        diagnostics::append(&format!("Ignoring invalid JAVA_HOME: {}", PathBuf::from(home).display()));
+        diagnostics::append(&format!("Ignoring invalid JAVA_HOME: {}", home_path.display()));
     }
     PathBuf::from(java_executable_name())
 }
