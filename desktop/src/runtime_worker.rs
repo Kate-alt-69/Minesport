@@ -64,22 +64,23 @@ where
         bail!("Minesport has no embedded Fabric compatibility recipe for Minecraft {version}");
     }
     if !mods_path.is_dir() { bail!("mods folder is unavailable: {}", mods_path.display()); }
-    if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
+    if cancel.load(Ordering::Relaxed) { bail!("runtime cache cancelled"); }
 
+    progress(Progress { percent: 0, message: "Starting runtime cache…".into() });
     let _cache_lease = runtime::acquire_generated_cache_lease()?;
 
-    progress(Progress { percent: 1, message: "Verifying exact mod contents…".into() });
+    progress(Progress { percent: 1, message: "Checking mods…".into() });
     let fingerprint = registry::mods_fingerprint(mods_path)?;
-    if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
+    if cancel.load(Ordering::Relaxed) { bail!("runtime cache cancelled"); }
 
     let cache_root = runtime::cache_root();
     let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);
     if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
-        progress(Progress { percent: 100, message: "Full runtime registry already ready".into() });
+        progress(Progress { percent: 100, message: "Runtime ready".into() });
         return Ok(CacheResult { fingerprint, registry_path: existing, reused: true });
     }
 
-    progress(Progress { percent: 4, message: "Preparing local isolated Minecraft worker…".into() });
+    progress(Progress { percent: 4, message: "Preparing worker…".into() });
     let plan = create_workspace(&version, mods_path, |update| {
         progress(Progress {
             percent: update.percent.clamp(4, 38),
@@ -88,13 +89,13 @@ where
     })?;
     let workspace = plan.workspace;
     let cleanup = WorkspaceCleanup(workspace.clone());
-    if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
+    if cancel.load(Ordering::Relaxed) { bail!("runtime cache cancelled"); }
 
-    progress(Progress { percent: 40, message: format!("Preparing JDK {} for Minecraft {version}…", plan.java) });
+    progress(Progress { percent: 40, message: "Checking JDK…".into() });
     let java_home = toolchain::ensure_jdk(plan.java, |update| {
         progress(Progress { percent: update.percent.clamp(40, 54), message: update.message });
     })?;
-    if cancel.load(Ordering::Relaxed) { bail!("runtime model-cache generation cancelled"); }
+    if cancel.load(Ordering::Relaxed) { bail!("runtime cache cancelled"); }
 
     let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);
     let (capture_tx, capture_rx) = mpsc::sync_channel::<Result<PathBuf>>(1);
@@ -126,17 +127,17 @@ where
 
     listen_rx.recv_timeout(Duration::from_secs(5)).context("wait for Rust runtime registry receiver")??;
 
-    progress(Progress { percent: 55, message: format!("Receiver ready · starting Minecraft {version} with JDK {}", plan.java) });
+    progress(Progress { percent: 55, message: "Starting Minecraft…".into() });
     let log_path = workspace.join("runtime-worker.log");
     let mut child = start_gradle_worker(&workspace, &log_path, &java_home)?;
-    progress(Progress { percent: 62, message: format!("Minecraft {version} worker started · loading baked model registry") });
+    progress(Progress { percent: 62, message: "Loading runtime models…".into() });
 
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
     let mut last_captured_blocks = 0usize;
     loop {
         if cancel.load(Ordering::Relaxed) {
             stop_child(&mut child);
-            bail!("runtime model-cache generation cancelled");
+            bail!("runtime cache cancelled");
         }
 
         while let Ok((blocks, total_blocks)) = capture_progress_rx.try_recv() {
@@ -144,18 +145,18 @@ where
             last_captured_blocks = blocks;
             let capture_percent = capture_progress_percent(blocks, total_blocks);
             let message = if total_blocks > 0 {
-                format!("Receiving baked model registry · {blocks}/{total_blocks} block types captured")
+                format!("Loading runtime models · {blocks}/{total_blocks}")
             } else {
-                format!("Receiving baked model registry · {blocks} block types captured")
+                format!("Loading runtime models · {blocks}")
             };
             progress(Progress { percent: capture_percent, message });
         }
 
         match capture_rx.try_recv() {
             Ok(Ok(path)) => {
-                progress(Progress { percent: 96, message: "Full registry received · stopping disposable Minecraft client…".into() });
+                progress(Progress { percent: 96, message: "Saving runtime cache…".into() });
                 stop_child(&mut child);
-                progress(Progress { percent: 100, message: "Full registered Minecraft block/model registry ready".into() });
+                progress(Progress { percent: 100, message: "Runtime ready".into() });
                 drop(cleanup);
                 return Ok(CacheResult { fingerprint, registry_path: path, reused: false });
             }
@@ -173,7 +174,7 @@ where
         if let Some(status) = child.try_wait().context("poll isolated Minecraft worker")? {
             match capture_rx.recv_timeout(Duration::from_secs(2)) {
                 Ok(Ok(path)) => {
-                    progress(Progress { percent: 100, message: "Full registered Minecraft block/model registry ready".into() });
+                    progress(Progress { percent: 100, message: "Runtime ready".into() });
                     return Ok(CacheResult { fingerprint, registry_path: path, reused: false });
                 }
                 Ok(Err(error)) => {
@@ -193,7 +194,7 @@ where
 
         if Instant::now() >= deadline {
             stop_child(&mut child);
-            bail!("runtime model-cache generation timed out after 10 minutes");
+            bail!("runtime cache timed out after 10 minutes");
         }
         thread::sleep(Duration::from_millis(150));
     }
@@ -239,7 +240,7 @@ where
     progress(bridge_compat::CompatProgress {
         percent: 36,
         stage: "Preparing worker".into(),
-        detail: format!("Copied {count} installed mod JAR(s) into disposable runtime"),
+        detail: format!("{count} mod JARs"),
     });
 
     if let Some(instance) = mods_path.parent() {
@@ -290,9 +291,24 @@ fn start_gradle_worker(workspace: &Path, log_path: &Path, java_home: &Path) -> R
     command.env("MINESPORT_BRIDGE_PORT", "25590");
     command.env("MINESPORT_BRIDGE_MODE", "all");
     command.env("MINESPORT_BRIDGE_WORKER", "1");
-    command.env("GRADLE_USER_HOME", runtime::cache_root().join("gradle"));
+    command.env("GRADLE_USER_HOME", gradle_user_home());
     hide_console_window(&mut command);
     command.spawn().with_context(|| format!("start isolated Fabric/Loom runtime worker with {}", java_home.display()))
+}
+
+fn gradle_user_home() -> PathBuf {
+    if let Some(path) = env::var_os("GRADLE_USER_HOME").map(PathBuf::from).filter(|path| path.is_dir()) {
+        return path;
+    }
+    for home_var in ["USERPROFILE", "HOME"] {
+        if let Some(home) = env::var_os(home_var).map(PathBuf::from) {
+            let candidate = home.join(".gradle");
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+    }
+    runtime::cache_root().join("gradle")
 }
 
 fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
