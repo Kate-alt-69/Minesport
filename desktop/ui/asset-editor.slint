@@ -1,0 +1,65 @@
+import { Button, ComboBox } from "std-widgets.slint";
+
+export component AssetEditor inherits Rectangle {
+    in property <string> title;
+    in property <string> help;
+    in property <[string]> items;
+    in-out property <int> selected-index: 0;
+    in property <bool> allow-folder: true;
+    in property <bool> allow-file: false;
+    callback add-file();
+    callback add-folder();
+    callback move-selected(int);
+    callback remove-selected();
+
+    background: transparent;
+    height: body.preferred-height;
+
+    body := VerticalLayout {
+        spacing: 6px;
+        Text {
+            text: root.title;
+            color: #c8d2da;
+            font-size: 10px;
+            font-weight: 700;
+        }
+        if root.items.length == 0: Text {
+            text: "No paths configured.";
+            color: #728393;
+            font-size: 10px;
+        }
+        if root.items.length > 0: ComboBox {
+            model: root.items;
+            current-index <=> root.selected-index;
+        }
+        if root.items.length > 0: HorizontalLayout {
+            spacing: 4px;
+            Button {
+                text: "↑";
+                enabled: root.selected-index > 0;
+                clicked => { root.move-selected(-1); }
+            }
+            Button {
+                text: "↓";
+                enabled: root.selected-index >= 0 && root.selected-index < root.items.length - 1;
+                clicked => { root.move-selected(1); }
+            }
+            Button {
+                text: "REMOVE";
+                enabled: root.selected-index >= 0 && root.selected-index < root.items.length;
+                clicked => { root.remove-selected(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 4px;
+            if root.allow-folder: Button { text: "ADD FOLDER…"; clicked => { root.add-folder(); } }
+            if root.allow-file: Button { text: "ADD ZIP…"; clicked => { root.add-file(); } }
+        }
+        Text {
+            text: root.help;
+            color: #718291;
+            font-size: 9px;
+            wrap: word-wrap;
+        }
+    }
+}
