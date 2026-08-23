@@ -3,6 +3,7 @@
 mod app;
 mod blender;
 mod bridge_compat;
+mod diagnostics;
 mod ipc;
 mod launcher;
 mod preview;
