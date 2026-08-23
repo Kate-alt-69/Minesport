@@ -14,7 +14,37 @@ component RailButton inherits Rectangle {
     border-width: active ? 2px : 0px;
     border-color: #4e8a3a;
 
-    Text {
+    if root.tip == "World": Image {
+        x: 12px; y: 12px; width: 24px; height: 24px;
+        source: @image-url("../assets/fyne-theme-icons/folder-open.svg");
+        image-fit: contain;
+        colorize: root.active ? #f2f5f1 : #939d98;
+    }
+    if root.tip == "Export": Image {
+        x: 12px; y: 12px; width: 24px; height: 24px;
+        source: @image-url("../assets/fyne-theme-icons/download.svg");
+        image-fit: contain;
+        colorize: root.active ? #f2f5f1 : #939d98;
+    }
+    if root.tip == "Blender": Image {
+        x: 12px; y: 12px; width: 24px; height: 24px;
+        source: @image-url("../assets/fyne-theme-icons/media-video.svg");
+        image-fit: contain;
+        colorize: root.active ? #f2f5f1 : #939d98;
+    }
+    if root.tip == "Tasks": Image {
+        x: 12px; y: 12px; width: 24px; height: 24px;
+        source: @image-url("../assets/fyne-theme-icons/history.svg");
+        image-fit: contain;
+        colorize: root.active ? #f2f5f1 : #939d98;
+    }
+    if root.tip == "Settings": Image {
+        x: 12px; y: 12px; width: 24px; height: 24px;
+        source: @image-url("../assets/fyne-theme-icons/settings.svg");
+        image-fit: contain;
+        colorize: root.active ? #f2f5f1 : #939d98;
+    }
+    if root.tip != "World" && root.tip != "Export" && root.tip != "Blender" && root.tip != "Tasks" && root.tip != "Settings": Text {
         text: root.glyph;
         color: root.active ? #f2f5f1 : #939d98;
         font-size: 18px;
@@ -397,7 +427,7 @@ export component MainWindow inherits Window {
     app-focus := FocusScope {
         capture-key-pressed(event) => {
             if (root.blender-prompt-visible || root.settings-visible || root.debug-console-visible) {
-                return accept;
+                return reject;
             }
             if (event.text == Key.F6 && root.viewport-mode == 0) {
                 map-view.fit();
