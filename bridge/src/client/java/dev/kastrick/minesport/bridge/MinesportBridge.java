@@ -20,6 +20,8 @@ import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
 
 public class MinesportBridge implements ClientModInitializer {
 
+    private static final int EXTRACTION_BATCH_SIZE = 128;
+
     @Override
     public void onInitializeClient() {
         System.out.println("[MinesportBridge] Initializing runtime registry worker...");
@@ -97,25 +99,38 @@ public class MinesportBridge implements ClientModInitializer {
                 getLoadedMods()
             ));
 
-            System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " registered block types...");
-            for (Block block : allBlocks) {
-                ResourceLocation id = BuiltInRegistries.BLOCK.getKey(block);
-                String blockId = id.toString();
-                String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
-                String loaderType = vanillaMapping != null
-                    ? "polymer"
-                    : (id.getNamespace().equals("minecraft") ? "vanilla" : "fabric");
+            System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " registered block types from baked client models...");
+            for (int start = 0; start < allBlocks.size(); start += EXTRACTION_BATCH_SIZE) {
+                int end = Math.min(start + EXTRACTION_BATCH_SIZE, allBlocks.size());
+                List<Block> batch = new ArrayList<>(allBlocks.subList(start, end));
+                List<List<BlockVariant>> extracted = extractBatchSafe(client, batch);
 
-                // Geometry contains texture IDs only. Minesport resolves the actual
-                // PNG/JPEG from resource packs, the mod JAR, local vanilla assets,
-                // Mojang Piston recovery, or the normal missing-texture fallback.
-                List<BlockVariant> variants = extractSafe(client, block);
-                sender.send(TYPE_BLOCK_ENTRY, new BlockEntry(blockId, vanillaMapping, loaderType, variants));
+                for (int index = 0; index < batch.size(); index++) {
+                    Block block = batch.get(index);
+                    ResourceLocation id = BuiltInRegistries.BLOCK.getKey(block);
+                    if (id == null) continue;
+                    String blockId = id.toString();
+                    String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
+                    String loaderType = vanillaMapping != null
+                        ? "polymer"
+                        : (id.getNamespace().equals("minecraft") ? "vanilla" : "fabric");
 
-                List<LightState> lightStates = extractLightStates(block);
-                if (!lightStates.isEmpty()) {
-                    sender.send(TYPE_BLOCK_LIGHT, new BlockLightEntry(blockId, lightStates));
+                    // Geometry comes straight from Minecraft's already-baked
+                    // client models. Batching only removes thousands of tiny
+                    // client-thread execute/future round-trips; it does not
+                    // change the model source or geometry fidelity.
+                    List<BlockVariant> variants = index < extracted.size()
+                        ? extracted.get(index)
+                        : List.of();
+                    sender.send(TYPE_BLOCK_ENTRY, new BlockEntry(blockId, vanillaMapping, loaderType, variants));
+
+                    List<LightState> lightStates = extractLightStates(block);
+                    if (!lightStates.isEmpty()) {
+                        sender.send(TYPE_BLOCK_LIGHT, new BlockLightEntry(blockId, lightStates));
+                    }
                 }
+
+                System.out.println("[MinesportBridge] Baked model extraction " + end + "/" + allBlocks.size());
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
@@ -130,19 +145,25 @@ public class MinesportBridge implements ClientModInitializer {
         }
     }
 
-    private List<BlockVariant> extractSafe(Minecraft client, Block block) {
+    private List<List<BlockVariant>> extractBatchSafe(Minecraft client, List<Block> blocks) {
         try {
-            var future = new java.util.concurrent.CompletableFuture<List<BlockVariant>>();
+            var future = new java.util.concurrent.CompletableFuture<List<List<BlockVariant>>>();
             client.execute(() -> {
-                try {
-                    future.complete(BlockGeometryExtractor.extractBlock(block, client));
-                } catch (Exception e) {
-                    future.complete(List.of());
+                var result = new ArrayList<List<BlockVariant>>(blocks.size());
+                for (Block block : blocks) {
+                    try {
+                        result.add(BlockGeometryExtractor.extractBlock(block, client));
+                    } catch (Exception ignored) {
+                        result.add(List.of());
+                    }
                 }
+                future.complete(result);
             });
-            return future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            return future.get(60, java.util.concurrent.TimeUnit.SECONDS);
         } catch (Exception e) {
-            return List.of();
+            var fallback = new ArrayList<List<BlockVariant>>(blocks.size());
+            for (int i = 0; i < blocks.size(); i++) fallback.add(List.of());
+            return fallback;
         }
     }
 
