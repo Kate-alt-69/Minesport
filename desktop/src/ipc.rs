@@ -74,11 +74,6 @@ struct RequestCorrelation {
     trace_id: String,
 }
 
-struct RequestLifecycle {
-    correlation: RequestCorrelation,
-    root_operation: Option<diagnostics::Operation>,
-}
-
 /// UI-side handle to the isolated Minesport backend worker.
 ///
 /// The Slint process never owns Java directly. It starts another copy of the
@@ -279,16 +274,10 @@ fn request_operation_id(command: &str) -> &'static str {
     }
 }
 
-fn root_operation_id(command: &str) -> Option<&'static str> {
-    match command {
-        "export" => Some("WorldExportLifecycle"),
-        "heightmap" => Some("WorldHeightmapLifecycle"),
-        "listBlocks" => Some("WorldBlockListLifecycle"),
-        _ => None,
-    }
-}
-
-fn correlation_from_request_value(value: &Value) -> RequestCorrelation {
+fn correlation_from_request_line(line: &str) -> RequestCorrelation {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return RequestCorrelation::default();
+    };
     RequestCorrelation {
         operation_id: value
             .get("operationId")
@@ -301,99 +290,6 @@ fn correlation_from_request_value(value: &Value) -> RequestCorrelation {
             .unwrap_or_default()
             .to_string(),
     }
-}
-
-fn correlation_from_request_line(line: &str) -> RequestCorrelation {
-    let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return RequestCorrelation::default();
-    };
-    correlation_from_request_value(&value)
-}
-
-fn lifecycle_from_request_line(line: &str) -> RequestLifecycle {
-    let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return RequestLifecycle {
-            correlation: RequestCorrelation::default(),
-            root_operation: None,
-        };
-    };
-    let correlation = correlation_from_request_value(&value);
-    let command = value.get("command").and_then(Value::as_str).unwrap_or_default();
-    let Some(operation_id) = root_operation_id(command) else {
-        return RequestLifecycle { correlation, root_operation: None };
-    };
-
-    let logger = diagnostics::Logger::new("WORLD").child("ROOT");
-    let mut operation = logger
-        .operation(operation_id)
-        .field("command", command);
-    if let Some(world) = value.get("worldPath").and_then(Value::as_str).filter(|value| !value.is_empty()) {
-        operation = operation.field("world", world);
-    }
-    if let Some(output) = value.get("outputPath").and_then(Value::as_str).filter(|value| !value.is_empty()) {
-        operation = operation.field("output", output);
-    }
-    if !correlation.operation_id.is_empty() {
-        operation = operation.field("ipc_operation_id", &correlation.operation_id);
-    }
-    if !correlation.trace_id.is_empty() {
-        operation = operation.field("ipc_trace_id", &correlation.trace_id);
-    }
-    operation.event(
-        "WorldOperationDispatchedToJava",
-        "world operation entered the Java engine boundary",
-        &[],
-    );
-    RequestLifecycle { correlation, root_operation: Some(operation) }
-}
-
-fn finish_request_lifecycle(lifecycle: RequestLifecycle, response_line: &str) {
-    let Some(operation) = lifecycle.root_operation else { return; };
-    let Ok(value) = serde_json::from_str::<Value>(response_line) else {
-        operation.failure(
-            "world operation returned an unreadable terminal response",
-            &[("response", response_line.to_string())],
-        );
-        return;
-    };
-    let kind = value.get("type").and_then(Value::as_str).unwrap_or("unknown");
-    if kind == "error" {
-        let message = value.get("message").and_then(Value::as_str).unwrap_or("Java engine operation failed");
-        operation.failure(message, &[("response_type", kind.to_string())]);
-        return;
-    }
-
-    let mut fields = vec![("response_type", kind.to_string())];
-    match kind {
-        "done" => {
-            if let Some(output) = value.get("output").and_then(Value::as_str).filter(|value| !value.is_empty()) {
-                fields.push(("output", output.to_string()));
-            }
-            for key in ["blockCount", "quadCount", "vertexCount"] {
-                if let Some(number) = value.get(key).and_then(Value::as_i64) {
-                    fields.push((key.to_string(), number.to_string()));
-                }
-            }
-        }
-        "heightmap" => {
-            for key in ["minX", "minZ", "maxX", "maxZ", "scale"] {
-                if let Some(number) = value.get(key).and_then(Value::as_i64) {
-                    fields.push((key.to_string(), number.to_string()));
-                }
-            }
-        }
-        "blocksReady" => {
-            if let Some(count) = value.get("count").and_then(Value::as_i64) {
-                fields.push(("count", count.to_string()));
-            }
-            if let Some(file) = value.get("file").and_then(Value::as_str).filter(|value| !value.is_empty()) {
-                fields.push(("file", file.to_string()));
-            }
-        }
-        _ => {}
-    }
-    let field_refs = fields.iter().map(|(key, value)| (key.as_str(), value.clone())).collect::<Vec<_>>();
-    operation.success("world operation completed at the Java boundary", &field_refs);
 }
 
 fn annotate_java_response(line: &str, correlation: &RequestCorrelation) -> (String, bool) {
@@ -549,7 +445,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     let mut java_stdin = child.stdin.take().context("open Java engine stdin")?;
     let java_stdout = child.stdout.take().context("open Java engine stdout")?;
     let java_stderr = child.stderr.take().context("open Java engine stderr")?;
-    let lifecycles = Arc::new(Mutex::new(VecDeque::<RequestLifecycle>::new()));
+    let correlations = Arc::new(Mutex::new(VecDeque::<RequestCorrelation>::new()));
 
     {
         let mut output = std::io::stdout().lock();
@@ -561,28 +457,24 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         output.flush().context("flush Java engine announcement")?;
     }
 
-    let stdout_lifecycles = lifecycles.clone();
+    let stdout_correlations = correlations.clone();
     let stdout_relay = thread::spawn(move || -> std::io::Result<()> {
         let reader = BufReader::new(java_stdout);
         let stdout = std::io::stdout();
         let mut output = stdout.lock();
         for line in reader.lines() {
             let line = line?;
-            let correlation = stdout_lifecycles
+            let correlation = stdout_correlations
                 .lock()
                 .ok()
-                .and_then(|queue| queue.front().map(|request| request.correlation.clone()))
+                .and_then(|queue| queue.front().cloned())
                 .unwrap_or_default();
             let (line, terminal) = annotate_java_response(&line, &correlation);
             writeln!(output, "{line}")?;
             output.flush()?;
             if terminal {
-                let lifecycle = stdout_lifecycles
-                    .lock()
-                    .ok()
-                    .and_then(|mut queue| queue.pop_front());
-                if let Some(lifecycle) = lifecycle {
-                    finish_request_lifecycle(lifecycle, &line);
+                if let Ok(mut queue) = stdout_correlations.lock() {
+                    let _ = queue.pop_front();
                 }
             }
         }
@@ -601,13 +493,13 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         Ok(())
     });
 
-    let stdin_lifecycles = lifecycles;
+    let stdin_correlations = correlations;
     thread::spawn(move || {
         let reader = BufReader::new(std::io::stdin());
         for line in reader.lines() {
             let Ok(line) = line else { break; };
-            if let Ok(mut queue) = stdin_lifecycles.lock() {
-                queue.push_back(lifecycle_from_request_line(&line));
+            if let Ok(mut queue) = stdin_correlations.lock() {
+                queue.push_back(correlation_from_request_line(&line));
             }
             if java_stdin.write_all(line.as_bytes()).is_err() { break; }
             if java_stdin.write_all(b"\n").is_err() { break; }
@@ -939,14 +831,6 @@ mod tests {
         assert_eq!(request_operation_id("ping"), "IpcRequestPingBackend");
         assert_eq!(request_operation_id("quit"), "IpcRequestQuitBackend");
         assert_eq!(request_operation_id("mystery"), "IpcRequestDispatchUnknownCommand");
-    }
-
-    #[test]
-    fn root_world_operation_ids_are_hardcoded_and_searchable() {
-        assert_eq!(root_operation_id("export"), Some("WorldExportLifecycle"));
-        assert_eq!(root_operation_id("heightmap"), Some("WorldHeightmapLifecycle"));
-        assert_eq!(root_operation_id("listBlocks"), Some("WorldBlockListLifecycle"));
-        assert_eq!(root_operation_id("ping"), None);
     }
 
     #[test]
