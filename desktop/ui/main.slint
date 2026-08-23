@@ -173,6 +173,7 @@ export component MainWindow inherits Window {
     callback docs-navigate(int);
     callback docs-open-github();
     callback docs-open-video();
+    callback settings-changed();
 
     VerticalLayout {
         spacing: 0px;
@@ -294,24 +295,24 @@ export component MainWindow inherits Window {
                             HintText { text: "Presets configure the live controls below. You can still change any setting afterward."; }
                             HorizontalLayout {
                                 spacing: 4px;
-                                Button { text: "ANIM"; clicked => { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.blender-export = true; } }
-                                Button { text: "LIGHT"; clicked => { root.export-format-index = 0; root.export-mode-index = 0; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = true; root.blender-export = true; } }
-                                Button { text: "RAW"; clicked => { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = false; root.face-culling = false; root.flatter-enabled = false; root.hidden-culling = false; root.blender-export = false; } }
-                                Button { text: "MODDED"; clicked => { root.export-format-index = 0; root.export-mode-index = 0; root.optimize = false; root.face-culling = true; root.flatter-enabled = false; root.hidden-culling = false; root.blender-export = true; } }
+                                Button { text: "ANIM"; clicked => { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.blender-export = true; root.settings-changed(); } }
+                                Button { text: "LIGHT"; clicked => { root.export-format-index = 0; root.export-mode-index = 0; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = true; root.blender-export = true; root.settings-changed(); } }
+                                Button { text: "RAW"; clicked => { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = false; root.face-culling = false; root.flatter-enabled = false; root.hidden-culling = false; root.blender-export = false; root.settings-changed(); } }
+                                Button { text: "MODDED"; clicked => { root.export-format-index = 0; root.export-mode-index = 0; root.optimize = false; root.face-culling = true; root.flatter-enabled = false; root.hidden-culling = false; root.blender-export = true; root.settings-changed(); } }
                             }
                             SectionTitle { label: "OUTPUT"; }
                             Text { text: "Name"; color: #8191a0; font-size: 10px; }
-                            LineEdit { text <=> root.export-name; }
+                            LineEdit { text <=> root.export-name; accepted => { root.settings-changed(); } }
                             Text { text: "Format"; color: #8191a0; font-size: 10px; }
-                            ComboBox { model: ["glTF 2.0", "OBJ + MTL"]; current-index <=> root.export-format-index; }
+                            ComboBox { model: ["glTF 2.0", "OBJ + MTL"]; current-index <=> root.export-format-index; selected(_) => { root.settings-changed(); } }
                             Text { text: "Objects"; color: #8191a0; font-size: 10px; }
-                            ComboBox { model: ["Grouped", "Individual blocks", "Merged"]; current-index <=> root.export-mode-index; }
-                            CheckBox { text: "Optimize mesh output"; checked <=> root.optimize; }
+                            ComboBox { model: ["Grouped", "Individual blocks", "Merged"]; current-index <=> root.export-mode-index; selected(_) => { root.settings-changed(); } }
+                            CheckBox { text: "Optimize mesh output"; checked <=> root.optimize; toggled => { root.settings-changed(); } }
                             Text { text: root.output-path == "" ? "~/Minesport_Exports" : root.output-path; color: #758696; font-size: 10px; wrap: word-wrap; }
                             Button { text: "CHOOSE OUTPUT FOLDER…"; clicked => { root.pick-output(); } }
                             SectionTitle { label: "OPTIMIZATION"; }
                             Text { text: "Face culling " + (root.face-culling ? "ON" : "OFF") + " · FLATTER " + (root.flatter-enabled ? "ON" : "OFF") + " · hidden culling " + (root.hidden-culling ? "ON" : "OFF"); color: #8da0af; font-size: 10px; wrap: word-wrap; }
-                            Button { text: "APPLY SAFE OPTIMIZATION"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; } }
+                            Button { text: "APPLY SAFE OPTIMIZATION"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.settings-changed(); } }
                             SectionTitle { label: "ANALYSIS"; }
                             Text { text: root.preflight-summary; color: #8da0af; font-size: 10px; wrap: word-wrap; }
                             Button { text: "RUN PREFLIGHT"; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.run-preflight(); } }
@@ -326,10 +327,10 @@ export component MainWindow inherits Window {
                             padding: 14px;
                             spacing: 9px;
                             SectionTitle { label: "WORLD INSPECTOR · BLENDER"; }
-                            CheckBox { text: "Blender integration"; checked <=> root.blender-export; }
+                            CheckBox { text: "Blender integration"; checked <=> root.blender-export; toggled => { root.settings-changed(); } }
                             Button { text: "INSTALL / REPAIR ADD-ON"; enabled: !root.task-active; clicked => { root.install-blender-translator(); } }
                             Text { text: "Animation"; color: #8191a0; font-size: 10px; }
-                            ComboBox { model: ["Animate export", "Animate static"]; current-index <=> root.blender-animation-index; }
+                            ComboBox { model: ["Animate export", "Animate static"]; current-index <=> root.blender-animation-index; selected(_) => { root.settings-changed(); } }
                             HintText { text: "Animate export prepares dynamic state descriptors plus animated textures. Animate static keeps interactable state fixed while preserving continuously animated textures."; }
                             HintText { text: "For OBJ, use Minesport's translator import path in Blender. Blender's stock Wavefront importer bypasses Minesport metadata."; }
                             SectionTitle { label: "MINECRAFT DATA"; }
@@ -374,20 +375,20 @@ export component MainWindow inherits Window {
                                 padding: 14px;
                                 spacing: 9px;
                                 SectionTitle { label: "GEOMETRY"; }
-                                CheckBox { text: "Face culling"; checked <=> root.face-culling; }
+                                CheckBox { text: "Face culling"; checked <=> root.face-culling; toggled => { root.settings-changed(); } }
                                 HintText { text: "Remove a face only when neighboring geometry and its resolved texture prove the face is fully hidden."; }
-                                CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; }
-                                ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; }
+                                CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; toggled => { root.settings-changed(); } }
+                                ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; selected(_) => { root.settings-changed(); } }
                                 HintText { text: "Smaller FLATTER cells rebuild locally; larger cells create fewer objects and broader greedy surfaces."; }
-                                CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; }
-                                CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; }
+                                CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; toggled => { root.settings-changed(); } }
+                                CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; toggled => { root.settings-changed(); } }
                             }
                             if root.settings-page == 1: VerticalLayout {
                                 padding: 14px;
                                 spacing: 9px;
                                 SectionTitle { label: "PIPELINE"; }
-                                CheckBox { text: "Blender integration"; checked <=> root.blender-export; }
-                                CheckBox { text: "Debug engine diagnostics"; checked <=> root.debug-mode; }
+                                CheckBox { text: "Blender integration"; checked <=> root.blender-export; toggled => { root.settings-changed(); } }
+                                CheckBox { text: "Debug engine diagnostics"; checked <=> root.debug-mode; toggled => { root.settings-changed(); } }
                                 Text { text: "Full runtime model registry"; color: #c5d0d9; font-size: 11px; font-weight: 700; }
                                 Text { text: root.runtime-cache-status; color: #7f91a3; font-size: 10px; wrap: word-wrap; }
                                 HintText { text: "The cache is instance-wide: Minecraft version + loader + exact mod set. Selection bounds never limit registry capture."; }
