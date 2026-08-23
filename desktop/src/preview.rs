@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use std::{collections::HashMap, fs::File, path::Path, sync::Arc};
+use std::{collections::{HashMap, HashSet, VecDeque}, fs::File, path::Path, sync::Arc};
 
 pub const WIDTH: u32 = 1200;
 pub const HEIGHT: u32 = 720;
@@ -36,6 +36,7 @@ pub struct PreviewPickMap {
     indices: Arc<Vec<i32>>,
     hits: Arc<Vec<PreviewPick>>,
     by_id: Arc<HashMap<String, Vec<[i32; 3]>>>,
+    occupied: Arc<HashSet<[i32; 3]>>,
 }
 
 impl PreviewPickMap {
@@ -53,6 +54,38 @@ impl PreviewPickMap {
 
     pub fn coordinates_for_id(&self, id: &str) -> Vec<[i32; 3]> {
         self.by_id.get(id).cloned().unwrap_or_default()
+    }
+
+    /// Fyne parity: select face-connected solid blocks without crossing air.
+    /// Block IDs are intentionally ignored, so a touching glass block and
+    /// stone block are part of the same joined structure just like the old
+    /// native viewer's FloodFill selection.
+    pub fn joined_blocks(&self, start: [i32; 3], max_blocks: usize) -> Vec<[i32; 3]> {
+        if max_blocks == 0 || !self.occupied.contains(&start) {
+            return Vec::new();
+        }
+        const OFFSETS: [[i32; 3]; 6] = [
+            [1, 0, 0], [-1, 0, 0],
+            [0, 1, 0], [0, -1, 0],
+            [0, 0, 1], [0, 0, -1],
+        ];
+        let mut queue = VecDeque::from([start]);
+        let mut seen = HashSet::from([start]);
+        let mut result = Vec::with_capacity(max_blocks.min(4096));
+        while let Some(current) = queue.pop_front() {
+            result.push(current);
+            if result.len() >= max_blocks { break; }
+            for offset in OFFSETS {
+                let Some(x) = current[0].checked_add(offset[0]) else { continue; };
+                let Some(y) = current[1].checked_add(offset[1]) else { continue; };
+                let Some(z) = current[2].checked_add(offset[2]) else { continue; };
+                let next = [x, y, z];
+                if self.occupied.contains(&next) && seen.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        result
     }
 
     pub fn dimensions(&self) -> (u32, u32) {
@@ -80,11 +113,14 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
 
     let block_count = blocks.len();
     let mut by_id: HashMap<String, Vec<[i32; 3]>> = HashMap::new();
+    let mut occupied = HashSet::with_capacity(block_count);
     for block in &blocks {
+        let coordinate = [block.x, block.y, block.z];
+        occupied.insert(coordinate);
         by_id
             .entry(normalized_id(&block.id))
             .or_default()
-            .push([block.x, block.y, block.z]);
+            .push(coordinate);
     }
 
     blocks.sort_by_key(|block| (block.x + block.z, block.y, block.x));
@@ -167,6 +203,7 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
             indices: Arc::new(hit_indices),
             hits: Arc::new(hits),
             by_id: Arc::new(by_id),
+            occupied: Arc::new(occupied),
         },
     })
 }
@@ -269,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_preview_can_pick_a_block_and_group_its_model_id() {
+    fn rendered_preview_can_pick_group_and_flood_joined_solids() {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir().join(format!("minesport-preview-{}-{stamp}.json", std::process::id()));
         fs::write(
@@ -277,12 +314,17 @@ mod tests {
             r#"[
                 {"x":0,"y":64,"z":0,"id":"minecraft:stone","r":120,"g":120,"b":120},
                 {"x":1,"y":64,"z":0,"id":"minecraft:stone","r":120,"g":120,"b":120},
-                {"x":0,"y":65,"z":0,"id":"minecraft:glass","r":190,"g":220,"b":230}
+                {"x":0,"y":65,"z":0,"id":"minecraft:glass","r":190,"g":220,"b":230},
+                {"x":8,"y":64,"z":8,"id":"minecraft:stone","r":120,"g":120,"b":120}
             ]"#,
         ).unwrap();
         let rendered = render_file(&path).unwrap();
-        assert_eq!(rendered.block_count, 3);
-        assert_eq!(rendered.pick_map.coordinates_for_id("minecraft:stone").len(), 2);
+        assert_eq!(rendered.block_count, 4);
+        assert_eq!(rendered.pick_map.coordinates_for_id("minecraft:stone").len(), 3);
+        let mut joined = rendered.pick_map.joined_blocks([0, 64, 0], 64);
+        joined.sort_unstable();
+        assert_eq!(joined, vec![[0, 64, 0], [0, 65, 0], [1, 64, 0]]);
+        assert_eq!(rendered.pick_map.joined_blocks([0, 64, 0], 2).len(), 2);
         assert_eq!(rendered.pick_map.dimensions(), (WIDTH, HEIGHT));
         assert!(rendered.pick_map.indices.iter().any(|value| *value >= 0));
         let picked = rendered.pick_map.indices.iter().find(|value| **value >= 0).copied().unwrap();
