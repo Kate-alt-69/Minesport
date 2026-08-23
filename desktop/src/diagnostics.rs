@@ -14,7 +14,7 @@ use std::{
 static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 static OPERATIONS_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 static DISPLAY_LOG: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
-static OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const MAX_DISPLAY_LINES: usize = 4096;
 
 #[derive(Debug, Clone, Copy)]
@@ -38,8 +38,9 @@ impl Level {
 
 /// RBE-style named logger with Minesport-specific operational events.
 ///
-/// Human-readable lines keep module/event names visible while the matching
-/// JSONL record preserves fields as structured data for diagnostics tooling.
+/// `operation_id` values are deliberately hardcoded string literals at the
+/// operation call site. That makes a log ID directly searchable in source.
+/// A generated `trace_id` is separate and identifies one runtime invocation.
 #[derive(Debug, Clone)]
 pub struct Logger {
     module: String,
@@ -55,63 +56,69 @@ impl Logger {
     }
 
     pub fn debug(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
-        emit(Level::Debug, &self.module, event, None, &message.to_string(), fields);
+        emit_operational(Level::Debug, &self.module, event, None, None, &message.to_string(), fields);
     }
 
     pub fn info(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
-        emit(Level::Info, &self.module, event, None, &message.to_string(), fields);
+        emit_operational(Level::Info, &self.module, event, None, None, &message.to_string(), fields);
     }
 
     pub fn warn(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
-        emit(Level::Warn, &self.module, event, None, &message.to_string(), fields);
+        emit_operational(Level::Warn, &self.module, event, None, None, &message.to_string(), fields);
     }
 
     pub fn error(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
-        emit(Level::Error, &self.module, event, None, &message.to_string(), fields);
+        emit_operational(Level::Error, &self.module, event, None, None, &message.to_string(), fields);
     }
 
-    pub fn operation(&self, name: impl Into<String>) -> Operation {
-        Operation::new(self.clone(), name.into())
+    /// Start one traced operation.
+    ///
+    /// Keep `operation_id` as a literal at the call site, for example:
+    /// `logger.operation("ExportProgressResolveTextureFile")`.
+    pub fn operation(&self, operation_id: &'static str) -> Operation {
+        Operation::new(self.clone(), operation_id)
     }
 }
 
-/// One end-to-end operation. Start/finish records share an operation ID and
-/// completion records include duration and outcome. Dropped unfinished spans
-/// are recorded as abandoned, which makes early returns/crashes visible.
 #[derive(Debug)]
 pub struct Operation {
     logger: Logger,
-    id: String,
-    name: String,
+    operation_id: &'static str,
+    trace_id: String,
     started: Instant,
     base_fields: Vec<(String, String)>,
     finished: bool,
 }
 
 impl Operation {
-    fn new(logger: Logger, name: String) -> Self {
-        let sequence = OPERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let id = format!("{}-{sequence:06}", std::process::id());
-        emit(
+    fn new(logger: Logger, operation_id: &'static str) -> Self {
+        let sequence = TRACE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let trace_id = format!("{}-{sequence:06}", std::process::id());
+        emit_operational(
             Level::Info,
             &logger.module,
-            "operation.start",
-            Some(&id),
-            &name,
-            &[("operation", name.clone())],
+            "OperationStart",
+            Some(operation_id),
+            Some(&trace_id),
+            "operation started",
+            &[],
         );
         Self {
             logger,
-            id,
-            name,
+            operation_id,
+            trace_id,
             started: Instant::now(),
             base_fields: Vec::new(),
             finished: false,
         }
     }
 
-    pub fn id(&self) -> &str {
-        &self.id
+    pub fn operation_id(&self) -> &'static str {
+        self.operation_id
+    }
+
+    pub fn trace_id(&self) -> &str {
+        &self.trace_id
     }
 
     pub fn field(mut self, key: impl Into<String>, value: impl Display) -> Self {
@@ -121,11 +128,12 @@ impl Operation {
 
     pub fn event(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
         let combined = self.combined_fields(fields);
-        emit_owned(
+        emit_operational_owned(
             Level::Info,
             &self.logger.module,
             event,
-            Some(&self.id),
+            Some(self.operation_id),
+            Some(&self.trace_id),
             &message.to_string(),
             &combined,
         );
@@ -133,11 +141,12 @@ impl Operation {
 
     pub fn warn(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
         let combined = self.combined_fields(fields);
-        emit_owned(
+        emit_operational_owned(
             Level::Warn,
             &self.logger.module,
             event,
-            Some(&self.id),
+            Some(self.operation_id),
+            Some(&self.trace_id),
             &message.to_string(),
             &combined,
         );
@@ -161,14 +170,14 @@ impl Operation {
         }
         self.finished = true;
         let mut combined = self.combined_fields(fields);
-        combined.push(("operation".to_string(), self.name.clone()));
         combined.push(("outcome".to_string(), outcome.to_string()));
         combined.push(("duration_ms".to_string(), elapsed_millis(self.started.elapsed()).to_string()));
-        emit_owned(
+        emit_operational_owned(
             level,
             &self.logger.module,
-            "operation.finish",
-            Some(&self.id),
+            "OperationFinish",
+            Some(self.operation_id),
+            Some(&self.trace_id),
             &message,
             &combined,
         );
@@ -188,14 +197,14 @@ impl Drop for Operation {
         }
         self.finished = true;
         let mut fields = self.base_fields.clone();
-        fields.push(("operation".to_string(), self.name.clone()));
         fields.push(("outcome".to_string(), "abandoned".to_string()));
         fields.push(("duration_ms".to_string(), elapsed_millis(self.started.elapsed()).to_string()));
-        emit_owned(
+        emit_operational_owned(
             Level::Warn,
             &self.logger.module,
-            "operation.finish",
-            Some(&self.id),
+            "OperationFinish",
+            Some(self.operation_id),
+            Some(&self.trace_id),
             "operation left scope without an explicit outcome",
             &fields,
         );
@@ -239,7 +248,7 @@ pub fn initialize() -> Result<PathBuf> {
     let _ = display_log();
 
     Logger::new("DESKTOP").info(
-        "session.start",
+        "DesktopSessionStart",
         "Minesport 0.2.0 Rust/Slint session started",
         &[
             ("pid", std::process::id().to_string()),
@@ -249,9 +258,10 @@ pub fn initialize() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Compatibility entry point for call sites not yet migrated to a named logger.
+/// Compatibility/raw log entry for verbose backend text and call sites not yet
+/// migrated to structured operations. Raw entries stay out of operations JSONL.
 pub fn append(message: &str) {
-    Logger::new("APP").info("message", message, &[]);
+    emit_human(Level::Info, "APP", "RawMessage", None, None, message, &[]);
 }
 
 pub fn display_text() -> String {
@@ -267,57 +277,30 @@ pub fn clear_display() {
     }
 }
 
-fn emit(
+fn emit_operational(
     level: Level,
     module: &str,
     event: &str,
     operation_id: Option<&str>,
+    trace_id: Option<&str>,
     message: &str,
     fields: &[(&str, String)],
 ) {
     let owned = fields.iter().map(|(key, value)| ((*key).to_string(), value.clone())).collect::<Vec<_>>();
-    emit_owned(level, module, event, operation_id, message, &owned);
+    emit_operational_owned(level, module, event, operation_id, trace_id, message, &owned);
 }
 
-fn emit_owned(
+fn emit_operational_owned(
     level: Level,
     module: &str,
     event: &str,
     operation_id: Option<&str>,
+    trace_id: Option<&str>,
     message: &str,
     fields: &[(String, String)],
 ) {
-    let now = SystemTime::now();
-    let epoch_ms = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-    let display_stamp = local_clock_stamp(now);
-    let repaired = repair_common_mojibake(message);
-    let rendered_fields = fields
-        .iter()
-        .map(|(key, value)| format!("{key}={}", quote_human_value(&repair_common_mojibake(value))))
-        .collect::<Vec<_>>();
-    let operation_text = operation_id.map(|id| format!(" op={id}")).unwrap_or_default();
-    let suffix = if rendered_fields.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", rendered_fields.join(" "))
-    };
-    let human = format!(
-        "{} [{}] [{}] {}{}: {}{}",
-        level.as_str(),
-        module,
-        event,
-        operation_text,
-        "",
-        repaired,
-        suffix,
-    );
-
-    if let Some(lock) = LOG_FILE.get() {
-        if let Ok(mut file) = lock.lock() {
-            let _ = writeln!(file, "{epoch_ms}  {human}");
-            let _ = file.flush();
-        }
-    }
+    let (epoch_ms, display_stamp, repaired, human) =
+        emit_human(level, module, event, operation_id, trace_id, message, fields);
 
     if let Some(lock) = OPERATIONS_FILE.get() {
         if let Ok(mut file) = lock.lock() {
@@ -332,6 +315,7 @@ fn emit_owned(
                 "module": module,
                 "event": event,
                 "operation_id": operation_id,
+                "trace_id": trace_id,
                 "message": repaired,
                 "fields": json_fields,
                 "pid": std::process::id(),
@@ -343,12 +327,59 @@ fn emit_owned(
         }
     }
 
+    let _ = human;
+}
+
+fn emit_human(
+    level: Level,
+    module: &str,
+    event: &str,
+    operation_id: Option<&str>,
+    trace_id: Option<&str>,
+    message: &str,
+    fields: &[(impl AsRef<str>, String)],
+) -> (u128, String, String, String) {
+    let now = SystemTime::now();
+    let epoch_ms = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let display_stamp = local_clock_stamp(now);
+    let repaired = repair_common_mojibake(message);
+    let rendered_fields = fields
+        .iter()
+        .map(|(key, value)| format!("{}={}", key.as_ref(), quote_human_value(&repair_common_mojibake(value))))
+        .collect::<Vec<_>>();
+    let operation_text = operation_id.map(|id| format!(" operation={id}")).unwrap_or_default();
+    let trace_text = trace_id.map(|id| format!(" trace={id}")).unwrap_or_default();
+    let suffix = if rendered_fields.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", rendered_fields.join(" "))
+    };
+    let human = format!(
+        "{} [{}] [{}]{}{}: {}{}",
+        level.as_str(),
+        module,
+        event,
+        operation_text,
+        trace_text,
+        repaired,
+        suffix,
+    );
+
+    if let Some(lock) = LOG_FILE.get() {
+        if let Ok(mut file) = lock.lock() {
+            let _ = writeln!(file, "{epoch_ms}  {human}");
+            let _ = file.flush();
+        }
+    }
+
     if let Ok(mut lines) = display_log().lock() {
         lines.push_back(format!("[{display_stamp}] {human}"));
         while lines.len() > MAX_DISPLAY_LINES {
             lines.pop_front();
         }
     }
+
+    (epoch_ms, display_stamp, repaired, human)
 }
 
 fn quote_human_value(value: &str) -> String {
@@ -408,8 +439,6 @@ fn local_clock_stamp(_now: SystemTime) -> String {
 
 #[cfg(not(windows))]
 fn local_clock_stamp(now: SystemTime) -> String {
-    // `std` does not expose the host timezone offset cross-platform. Keep the
-    // fallback explicit rather than pretending UTC is local time.
     let total_ms = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
     let day_ms = total_ms % 86_400_000;
     let hour = day_ms / 3_600_000;
@@ -444,5 +473,12 @@ mod tests {
         assert_eq!(quote_human_value("runtime.cache"), "runtime.cache");
         assert_eq!(quote_human_value(r"C:\\Temp\\world"), r"C:\\Temp\\world");
         assert_eq!(quote_human_value("hello world"), "\"hello world\"");
+    }
+
+    #[test]
+    fn operation_ids_are_distinct_from_runtime_trace_ids() {
+        let operation = Logger::new("TEST").operation("TestHardcodedOperationId");
+        assert_eq!(operation.operation_id(), "TestHardcodedOperationId");
+        assert!(operation.trace_id().starts_with(&format!("{}-", std::process::id())));
     }
 }
