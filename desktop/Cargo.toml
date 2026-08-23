@@ -9,6 +9,9 @@ build = "build.rs"
 name = "minesport"
 path = "src/main.rs"
 
+[lints.rust]
+warnings = "deny"
+
 [dependencies]
 anyhow = "1.0"
 base64 = "=0.22.1"
