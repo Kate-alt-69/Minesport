@@ -2,7 +2,7 @@ use crate::{
     MainWindow, aux_windows, blender, bridge_compat, diagnostics, heightmap_cache,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
     preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, selection, settings,
-    world_context, world_picker,
+    viewer_selection, world_context, world_picker,
 };
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -22,7 +22,6 @@ use std::{
 };
 
 const VERSION: &str = "0.2.0";
-const DEFAULT_JOINED_SELECTION_POWER: usize = 64;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum BlockRequestPurpose {
@@ -120,7 +119,7 @@ pub fn run() -> Result<()> {
     append_diagnostic(&ui, "Runtime registry: Rust binary registry.data capture + isolated Fabric/Loom worker");
     append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover the manifest-supported Fabric version families");
     append_diagnostic(&ui, "World context: launcher/instance discovery is authoritative when available; folder inference is fallback-only");
-    append_diagnostic(&ui, "3D selection: Rust hit-map + Joined Blocks flood fill + exact custom-selection export");
+    append_diagnostic(&ui, "3D selection: camera-derived voxel DDA + Fyne point A / point B box workflow");
     append_diagnostic(&ui, "3D camera: retained Rust scene supports MMB orbit, Shift+MMB pan, wheel dolly and F6 fit without IPC reruns");
 
     let ping_engine = engine.clone();
@@ -222,8 +221,6 @@ fn wire_settings_persistence(ui: &MainWindow, state: SharedState) {
 }
 
 fn sync_debug_console(ui: &MainWindow, state: SharedState) {
-    // The retired Fyne UI used a real secondary window. Keep the old in-workbench
-    // modal permanently suppressed even if a stale Slint binding toggles it.
     ui.set_debug_console_visible(false);
     if !ui.get_debug_mode() {
         aux_windows::hide_debug_console();
@@ -428,6 +425,7 @@ fn activate_world(
         if cache.is_running() && !cache.is_running_for(&version, &mods_path) {
             cache.cancel();
         }
+        viewer_selection::reset();
         if let Ok(mut guard) = state.lock() {
             guard.pending_export = None;
             guard.selected_world = Some(path.clone());
@@ -465,7 +463,7 @@ fn activate_world(
             ui.set_runtime_cache_status("PREPARING · full instance registry starts automatically".into());
             ui.set_preview_available(false);
             ui.set_preview_loading(false);
-            ui.set_preview_focus_label("Click a visible block to focus/select it".into());
+            ui.set_preview_focus_label("LMB point A · RMB point B · LMB again confirms".into());
             if let Some((metadata, raster)) = cached_map {
                 apply_map_raster(&ui, raster, metadata.min_x, metadata.min_z, metadata.max_x, metadata.max_z, metadata.scale);
                 ui.set_task_title("MAP CACHE HIT".into());
@@ -677,6 +675,7 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         let Some(ui) = weak.upgrade() else { return; };
         let world = PathBuf::from(ui.get_world_path().to_string());
         if !world.join("level.dat").is_file() { return; }
+        viewer_selection::reset();
         if let Ok(mut guard) = open_state.lock() {
             guard.block_request_purpose = BlockRequestPurpose::Preview;
             guard.preview_pick_map = None;
@@ -686,7 +685,7 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         add_bubble_fields(&ui, &mut request);
         ui.set_preview_loading(true);
         ui.set_preview_available(false);
-        ui.set_preview_focus_label("Building clickable Rust preview…".into());
+        ui.set_preview_focus_label("Building camera-correct Rust preview…".into());
         ui.set_task_active(true);
         ui.set_task_progress(0.05);
         ui.set_task_title("3D PREVIEW".into());
@@ -728,9 +727,26 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         let Some(ui) = weak.upgrade() else { return; };
         let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
         let Some(pick_map) = pick_map else {
-            ui.set_preview_focus_label("Preview hit-map is not ready yet".into());
+            ui.set_preview_focus_label("Preview voxel picker is not ready yet".into());
             return;
         };
+
+        let button = ui.get_preview_pick_button();
+        if button == 1 {
+            if let viewer_selection::PrimaryAction::Confirm(box_selection) = viewer_selection::primary_action() {
+                let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
+                apply_viewer_box_selection(&ui, &state, box_selection, count);
+                return;
+            }
+        } else if button == 2 {
+            if viewer_selection::point_a().is_none() {
+                ui.set_preview_focus_label("Set point A with LMB before choosing point B".into());
+                return;
+            }
+        } else {
+            return;
+        }
+
         let (image_width, image_height) = pick_map.dimensions();
         let Some((source_x, source_y)) = selection::preview_source_point(
             mouse_x, mouse_y, view_width, view_height, image_width, image_height,
@@ -739,46 +755,73 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
             return;
         };
         let Some(picked) = pick_map.pick(source_x, source_y) else {
-            ui.set_preview_focus_label("No solid block under the cursor".into());
+            ui.set_preview_focus_label("No solid block under the camera ray".into());
             return;
         };
+        let point = [picked.x, picked.y, picked.z];
 
-        let (coordinates, label) = if ui.get_select_by_model() {
-            let coordinates = pick_map.coordinates_for_id(&picked.id);
-            let label = format!("Model {}", picked.id);
-            (coordinates, label)
-        } else {
-            let coordinates = pick_map.joined_blocks(
-                [picked.x, picked.y, picked.z],
-                DEFAULT_JOINED_SELECTION_POWER,
-            );
-            let label = format!("Joined Blocks from {},{},{}", picked.x, picked.y, picked.z);
-            (coordinates, label)
-        };
-        let Some(exact) = selection::ExactSelection::from_coordinates(coordinates, label) else {
-            ui.set_preview_focus_label("Selection did not contain any solid blocks".into());
+        if button == 1 {
+            viewer_selection::set_point_a(point);
+            ui.set_preview_focus_label(format!(
+                "POINT A · {},{},{} · RMB chooses point B",
+                point[0], point[1], point[2]
+            ).into());
+            append_diagnostic(&ui, &format!("3D point A set: {},{},{}", point[0], point[1], point[2]));
+            return;
+        }
+
+        let Some(box_selection) = viewer_selection::set_point_b(point) else {
             return;
         };
-
-        ui.set_selection_mode(0);
-        ui.set_min_x(exact.min[0]);
-        ui.set_min_y(exact.min[1]);
-        ui.set_min_z(exact.min[2]);
-        ui.set_max_x(exact.max[0]);
-        ui.set_max_y(exact.max[1]);
-        ui.set_max_z(exact.max[2]);
-        let mode = if ui.get_select_by_model() { "MODEL" } else { "JOINED" };
+        let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
         ui.set_preview_focus_label(format!(
-            "{mode} · {} block(s) · X {}..{} · Y {}..{} · Z {}..{}",
-            exact.coordinates.len(), exact.min[0], exact.max[0], exact.min[1], exact.max[1], exact.min[2], exact.max[2],
+            "POINT B · {},{},{} · {} solid block(s) · LMB confirms · C clears",
+            point[0], point[1], point[2], count
         ).into());
         append_diagnostic(&ui, &format!(
-            "3D exact selection: {} · {} block(s)", exact.label, exact.coordinates.len()
+            "3D point B set: {},{},{} · box X {}..{} Y {}..{} Z {}..{} · {} solid block(s)",
+            point[0], point[1], point[2],
+            box_selection.min[0], box_selection.max[0],
+            box_selection.min[1], box_selection.max[1],
+            box_selection.min[2], box_selection.max[2],
+            count,
         ));
-        if let Ok(mut guard) = state.lock() {
-            guard.exact_selection = Some(exact);
-        }
     });
+}
+
+fn apply_viewer_box_selection(
+    ui: &MainWindow,
+    state: &SharedState,
+    box_selection: viewer_selection::BoxSelection,
+    count: usize,
+) {
+    // Match archive/go-fyne-ui/ui/viewer_launcher.go exactly: confirming the
+    // embedded viewer clears custom/exact selection state and writes raw A/B
+    // cuboid bounds into the ordinary Box Selection controls.
+    ui.set_selection_mode(0);
+    ui.set_min_x(box_selection.min[0]);
+    ui.set_min_y(box_selection.min[1]);
+    ui.set_min_z(box_selection.min[2]);
+    ui.set_max_x(box_selection.max[0]);
+    ui.set_max_y(box_selection.max[1]);
+    ui.set_max_z(box_selection.max[2]);
+    ui.set_preview_focus_label(format!(
+        "BOX CONFIRMED · {} solid block(s) · X {}..{} · Y {}..{} · Z {}..{}",
+        count,
+        box_selection.min[0], box_selection.max[0],
+        box_selection.min[1], box_selection.max[1],
+        box_selection.min[2], box_selection.max[2],
+    ).into());
+    if let Ok(mut guard) = state.lock() {
+        guard.exact_selection = None;
+    }
+    append_diagnostic(ui, &format!(
+        "3D box confirmed: X {}..{} · Y {}..{} · Z {}..{} · {} solid block(s)",
+        box_selection.min[0], box_selection.max[0],
+        box_selection.min[1], box_selection.max[1],
+        box_selection.min[2], box_selection.max[2],
+        count,
+    ));
 }
 
 fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: PreviewCameraAction) {
@@ -822,7 +865,7 @@ fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: P
                 ui.set_preview_loading(false);
                 ui.set_preview_block_count(rendered.block_count as i32);
                 ui.set_preview_focus_label(format!(
-                    "3D camera · {} complete · LMB select · MMB orbit · Shift+MMB pan · wheel dolly",
+                    "3D camera · {} complete · LMB A · RMB B · LMB confirm · MMB look · wheel dolly",
                     action.label()
                 ).into());
             }
@@ -950,9 +993,6 @@ fn start_runtime_cache_job(
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
                 ui.set_runtime_cache_busy(true);
                 ui.set_runtime_cache_status(format!("PREPARING · {}% · {}", progress.percent, detail).into());
-                // Match the Fyne runtime-cache window: heavy Gradle/Minecraft
-                // preparation gets its own window and hides the repaint-heavy
-                // workbench until the disposable client exits.
                 aux_windows::show_runtime_cache(
                     &ui,
                     &version,
@@ -1535,7 +1575,7 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                             ui.set_preview_available(true);
                             ui.set_preview_loading(false);
                             ui.set_preview_block_count(rendered.block_count as i32);
-                            ui.set_preview_focus_label("Click a block · Joined Blocks default · MMB orbit · Shift+MMB pan · wheel dolly".into());
+                            ui.set_preview_focus_label("LMB point A · RMB point B · LMB again confirms · MMB look · wheel dolly".into());
                             ui.set_task_active(false);
                             ui.set_task_progress(1.0);
                             ui.set_task_title("3D PREVIEW READY".into());
