@@ -112,6 +112,7 @@ export component MainWindow inherits Window {
     in-out property <bool> preview-available: false;
     in-out property <bool> preview-loading: false;
     in-out property <int> preview-block-count: 0;
+    in-out property <string> preview-focus-label: "Click a visible block to focus/select it";
 
     in-out property <string> output-path: "";
     in-out property <string> export-name: "Minesport_Export";
@@ -158,6 +159,7 @@ export component MainWindow inherits Window {
     callback export-requested();
     callback run-preflight();
     callback open-3d();
+    callback preview-click(float, float, float, float);
     callback rebuild-runtime-cache();
     callback cancel-runtime-cache();
     callback remove-cache();
@@ -382,6 +384,7 @@ export component MainWindow inherits Window {
                                 HintText { text: "Smaller FLATTER cells rebuild locally; larger cells create fewer objects and broader greedy surfaces."; }
                                 CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; toggled => { root.settings-changed(); } }
                                 CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; toggled => { root.settings-changed(); } }
+                                HintText { text: "In the Rust 3D preview, click a visible block. OFF selects that one coordinate; ON selects every matching block-model ID from the full preview block set."; }
                             }
                             if root.settings-page == 1: VerticalLayout {
                                 padding: 14px;
@@ -471,7 +474,7 @@ export component MainWindow inherits Window {
                             padding-left: 12px;
                             padding-right: 10px;
                             spacing: 8px;
-                            Text { text: root.viewport-mode == 0 ? "2D world map · drag to select" : "Rust 3D preview · rendered off-thread"; color: #758696; font-size: 9px; vertical-alignment: center; }
+                            Text { text: root.viewport-mode == 0 ? "2D world map · drag to select" : "Rust 3D preview · click blocks to select"; color: #758696; font-size: 9px; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             Button { text: "2D"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
                             Button { text: "3D"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-path != "No world selected"; clicked => { root.viewport-mode = 1; root.open-3d(); } }
@@ -528,11 +531,18 @@ export component MainWindow inherits Window {
                         if root.viewport-mode == 1: Rectangle {
                             background: #0c1217;
                             if root.preview-available: Image { source: root.preview-image; image-fit: contain; width: parent.width; height: parent.height; }
+                            preview-touch := TouchArea {
+                                enabled: root.preview-available && !root.preview-loading && !root.docs-visible;
+                                mouse-cursor: crosshair;
+                                clicked => {
+                                    root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px);
+                                }
+                            }
                             if root.preview-loading: VerticalLayout {
                                 alignment: center; spacing: 10px;
                                 Spinner { width: 34px; height: 34px; indeterminate: true; }
                                 Text { text: "Rendering 3D preview…"; color: #a8b5c0; font-size: 12px; horizontal-alignment: center; }
-                                Text { text: "Block parsing and rasterization run outside the Slint event loop."; color: #607181; font-size: 9px; horizontal-alignment: center; }
+                                Text { text: "Block parsing, hit-map generation and rasterization run outside the Slint event loop."; color: #607181; font-size: 9px; horizontal-alignment: center; }
                             }
                             if !root.preview-available && !root.preview-loading: VerticalLayout {
                                 alignment: center; spacing: 10px;
@@ -543,6 +553,10 @@ export component MainWindow inherits Window {
                             if root.preview-available: Rectangle {
                                 x: 12px; y: 12px; width: 170px; height: 30px; border-radius: 5px; background: #101820dd; border-width: 1px; border-color: #2a3945;
                                 Text { text: root.preview-block-count + " blocks"; color: #a7b6c3; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            if root.preview-available: Rectangle {
+                                x: 12px; y: parent.height - 42px; width: min(520px, parent.width - 24px); height: 30px; border-radius: 5px; background: #101820dd; border-width: 1px; border-color: #2a3945;
+                                Text { x: 10px; width: parent.width - 20px; height: parent.height; text: root.preview-focus-label; color: #a0b4c3; font-size: 9px; font-family: "monospace"; vertical-alignment: center; overflow: elide; }
                             }
                         }
                         if root.docs-visible: Rectangle {
@@ -586,7 +600,7 @@ export component MainWindow inherits Window {
                             Text { text: root.selection-mode == 0 ? "BOX  X " + root.min-x + ".." + root.max-x + "  ·  Y " + root.min-y + ".." + root.max-y + "  ·  Z " + root.min-z + ".." + root.max-z : "BUBBLE  center " + root.center-x + "," + root.center-y + "," + root.center-z + "  ·  radius " + root.radius-x + "," + root.radius-y + "," + root.radius-z; color: #8c9cab; font-size: 9px; vertical-alignment: center; overflow: elide; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             if root.viewport-mode == 0 && root.map-available: Text { text: root.map-cursor-label; color: #a0aebb; font-size: 9px; font-family: "monospace"; vertical-alignment: center; }
-                            if root.viewport-mode == 1 && root.preview-available: Text { text: "RUST SOFTWARE PREVIEW"; color: #7ba58b; font-size: 9px; font-weight: 700; vertical-alignment: center; }
+                            if root.viewport-mode == 1 && root.preview-available: Text { text: root.select-by-model ? "3D PICK · MODEL" : "3D PICK · BLOCK"; color: #7ba58b; font-size: 9px; font-weight: 700; vertical-alignment: center; }
                         }
                     }
                 }
