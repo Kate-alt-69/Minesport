@@ -399,6 +399,10 @@ export component MainWindow inherits Window {
     callback run-preflight();
     callback open-3d();
     callback preview-click(float, float, float, float);
+    callback preview-orbit(float, float);
+    callback preview-pan(float, float);
+    callback preview-dolly(float);
+    callback preview-fit();
     callback rebuild-runtime-cache();
     callback cancel-runtime-cache();
     callback remove-cache();
@@ -429,9 +433,15 @@ export component MainWindow inherits Window {
             if (root.blender-prompt-visible || root.settings-visible || root.debug-console-visible) {
                 return reject;
             }
-            if (event.text == Key.F6 && root.viewport-mode == 0) {
-                map-view.fit();
-                return accept;
+            if (event.text == Key.F6) {
+                if (root.viewport-mode == 0 && root.map-available) {
+                    map-view.fit();
+                    return accept;
+                }
+                if (root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
+                    root.preview-fit();
+                    return accept;
+                }
             }
             return reject;
         }
@@ -648,11 +658,18 @@ export component MainWindow inherits Window {
                                 padding-left: 12px;
                                 padding-right: 10px;
                                 spacing: 8px;
-                                Text { text: "LMB select · MMB pan · scroll zoom · F6 fit"; color: #adb5b0; font-size: 11px; vertical-alignment: center; }
+                                Text { text: root.viewport-mode == 0 ? "LMB select · MMB pan · scroll zoom · F6 fit" : "LMB select · MMB orbit · Shift+MMB pan · scroll dolly · F6 fit"; color: #adb5b0; font-size: 11px; vertical-alignment: center; }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                                 Button { text: "2D"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
                                 Button { text: "3D"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-path != "No world selected"; clicked => { root.viewport-mode = 1; root.open-3d(); } }
-                                Button { text: "Fit"; enabled: root.viewport-mode == 0 && root.map-available; clicked => { map-view.fit(); } }
+                                Button {
+                                    text: "Fit";
+                                    enabled: root.viewport-mode == 0 ? root.map-available : root.preview-available && !root.preview-loading;
+                                    clicked => {
+                                        if (root.viewport-mode == 0) { map-view.fit(); }
+                                        else { root.preview-fit(); }
+                                    }
+                                }
                             }
                         }
 
@@ -718,9 +735,38 @@ export component MainWindow inherits Window {
                                 background: #0f1216;
                                 if root.preview-available: Image { source: root.preview-image; image-fit: contain; width: parent.width; height: parent.height; }
                                 preview-touch := TouchArea {
+                                    property <bool> middle-held: false;
+                                    property <bool> middle-pan: false;
+                                    property <length> middle-start-x: 0px;
+                                    property <length> middle-start-y: 0px;
+
                                     enabled: root.preview-available && !root.preview-loading && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible && !root.debug-console-visible;
-                                    mouse-cursor: crosshair;
+                                    mouse-cursor: self.middle-held ? grabbing : crosshair;
                                     clicked => { root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px); }
+                                    pointer-event(event) => {
+                                        if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.down) {
+                                            self.middle-held = true;
+                                            self.middle-pan = event.modifiers.shift;
+                                            self.middle-start-x = self.mouse-x;
+                                            self.middle-start-y = self.mouse-y;
+                                        }
+                                        if (event.button == PointerEventButton.middle && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) && self.middle-held) {
+                                            let dx = (self.mouse-x - self.middle-start-x) / 1px;
+                                            let dy = (self.mouse-y - self.middle-start-y) / 1px;
+                                            let should-apply = event.kind == PointerEventKind.up && (dx != 0 || dy != 0);
+                                            if (should-apply) {
+                                                if (self.middle-pan) { root.preview-pan(dx, dy); }
+                                                else { root.preview-orbit(dx, dy); }
+                                            }
+                                            self.middle-held = false;
+                                            self.middle-pan = false;
+                                        }
+                                    }
+                                    scroll-event(event) => {
+                                        if (!root.preview-available || root.preview-loading || event.delta-y == 0px) { return reject; }
+                                        root.preview-dolly(event.delta-y > 0px ? 1.0 : -1.0);
+                                        return accept;
+                                    }
                                 }
                                 if root.preview-loading: Rectangle {
                                     x: 0px; y: 0px; width: parent.width; height: parent.height;
@@ -957,7 +1003,7 @@ export component MainWindow inherits Window {
                             Text { text: "DEBUG ENGINE CONSOLE"; color: #eef2ef; font-size: 15px; font-weight: 700; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             Text { text: root.engine-status; color: root.engine-ready ? #8fc69b : #d39191; font-size: 12px; font-weight: 700; vertical-alignment: center; }
-                            Button { text: "Close"; clicked => { root.debug-console-visible = false; } }
+                            Button { text: "Close"; clicked => { root.debug-mode = false; root.debug-console-visible = false; root.settings-changed(); } }
                         }
                     }
                     ScrollView {
