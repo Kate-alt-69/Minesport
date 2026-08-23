@@ -36,6 +36,8 @@ import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGH
 import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
 
 public final class MinesportBridge implements ClientModInitializer {
+    private static final int EXTRACTION_BATCH_SIZE = 128;
+
     @Override
     public void onInitializeClient() {
         System.out.println("[MinesportBridge] Initializing 26.x runtime registry worker...");
@@ -108,34 +110,46 @@ public final class MinesportBridge implements ClientModInitializer {
                 polymerPresent,
                 loadedMods()
             ));
+            sender.flush();
 
-            System.out.println("[MinesportBridge] Dumping " + blocks.size() + " registered block types...");
-            for (Block block : blocks) {
-                Identifier id = BuiltInRegistries.BLOCK.getKey(block);
-                if (id == null) continue;
+            System.out.println("[MinesportBridge] Dumping " + blocks.size() + " registered block types from baked client models...");
+            for (int start = 0; start < blocks.size(); start += EXTRACTION_BATCH_SIZE) {
+                int end = Math.min(start + EXTRACTION_BATCH_SIZE, blocks.size());
+                List<Block> batch = new ArrayList<>(blocks.subList(start, end));
+                List<List<BlockVariant>> extracted = extractBatchSafe(client, batch);
 
-                List<BlockVariant> variants = extractSafe(client, block);
-                String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
-                String loaderType = vanillaMapping != null
-                    ? "polymer"
-                    : ("minecraft".equals(id.getNamespace()) ? "vanilla" : "fabric");
+                for (int index = 0; index < batch.size(); index++) {
+                    Block block = batch.get(index);
+                    Identifier id = BuiltInRegistries.BLOCK.getKey(block);
+                    if (id == null) continue;
 
-                // Cache baked quads plus texture identifiers only. Image bytes are
-                // resolved later by Minesport from packs, mod JARs, vanilla/Piston.
-                sender.send(TYPE_BLOCK_ENTRY, new BlockEntry(
-                    id.toString(),
-                    vanillaMapping,
-                    loaderType,
-                    variants
-                ));
+                    List<BlockVariant> variants = index < extracted.size()
+                        ? extracted.get(index)
+                        : List.of();
+                    String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
+                    String loaderType = vanillaMapping != null
+                        ? "polymer"
+                        : ("minecraft".equals(id.getNamespace()) ? "vanilla" : "fabric");
 
-                List<LightState> lightStates = extractLightStates(block);
-                if (!lightStates.isEmpty()) {
-                    sender.send(TYPE_BLOCK_LIGHT, new BlockLightEntry(id.toString(), lightStates));
+                    sender.send(TYPE_BLOCK_ENTRY, new BlockEntry(
+                        id.toString(),
+                        vanillaMapping,
+                        loaderType,
+                        variants
+                    ));
+
+                    List<LightState> lightStates = extractLightStates(block);
+                    if (!lightStates.isEmpty()) {
+                        sender.send(TYPE_BLOCK_LIGHT, new BlockLightEntry(id.toString(), lightStates));
+                    }
                 }
+
+                sender.flush();
+                System.out.println("[MinesportBridge] Baked model extraction " + end + "/" + blocks.size());
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", blocks.size()));
+            sender.flush();
             System.out.println("[MinesportBridge] Registry/model dump complete.");
         } catch (Exception exception) {
             System.err.println("[MinesportBridge] Fatal: " + exception.getMessage());
@@ -145,19 +159,25 @@ public final class MinesportBridge implements ClientModInitializer {
         }
     }
 
-    private List<BlockVariant> extractSafe(Minecraft client, Block block) {
+    private List<List<BlockVariant>> extractBatchSafe(Minecraft client, List<Block> blocks) {
         try {
-            var future = new java.util.concurrent.CompletableFuture<List<BlockVariant>>();
+            var future = new java.util.concurrent.CompletableFuture<List<List<BlockVariant>>>();
             client.execute(() -> {
-                try {
-                    future.complete(BlockGeometryExtractor.extractBlock(block, client));
-                } catch (Exception exception) {
-                    future.complete(List.of());
+                var result = new ArrayList<List<BlockVariant>>(blocks.size());
+                for (Block block : blocks) {
+                    try {
+                        result.add(BlockGeometryExtractor.extractBlock(block, client));
+                    } catch (Exception ignored) {
+                        result.add(List.of());
+                    }
                 }
+                future.complete(result);
             });
-            return future.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            return future.get(60, java.util.concurrent.TimeUnit.SECONDS);
         } catch (Exception exception) {
-            return List.of();
+            var fallback = new ArrayList<List<BlockVariant>>(blocks.size());
+            for (int i = 0; i < blocks.size(); i++) fallback.add(List.of());
+            return fallback;
         }
     }
 
