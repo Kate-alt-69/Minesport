@@ -328,6 +328,11 @@ export component MainWindow inherits Window {
     in-out property <bool> select-by-model: false;
     in-out property <bool> debug-mode: false;
     in-out property <int> blender-animation-index: 0;
+    in-out property <bool> blender-translator-prompted: false;
+    in-out property <string> blender-translator-status: "Blender translator 0.1.8: checking…";
+    in-out property <bool> blender-translator-current: false;
+    in-out property <bool> blender-prompt-visible: false;
+    in-out property <string> blender-prompt-message: "";
     in-out property <string> resource-pack-summary: "No resource-pack overrides";
     in-out property <string> data-pack-summary: "No data-pack overrides";
     in property <[string]> resource-pack-items;
@@ -370,6 +375,8 @@ export component MainWindow inherits Window {
     callback move-data-pack(int);
     callback remove-data-pack();
     callback install-blender-translator();
+    callback blender-prompt-install();
+    callback blender-prompt-later();
     callback open-docs();
     callback docs-navigate(int);
     callback docs-open-github();
@@ -401,6 +408,9 @@ export component MainWindow inherits Window {
         width: parent.width;
         height: parent.height;
         capture-key-pressed(event) => {
+            if (root.blender-prompt-visible) {
+                return accept;
+            }
             if (event.text == Key.F6 && root.viewport-mode == 0) {
                 map-view.fit();
                 return accept;
@@ -567,6 +577,11 @@ export component MainWindow inherits Window {
                                     spacing: 8px;
                                     Text { text: "Animation"; color: #9aa39e; font-size: 10px; }
                                     ComboBox { model: ["Animate export", "Animate static"]; current-index <=> root.blender-animation-index; selected(_) => { root.settings-changed(); } }
+                                    HorizontalLayout {
+                                        spacing: 7px;
+                                        Text { width: 18px; text: root.blender-translator-current ? "✓" : "✕"; color: root.blender-translator-current ? #8fc69b : #d39191; font-size: 12px; font-weight: 700; vertical-alignment: center; }
+                                        Text { horizontal-stretch: 1; text: root.blender-translator-status; color: #aab1ad; font-size: 10px; vertical-alignment: center; overflow: elide; }
+                                    }
                                     Button { text: "Install / repair Minesport translator"; enabled: !root.task-active; clicked => { root.install-blender-translator(); } }
                                     HintText { text: "Animate export prepares dynamic state descriptors plus animated textures. Animate static preserves interactable world state while keeping continuously animated textures."; }
                                     HintText { text: "For OBJ, use Minesport's Blender translator import path. Blender's stock Wavefront importer bypasses Minesport metadata."; }
@@ -683,7 +698,7 @@ export component MainWindow inherits Window {
                             map-view := WorldMapView {
                                 visible: root.viewport-mode == 0;
                                 source: root.map-image;
-                                available: root.map-available && !root.docs-visible;
+                                available: root.map-available && !root.docs-visible && !root.blender-prompt-visible;
                                 map-min-x <=> root.map-min-x;
                                 map-min-z <=> root.map-min-z;
                                 map-max-x <=> root.map-max-x;
@@ -712,7 +727,7 @@ export component MainWindow inherits Window {
                                 background: #0f1216;
                                 if root.preview-available: Image { source: root.preview-image; image-fit: contain; width: parent.width; height: parent.height; }
                                 preview-touch := TouchArea {
-                                    enabled: root.preview-available && !root.preview-loading && !root.docs-visible;
+                                    enabled: root.preview-available && !root.preview-loading && !root.docs-visible && !root.blender-prompt-visible;
                                     mouse-cursor: crosshair;
                                     clicked => { root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px); }
                                 }
@@ -820,6 +835,41 @@ export component MainWindow inherits Window {
                 width: parent.width * max(0.0, min(1.0, root.task-progress));
                 height: 3px;
                 background: #65a84e;
+            }
+        }
+
+        if root.blender-prompt-visible: Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            background: #000000a8;
+
+            TouchArea { mouse-cursor: default; }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: min(560px, parent.width - 48px);
+                height: 238px;
+                background: #1e1f1d;
+                border-width: 1px;
+                border-color: #454b47;
+                border-radius: 7px;
+
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 12px;
+                    Text { text: "Blender integration"; color: #f0f3f0; font-size: 15px; font-weight: 700; }
+                    Rectangle { height: 1px; background: #3a403c; }
+                    Text { text: root.blender-prompt-message; color: #c1c8c3; font-size: 11px; wrap: word-wrap; vertical-stretch: 1; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Button { text: "Not now"; clicked => { root.blender-prompt-later(); } }
+                        Button { text: "Install"; primary: true; clicked => { root.blender-prompt-install(); } }
+                    }
+                }
             }
         }
     }

@@ -93,7 +93,7 @@ pub fn run() -> Result<()> {
     wire_asset_pickers(&ui, state.clone());
     wire_settings_persistence(&ui, state.clone());
     wire_docs(&ui);
-    wire_blender(&ui);
+    wire_blender(&ui, state.clone());
 
     append_diagnostic(&ui, "Backend boundary: Minesport.exe --engine-worker → embedded Java engine");
     append_diagnostic(&ui, "Desktop: Rust + Slint · Fyne UI archived under /archive/go-fyne-ui");
@@ -166,6 +166,7 @@ fn apply_saved_settings(ui: &MainWindow, saved: &DesktopSettings) {
     ui.set_select_by_model(saved.select_by_model);
     ui.set_debug_mode(saved.debug_mode);
     ui.set_blender_animation_index(saved.blender_animation_index.clamp(0, 1));
+    ui.set_blender_translator_prompted(saved.blender_translator_prompted);
 }
 
 fn collect_settings(ui: &MainWindow, state: &SharedState) -> DesktopSettings {
@@ -184,6 +185,7 @@ fn collect_settings(ui: &MainWindow, state: &SharedState) -> DesktopSettings {
         select_by_model: ui.get_select_by_model(),
         debug_mode: ui.get_debug_mode(),
         blender_animation_index: ui.get_blender_animation_index(),
+        blender_translator_prompted: ui.get_blender_translator_prompted(),
         resource_packs: guard.resource_packs.clone(),
         data_packs: guard.data_packs.clone(),
     }
@@ -1167,25 +1169,88 @@ fn wire_docs(ui: &MainWindow) {
     });
 }
 
-fn wire_blender(ui: &MainWindow) {
+fn wire_blender(ui: &MainWindow, state: SharedState) {
+    refresh_blender_status(ui.as_weak(), true);
+
     let weak = ui.as_weak();
+    let install_state = state.clone();
     ui.on_install_blender_translator(move || {
-        let weak = weak.clone();
-        let _ = weak.upgrade_in_event_loop(|ui| {
-            ui.set_task_active(true);
-            ui.set_task_progress(0.1);
-            ui.set_task_title("BLENDER ADD-ON".into());
-            ui.set_task_detail("Installing embedded Minesport 0.2.0 translator…".into());
+        start_blender_install(weak.clone(), install_state.clone(), false);
+    });
+
+    let weak = ui.as_weak();
+    let prompt_install_state = state.clone();
+    ui.on_blender_prompt_install(move || {
+        start_blender_install(weak.clone(), prompt_install_state.clone(), true);
+    });
+
+    let weak = ui.as_weak();
+    ui.on_blender_prompt_later(move || {
+        let Some(ui) = weak.upgrade() else { return; };
+        ui.set_blender_prompt_visible(false);
+        ui.set_blender_translator_prompted(true);
+        persist_settings_snapshot(&ui, &state);
+        append_diagnostic(&ui, "Blender translator first-run prompt dismissed");
+    });
+}
+
+fn refresh_blender_status(weak: slint::Weak<MainWindow>, allow_prompt: bool) {
+    thread::spawn(move || {
+        let status = blender::current_status();
+        let _ = weak.upgrade_in_event_loop(move |ui| match status {
+            Ok(status) => {
+                ui.set_blender_translator_status(blender::status_text(status).into());
+                ui.set_blender_translator_current(status.complete());
+                if allow_prompt && status.detected > 0 && !ui.get_blender_translator_prompted() {
+                    ui.set_blender_prompt_message(format!(
+                        "Minesport found {} Blender 4.3+ profile(s).\n\nInstall the Minesport Dynamic Translator? It only translates Minesport metadata during import; it does not run a per-frame animation runtime.",
+                        status.detected
+                    ).into());
+                    ui.set_blender_prompt_visible(true);
+                }
+            }
+            Err(error) => {
+                ui.set_blender_translator_current(false);
+                ui.set_blender_translator_status(format!(
+                    "Blender translator {}: ✕ status check failed",
+                    blender::TRANSLATOR_VERSION
+                ).into());
+                append_diagnostic(&ui, &format!("Blender translator status check failed: {error:#}"));
+            }
         });
-        thread::spawn(move || {
-            let result = blender::install_detected_profiles();
-            let _ = weak.upgrade_in_event_loop(move |ui| match result {
+    });
+}
+
+fn start_blender_install(weak: slint::Weak<MainWindow>, state: SharedState, from_prompt: bool) {
+    let Some(ui) = weak.upgrade() else { return; };
+    if from_prompt {
+        ui.set_blender_prompt_visible(false);
+        ui.set_blender_translator_prompted(true);
+        persist_settings_snapshot(&ui, &state);
+    }
+    ui.set_task_active(true);
+    ui.set_task_progress(0.1);
+    ui.set_task_title("BLENDER ADD-ON".into());
+    ui.set_task_detail(format!("Installing embedded Minesport translator {}…", blender::TRANSLATOR_VERSION).into());
+    drop(ui);
+
+    thread::spawn(move || {
+        let result = blender::install_detected_profiles();
+        let status = blender::current_status();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            match result {
                 Ok(report) => {
                     ui.set_task_active(false);
                     ui.set_task_progress(1.0);
                     ui.set_task_title("BLENDER ADD-ON INSTALLED".into());
                     ui.set_task_detail(format!("Updated {} Blender profile(s)", report.installed_profiles.len()).into());
-                    for profile in report.installed_profiles { append_diagnostic(&ui, &format!("Blender translator installed: {}", profile.display())); }
+                    for profile in report.installed_profiles {
+                        append_diagnostic(&ui, &format!("Blender translator installed: {}", profile.display()));
+                    }
+                    if from_prompt {
+                        ui.set_blender_export(true);
+                        persist_settings_snapshot(&ui, &state);
+                    }
                 }
                 Err(error) => {
                     ui.set_task_active(false);
@@ -1193,7 +1258,22 @@ fn wire_blender(ui: &MainWindow) {
                     ui.set_task_detail(error.to_string().into());
                     append_diagnostic(&ui, &format!("Blender translator installation failed: {error:#}"));
                 }
-            });
+            }
+
+            match status {
+                Ok(status) => {
+                    ui.set_blender_translator_status(blender::status_text(status).into());
+                    ui.set_blender_translator_current(status.complete());
+                }
+                Err(error) => {
+                    ui.set_blender_translator_current(false);
+                    ui.set_blender_translator_status(format!(
+                        "Blender translator {}: ✕ status check failed",
+                        blender::TRANSLATOR_VERSION
+                    ).into());
+                    append_diagnostic(&ui, &format!("Blender translator status refresh failed: {error:#}"));
+                }
+            }
         });
     });
 }
