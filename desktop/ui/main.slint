@@ -304,7 +304,7 @@ export component MainWindow inherits Window {
                                     root.max-z = root.map-max-z;
                                 }
                             }
-                            HintText { text: "Drag the 2D map for a box. Bubble mode uses a map click as its X/Z center. Y stays editable here."; }
+                            HintText { text: "Selection remains editable while map, registry and export tasks run in the background."; }
                             SectionTitle { label: "RUNTIME REGISTRY"; }
                             Text { text: root.runtime-cache-status; color: root.runtime-cache-busy ? #d2b777 : #86a997; font-size: 10px; wrap: word-wrap; }
                             if root.runtime-cache-busy: Button { text: "CANCEL PREPARATION"; clicked => { root.cancel-runtime-cache(); } }
@@ -315,6 +315,16 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 14px;
                             spacing: 9px;
+                            SectionTitle { label: "PRESET"; }
+                            HintText { text: "Presets configure the live controls below. You can still change any setting afterward."; }
+                            HorizontalLayout {
+                                spacing: 4px;
+                                Button { text: "ANIM"; clicked => { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.blender-export = true; } }
+                                Button { text: "LIGHT"; clicked => { root.export-format-index = 0; root.export-mode-index = 0; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = true; root.blender-export = true; } }
+                                Button { text: "RAW"; clicked => { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = false; root.face-culling = false; root.flatter-enabled = false; root.hidden-culling = false; root.blender-export = false; } }
+                                Button { text: "MODDED"; clicked => { root.export-format-index = 0; root.export-mode-index = 0; root.optimize = false; root.face-culling = true; root.flatter-enabled = false; root.hidden-culling = false; root.blender-export = true; } }
+                            }
+
                             SectionTitle { label: "OUTPUT"; }
                             Text { text: "Name"; color: #8191a0; font-size: 10px; }
                             LineEdit { text <=> root.export-name; }
@@ -325,6 +335,15 @@ export component MainWindow inherits Window {
                             CheckBox { text: "Optimize mesh output"; checked <=> root.optimize; }
                             Text { text: root.output-path == "" ? "~/Minesport_Exports" : root.output-path; color: #758696; font-size: 10px; wrap: word-wrap; }
                             Button { text: "CHOOSE OUTPUT FOLDER…"; clicked => { root.pick-output(); } }
+
+                            SectionTitle { label: "OPTIMIZATION"; }
+                            Text {
+                                text: "Face culling " + (root.face-culling ? "ON" : "OFF") + " · FLATTER " + (root.flatter-enabled ? "ON" : "OFF") + " · hidden culling " + (root.hidden-culling ? "ON" : "OFF");
+                                color: #8da0af;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                            }
+                            Button { text: "APPLY SAFE OPTIMIZATION"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; } }
 
                             SectionTitle { label: "ANALYSIS"; }
                             Text { text: root.preflight-summary; color: #8da0af; font-size: 10px; wrap: word-wrap; }
@@ -337,7 +356,7 @@ export component MainWindow inherits Window {
                                 enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected";
                                 clicked => { root.export-requested(); }
                             }
-                            HintText { text: "Export waits for the same instance-wide registry worker when needed, then continues automatically."; }
+                            HintText { text: "Export joins the same instance-wide registry worker when needed, then continues automatically."; }
                         }
                     }
 
@@ -345,14 +364,16 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 14px;
                             spacing: 9px;
-                            SectionTitle { label: "BLENDER TRANSLATOR"; }
+                            SectionTitle { label: "WORLD INSPECTOR · BLENDER"; }
                             CheckBox { text: "Blender integration"; checked <=> root.blender-export; }
-                            Button { text: "INSTALL / UPDATE ADD-ON"; enabled: !root.task-active; clicked => { root.install-blender-translator(); } }
-                            Text { text: "Texture animation"; color: #8191a0; font-size: 10px; }
-                            ComboBox { model: ["Minecraft timing", "Static first frame"]; current-index <=> root.blender-animation-index; }
-                            HintText { text: "The Rust executable embeds the Minesport 0.2.0 translator and installs it into detected Blender 4.3+ profiles."; }
+                            Button { text: "INSTALL / REPAIR ADD-ON"; enabled: !root.task-active; clicked => { root.install-blender-translator(); } }
+                            Text { text: "Animation"; color: #8191a0; font-size: 10px; }
+                            ComboBox { model: ["Animate export", "Animate static"]; current-index <=> root.blender-animation-index; }
+                            HintText { text: "Animate export prepares dynamic state descriptors plus animated textures. Animate static keeps interactable state fixed while preserving continuously animated textures."; }
+                            HintText { text: "For OBJ, use Minesport's translator import path in Blender. Blender's stock Wavefront importer bypasses Minesport metadata."; }
                             SectionTitle { label: "MINECRAFT DATA"; }
-                            HintText { text: "Texture frame schedules, Timeline markers, LIGHT_BLOCK levels, FLATTER data, water/glass material metadata and individual-block origins travel with the export."; }
+                            HintText { text: "Texture frame schedules + Timeline markers, LIGHT_BLOCK levels, FLATTER logical voxels, water/glass material metadata and individual-block origins travel with the export."; }
+                            HintText { text: "The translator creates native Blender objects/material nodes once; it does not run a heavy per-frame Python engine."; }
                         }
                     }
 
@@ -367,7 +388,8 @@ export component MainWindow inherits Window {
                             SectionTitle { label: "RUNTIME REGISTRY"; }
                             Text { text: root.runtime-cache-status; color: #8fa2b4; font-size: 10px; wrap: word-wrap; }
                             if root.runtime-cache-busy: Button { text: "CANCEL RUNTIME WORKER"; clicked => { root.cancel-runtime-cache(); } }
-                            HintText { text: "Heavy parsing, hashing, Java IPC and Minecraft worker processes stay outside the Slint event loop."; }
+                            SectionTitle { label: "RESPONSIVENESS"; }
+                            HintText { text: "Java IPC, registry capture, hashing, Gradle/Minecraft workers, preview parsing and rasterization run outside the Slint event loop. UI state returns through Slint's event-loop handoff."; }
                         }
                     }
 
@@ -393,9 +415,10 @@ export component MainWindow inherits Window {
                                 spacing: 9px;
                                 SectionTitle { label: "GEOMETRY"; }
                                 CheckBox { text: "Face culling"; checked <=> root.face-culling; }
-                                HintText { text: "Remove faces only when neighboring geometry proves they are fully hidden."; }
+                                HintText { text: "Remove a face only when neighboring geometry and its resolved texture prove the face is fully hidden."; }
                                 CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; }
                                 ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; }
+                                HintText { text: "Smaller FLATTER cells rebuild locally; larger cells create fewer objects and broader greedy surfaces."; }
                                 CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; }
                                 CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; }
                             }
@@ -408,6 +431,7 @@ export component MainWindow inherits Window {
                                 CheckBox { text: "Debug engine diagnostics"; checked <=> root.debug-mode; }
                                 Text { text: "Full runtime model registry"; color: #c5d0d9; font-size: 11px; font-weight: 700; }
                                 Text { text: root.runtime-cache-status; color: #7f91a3; font-size: 10px; wrap: word-wrap; }
+                                HintText { text: "The cache is instance-wide: Minecraft version + loader + exact mod set. Selection bounds never limit registry capture."; }
                                 Button { text: "REBUILD FULL RUNTIME REGISTRY"; enabled: root.world-path != "No world selected" && !root.runtime-cache-busy; clicked => { root.rebuild-runtime-cache(); } }
                                 if root.runtime-cache-busy: Button { text: "CANCEL"; clicked => { root.cancel-runtime-cache(); } }
                             }
@@ -415,31 +439,34 @@ export component MainWindow inherits Window {
                             if root.settings-page == 2: VerticalLayout {
                                 padding: 14px;
                                 spacing: 9px;
-                                SectionTitle { label: "ASSET RESOLUTION"; }
+                                SectionTitle { label: "ASSETS & RESOLVER"; }
                                 Text { text: root.resource-pack-summary; color: #8798a8; font-size: 10px; wrap: word-wrap; }
-                                Button { text: "ADD RESOURCE PACK…"; clicked => { root.add-resource-pack(); } }
+                                Button { text: "ADD RESOURCE PACK ZIP…"; clicked => { root.add-resource-pack(); } }
                                 Text { text: root.data-pack-summary; color: #8798a8; font-size: 10px; wrap: word-wrap; }
                                 Button { text: "ADD DATA PACK…"; clicked => { root.add-data-pack(); } }
-                                HintText { text: "Rust stores selected paths and preserves Java resolver precedence when sending export/preflight requests."; }
+                                SectionTitle { label: "RESOLUTION ORDER"; }
+                                HintText { text: "1 · Resource-pack stack (highest priority first)\n2 · Local vanilla client assets\n3 · Mojang Piston recovery on vanilla misses\n4 · Matching mod/runtime registry resolver\n5 · Missing-texture fallback"; }
+                                HintText { text: "Runtime geometry stores texture IDs only. Image bytes continue to resolve from packs, mod JARs, vanilla assets or verified Piston recovery."; }
                             }
 
                             if root.settings-page == 3: VerticalLayout {
                                 padding: 14px;
                                 spacing: 9px;
-                                SectionTitle { label: "ADVANCED"; }
-                                Button { text: "RUN PREFLIGHT"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.run-preflight(); } }
+                                SectionTitle { label: "ADVANCED EXPORT TOOLS"; }
+                                Button { text: "RUN MANUAL PREFLIGHT"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.run-preflight(); } }
                                 Text { text: root.preflight-summary; color: #8193a3; font-size: 10px; wrap: word-wrap; }
                                 Button { text: "RELOAD 2D MAP"; enabled: root.world-path != "No world selected" && !root.map-loading; clicked => { root.reload-map(); } }
                                 Button { text: "OPEN DOCUMENTATION"; clicked => { root.open-docs(); } }
                                 SectionTitle { label: "DIAGNOSTICS"; }
                                 Button { text: "REMOVE ALL MINESPORT CACHE"; enabled: !root.task-active && !root.runtime-cache-busy; clicked => { root.remove-cache(); } }
-                                HintText { text: "Deletes only regenerable Minesport cache data. Worlds, exports and the real mods folder are never touched."; }
+                                HintText { text: "Deletes regenerable runtime registries, heightmap/tooling cache, downloaded JDKs, Bridge workspaces and compiled compatibility Bridges. Worlds, exports, settings and real mods are never touched."; }
                             }
 
                             if root.settings-page == 4: VerticalLayout {
                                 padding: 14px;
                                 spacing: 8px;
                                 SectionTitle { label: "DIAGNOSTICS"; }
+                                HintText { text: "Engine/IPC output is batched before it reaches Slint so noisy workers cannot starve UI repaint/input."; }
                                 Surface {
                                     height: 510px;
                                     ScrollView {
