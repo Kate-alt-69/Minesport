@@ -1,4 +1,4 @@
-use crate::runtime_worker::{self, CacheResult, Progress};
+use crate::{diagnostics, runtime_worker::{self, CacheResult, Progress}};
 use anyhow::{Result, anyhow};
 use std::{
     path::{Path, PathBuf},
@@ -40,6 +40,7 @@ impl RuntimeCacheManager {
             if state.version != version || !same_path(&state.mods_path, &mods_path) {
                 return Err(anyhow!("another runtime registry worker is already running for a different Minecraft instance"));
             }
+            diagnostics::append(&format!("Runtime registry listener joined existing job: Minecraft {version} · {}", mods_path.display()));
             state.listeners.push(Box::new(listener));
             return Ok(false);
         }
@@ -57,6 +58,10 @@ impl RuntimeCacheManager {
         }
         drop(state);
 
+        diagnostics::append(&format!(
+            "Runtime registry job started: Minecraft {version} · mods {} · force={force}",
+            mods_path.display()
+        ));
         let manager = self.clone();
         thread::spawn(move || {
             let result = runtime_worker::prepare_full_registry_cancellable(
@@ -64,7 +69,10 @@ impl RuntimeCacheManager {
                 &mods_path,
                 force,
                 cancel,
-                |progress| manager.emit(RuntimeCacheEvent::Progress(progress)),
+                |progress| {
+                    diagnostics::append(&format!("Runtime registry {:>3}% · {}", progress.percent.clamp(0, 100), progress.message));
+                    manager.emit(RuntimeCacheEvent::Progress(progress));
+                },
             );
 
             let completed = result.map_err(|error| format!("{error:#}"));
@@ -83,6 +91,7 @@ impl RuntimeCacheManager {
         }
         if let Some(cancel) = &state.cancel {
             cancel.store(true, Ordering::Relaxed);
+            diagnostics::append("Runtime registry cancellation requested");
             return true;
         }
         false
@@ -119,6 +128,7 @@ impl RuntimeCacheManager {
             state.fingerprint.clear();
             state.ready_path = PathBuf::new();
         }
+        diagnostics::append("Runtime registry ready-state invalidated");
     }
 
     fn emit(&self, event: RuntimeCacheEvent) {
@@ -132,6 +142,16 @@ impl RuntimeCacheManager {
     }
 
     fn finish(&self, result: Result<CacheResult, String>) {
+        match &result {
+            Ok(cache) => diagnostics::append(&format!(
+                "Runtime registry ready: {} · fingerprint {}{}",
+                cache.registry_path.display(),
+                cache.fingerprint,
+                if cache.reused { " · reused" } else { " · fresh" }
+            )),
+            Err(error) => diagnostics::append(&format!("Runtime registry failed: {error}")),
+        }
+
         let listeners = {
             let mut state = match self.state.lock() {
                 Ok(state) => state,
