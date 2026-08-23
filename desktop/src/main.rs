@@ -7,6 +7,7 @@ mod bridge_build;
 mod bridge_cli;
 mod bridge_compat;
 mod diagnostics;
+mod error_reporter;
 mod heightmap_cache;
 mod ipc;
 mod launcher;
@@ -43,6 +44,12 @@ const _: fn([f32; 3], i32) -> Option<viewer_selection::BoxSelection> =
 slint::include_modules!();
 
 fn main() -> anyhow::Result<()> {
+    // The reporter is deliberately handled before normal diagnostics startup.
+    // It must stay a tiny independent process that can survive the Workbench.
+    if error_reporter::handle_mode()? {
+        return Ok(());
+    }
+
     let log = diagnostics::initialize()?;
     diagnostics::append(&format!("Persistent diagnostics log: {}", log.display()));
 
@@ -55,6 +62,16 @@ fn main() -> anyhow::Result<()> {
         Err(error) => {
             diagnostics::append(&format!("Minesport Rust CLI command failed: {error:#}"));
             return Err(error);
+        }
+    }
+
+    if error_reporter::should_supervise_current_invocation() {
+        if let Err(error) = error_reporter::spawn_for_current_process() {
+            diagnostics::Logger::new("REPORTER").warn(
+                "ErrorReporterSupervisorUnavailable",
+                "Minesport will continue without the standalone crash reporter",
+                &[("error", format!("{error:#}"))],
+            );
         }
     }
 
