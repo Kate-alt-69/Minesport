@@ -1,3 +1,4 @@
+use crate::diagnostics;
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -85,6 +86,7 @@ impl Engine {
             .spawn()
             .with_context(|| format!("start Minesport backend worker {}", executable.display()))?;
         let pid = child.id();
+        diagnostics::append(&format!("Started Minesport backend worker (PID {pid}) with {}", executable.display()));
         let stdin = child.stdin.take().context("open Minesport backend stdin")?;
         let stdout = child.stdout.take().context("open Minesport backend stdout")?;
         let stderr = child.stderr.take().context("open Minesport backend stderr")?;
@@ -110,6 +112,10 @@ impl Engine {
 
     pub fn send<T: Serialize>(&self, request: &T) -> Result<()> {
         let bytes = serde_json::to_vec(request).context("encode backend IPC request")?;
+        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+            let command = value.get("command").and_then(Value::as_str).unwrap_or("request");
+            diagnostics::append(&format!("IPC -> {command}"));
+        }
         let mut stdin = self.inner.stdin.lock().map_err(|_| anyhow!("Minesport backend stdin lock poisoned"))?;
         stdin.write_all(&bytes).context("write backend IPC request")?;
         stdin.write_all(b"\n").context("terminate backend IPC request")?;
@@ -126,6 +132,7 @@ impl Engine {
     }
 
     pub fn shutdown(&self) {
+        diagnostics::append("Minesport backend shutdown requested");
         let _ = self.send_value(serde_json::json!({ "command": "quit" }));
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -137,10 +144,12 @@ impl Engine {
                 .and_then(|mut child| child.try_wait().ok().flatten())
                 .is_some();
             if exited {
+                diagnostics::append("Minesport backend exited cleanly");
                 return;
             }
             if Instant::now() >= deadline {
                 if let Ok(mut child) = self.inner.child.lock() {
+                    diagnostics::append("Minesport backend did not exit within 3s; terminating worker");
                     let _ = child.kill();
                     let _ = child.wait();
                 }
@@ -163,6 +172,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     }
 
     let java = resolve_java();
+    diagnostics::append(&format!("Engine worker Java executable: {}", java.display()));
     let mut command = Command::new(&java);
     command
         .arg("-jar")
@@ -177,6 +187,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         .spawn()
         .with_context(|| format!("start Java engine with {}", java.display()))?;
     let java_pid = child.id();
+    diagnostics::append(&format!("Java engine started (PID {java_pid}) with {}", java.display()));
     let mut java_stdin = child.stdin.take().context("open Java engine stdin")?;
     let java_stdout = child.stdout.take().context("open Java engine stdout")?;
     let java_stderr = child.stderr.take().context("open Java engine stderr")?;
@@ -229,6 +240,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     });
 
     let status = child.wait().context("wait for Java engine")?;
+    diagnostics::append(&format!("Java engine process exited with {status}"));
     let _ = stdout_relay.join();
     let _ = stderr_relay.join();
     if !status.success() {
@@ -248,17 +260,27 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                         message: line,
                         ..Response::default()
                     });
+                    match response.kind.as_str() {
+                        "log" => diagnostics::append(&response.message),
+                        "progress" => diagnostics::append(&format!("IPC <- progress {}% · {}", response.percent, response.message)),
+                        "done" => diagnostics::append(&format!("IPC <- done · {} · {} blocks · {} faces · {} vertices", response.output, response.block_count, response.quad_count, response.vertex_count)),
+                        "error" => diagnostics::append(&format!("IPC <- error · {}", response.message)),
+                        kind => diagnostics::append(&format!("IPC <- {kind}")),
+                    }
                     if tx.send(EngineEvent::Response(response)).is_err() {
                         return;
                     }
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    let _ = tx.send(EngineEvent::ReadEnded(format!("Minesport backend IPC read failed: {error}")));
+                    let message = format!("Minesport backend IPC read failed: {error}");
+                    diagnostics::append(&message);
+                    let _ = tx.send(EngineEvent::ReadEnded(message));
                     return;
                 }
             }
         }
+        diagnostics::append("Minesport backend output closed");
         let _ = tx.send(EngineEvent::ReadEnded("Minesport backend output closed".to_string()));
     });
 }
@@ -268,13 +290,16 @@ fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<E
         for line in BufReader::new(stderr).lines() {
             match line {
                 Ok(line) if !line.trim().is_empty() => {
+                    diagnostics::append(&format!("[backend] {line}"));
                     if tx.send(EngineEvent::Stderr(line)).is_err() {
                         return;
                     }
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    let _ = tx.send(EngineEvent::Stderr(format!("backend stderr read failed: {error}")));
+                    let message = format!("backend stderr read failed: {error}");
+                    diagnostics::append(&message);
+                    let _ = tx.send(EngineEvent::Stderr(message));
                     return;
                 }
             }
@@ -288,6 +313,7 @@ fn resolve_java() -> PathBuf {
         if candidate.is_file() {
             return candidate;
         }
+        diagnostics::append(&format!("Ignoring invalid JAVA_HOME: {}", PathBuf::from(home).display()));
     }
     PathBuf::from(java_executable_name())
 }
