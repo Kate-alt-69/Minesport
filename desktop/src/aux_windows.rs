@@ -135,19 +135,22 @@ slint::slint! {
         in-out property <string> detail: "Exact current mod set";
         in-out property <float> progress: 0.0;
         in-out property <bool> cancelling: false;
+        in-out property <bool> working: true;
         callback cancel();
+        callback loader-finished();
 
         VerticalLayout {
             padding: 12px;
             spacing: 8px;
             MinesportLoader {
                 horizontal-stretch: 1;
-                active: true;
+                active: root.working;
                 title: root.stage;
                 detail: root.detail;
                 progress: root.progress;
                 determinate: true;
                 compact: true;
+                finished => { root.loader-finished(); }
             }
             HorizontalLayout {
                 spacing: 8px;
@@ -161,7 +164,7 @@ slint::slint! {
                 }
                 Button {
                     text: root.cancelling ? "Cancelling…" : "Cancel";
-                    enabled: !root.cancelling;
+                    enabled: root.working && !root.cancelling;
                     clicked => { root.cancelling = true; root.cancel(); }
                 }
             }
@@ -278,6 +281,20 @@ where
                 on_cancel();
             });
 
+            let main_weak = main.as_weak();
+            window.on_loader_finished(move || {
+                RUNTIME_WINDOW.with(|slot| {
+                    if let Some(window) = slot.borrow_mut().take() {
+                        let _ = window.hide();
+                    }
+                });
+                if let Some(main) = main_weak.upgrade() {
+                    if let Err(error) = main.show() {
+                        diagnostics::append(&format!("Could not restore Minesport workbench: {error}"));
+                    }
+                }
+            });
+
             window.window().on_close_requested({
                 let weak = window.as_weak();
                 move || {
@@ -298,6 +315,7 @@ where
                 window.set_cancelling(false);
             }
             if !window.get_cancelling() {
+                window.set_working(true);
                 window.set_stage(stage.into());
                 window.set_detail(format!("Minecraft {version} · exact current mod set").into());
             }
@@ -326,15 +344,18 @@ pub fn mark_runtime_cache_cancelling() {
 pub fn close_runtime_cache(main: &MainWindow) {
     let mut had_window = false;
     RUNTIME_WINDOW.with(|slot| {
-        if let Some(window) = slot.borrow_mut().take() {
+        if let Some(window) = slot.borrow().as_ref() {
             had_window = true;
-            let _ = window.hide();
+            window.set_progress(1.0);
+            window.set_stage("Runtime model task complete".into());
+            window.set_detail("Finalizing Minesport runtime model state…".into());
+            window.set_working(false);
         }
     });
-    if had_window {
-        if let Err(error) = main.show() {
-            diagnostics::append(&format!("Could not restore Minesport workbench: {error}"));
-        }
+    if !had_window {
+        // A cache hit never hid the workbench, so there is nothing to animate
+        // or restore here. Keep this branch explicit for future callers.
+        let _ = main;
     }
 }
 
