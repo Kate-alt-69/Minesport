@@ -2,6 +2,7 @@
 
 mod app;
 mod blender;
+mod bridge_build;
 mod bridge_cli;
 mod bridge_compat;
 mod diagnostics;
