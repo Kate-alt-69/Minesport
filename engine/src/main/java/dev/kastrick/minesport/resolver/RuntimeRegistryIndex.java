@@ -54,6 +54,9 @@ public final class RuntimeRegistryIndex {
         int blockCount
     ) {}
 
+    /** Data needed by BridgeStateRegistry without touching baked quad payloads. */
+    public record BlockMetadata(boolean hasVariants, List<RuntimeRegistryDataReader.DataLight> lights) {}
+
     private record BlockLocation(String blockId, long offset) {}
 
     private final File file;
@@ -136,10 +139,7 @@ public final class RuntimeRegistryIndex {
 
         try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
             input.seek(location.offset());
-            String storedId = readString(input);
-            if (!storedId.equals(blockId)) {
-                throw new IOException("runtime registry hash index mismatch for " + blockId);
-            }
+            verifyStoredId(input, blockId);
 
             String vanillaMapping = readString(input);
             String loaderType = readString(input);
@@ -179,23 +179,36 @@ public final class RuntimeRegistryIndex {
                 ));
             }
 
-            int lightCount = readCount(input, MAX_VARIANTS, "light states");
-            List<RuntimeRegistryDataReader.DataLight> lights = new ArrayList<>(lightCount);
-            for (int lightIndex = 0; lightIndex < lightCount; lightIndex++) {
-                Map<String, String> properties = readStringMap(input);
-                int level = input.readInt();
-                if (level < 0 || level > 15) {
-                    throw new IOException("invalid runtime light level " + level);
-                }
-                lights.add(new RuntimeRegistryDataReader.DataLight(Map.copyOf(properties), level));
-            }
-
+            List<RuntimeRegistryDataReader.DataLight> lights = readLights(input);
             return new RuntimeRegistryDataReader.DataBlock(
                 vanillaMapping,
                 loaderType,
                 List.copyOf(variants),
-                List.copyOf(lights)
+                lights
             );
+        }
+    }
+
+    /**
+     * Read only state metadata needed for world enrichment. Quad payloads are
+     * seek-skipped, so this path allocates no baked vertex/UV arrays at all.
+     */
+    public BlockMetadata readMetadata(String blockId) throws IOException {
+        BlockLocation location = find(blockId);
+        if (location == null) return null;
+
+        try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
+            input.seek(location.offset());
+            verifyStoredId(input, blockId);
+            skipString(input); // vanilla mapping
+            skipString(input); // loader type
+
+            int variantCount = readCount(input, MAX_VARIANTS, "variants");
+            for (int variantIndex = 0; variantIndex < variantCount; variantIndex++) {
+                skipStringMap(input);
+                skipQuadList(input);
+            }
+            return new BlockMetadata(variantCount > 0, readLights(input));
         }
     }
 
@@ -221,6 +234,13 @@ public final class RuntimeRegistryIndex {
         return null;
     }
 
+    private static void verifyStoredId(RandomAccessFile input, String expected) throws IOException {
+        String storedId = readString(input);
+        if (!storedId.equals(expected)) {
+            throw new IOException("runtime registry hash index mismatch for " + expected);
+        }
+    }
+
     private static void validateMagic(RandomAccessFile input) throws IOException {
         byte[] magic = new byte[MAGIC.length];
         input.readFully(magic);
@@ -237,12 +257,7 @@ public final class RuntimeRegistryIndex {
         int variantCount = readCount(input, MAX_VARIANTS, "variants");
         for (int variantIndex = 0; variantIndex < variantCount; variantIndex++) {
             skipStringMap(input);
-            int quadCount = readCount(input, MAX_QUADS, "quads");
-            for (int quadIndex = 0; quadIndex < quadCount; quadIndex++) {
-                skipBytes(input, PACKED_VERTEX_BYTES, "quad vertices");
-                skipString(input);
-                skipBytes(input, QUAD_TRAILER_BYTES, "quad metadata");
-            }
+            skipQuadList(input);
         }
 
         int lightCount = readCount(input, MAX_VARIANTS, "light states");
@@ -250,6 +265,29 @@ public final class RuntimeRegistryIndex {
             skipStringMap(input);
             skipBytes(input, Integer.BYTES, "light level");
         }
+    }
+
+    private static void skipQuadList(RandomAccessFile input) throws IOException {
+        int quadCount = readCount(input, MAX_QUADS, "quads");
+        for (int quadIndex = 0; quadIndex < quadCount; quadIndex++) {
+            skipBytes(input, PACKED_VERTEX_BYTES, "quad vertices");
+            skipString(input);
+            skipBytes(input, QUAD_TRAILER_BYTES, "quad metadata");
+        }
+    }
+
+    private static List<RuntimeRegistryDataReader.DataLight> readLights(RandomAccessFile input) throws IOException {
+        int lightCount = readCount(input, MAX_VARIANTS, "light states");
+        List<RuntimeRegistryDataReader.DataLight> lights = new ArrayList<>(lightCount);
+        for (int lightIndex = 0; lightIndex < lightCount; lightIndex++) {
+            Map<String, String> properties = readStringMap(input);
+            int level = input.readInt();
+            if (level < 0 || level > 15) {
+                throw new IOException("invalid runtime light level " + level);
+            }
+            lights.add(new RuntimeRegistryDataReader.DataLight(Map.copyOf(properties), level));
+        }
+        return List.copyOf(lights);
     }
 
     private static Map<String, String> readStringMap(RandomAccessFile input) throws IOException {
