@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{fs, path::{Path, PathBuf}};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,16 +45,58 @@ pub fn write_selection_file(cache_root: &Path, selection: &ExactSelection) -> Re
     let directory = cache_root.join("selection");
     fs::create_dir_all(&directory)
         .with_context(|| format!("create exact-selection cache {}", directory.display()))?;
-    let path = directory.join("preview-selection.json");
     let rows = selection.coordinates.iter().map(|coordinate| CoordinateRow {
         x: coordinate[0],
         y: coordinate[1],
         z: coordinate[2],
     }).collect::<Vec<_>>();
     let bytes = serde_json::to_vec(&rows).context("encode exact preview selection")?;
-    fs::write(&path, bytes)
-        .with_context(|| format!("write exact preview selection {}", path.display()))?;
+    let digest = Sha256::digest(&bytes);
+    let fingerprint = format!("{digest:x}");
+    let path = directory.join(format!("preview-selection-{}.json", &fingerprint[..16]));
+    if !path.is_file() {
+        let temporary = directory.join(format!(".preview-selection-{}-{}.tmp", std::process::id(), &fingerprint[..16]));
+        fs::write(&temporary, &bytes)
+            .with_context(|| format!("stage exact preview selection {}", temporary.display()))?;
+        match fs::rename(&temporary, &path) {
+            Ok(()) => {}
+            Err(_) if path.is_file() => { let _ = fs::remove_file(&temporary); }
+            Err(error) => return Err(error).with_context(|| format!("install exact preview selection {}", path.display())),
+        }
+    }
     Ok(path)
+}
+
+/// Translate a click in a `contain`-fitted Slint image back into source-image
+/// pixels. Returns `None` when the click lands in letterboxing around the image.
+pub fn preview_source_point(
+    mouse_x: f32,
+    mouse_y: f32,
+    view_width: f32,
+    view_height: f32,
+    image_width: u32,
+    image_height: u32,
+) -> Option<(u32, u32)> {
+    if !mouse_x.is_finite() || !mouse_y.is_finite() || !view_width.is_finite() || !view_height.is_finite() {
+        return None;
+    }
+    if view_width <= 0.0 || view_height <= 0.0 || image_width == 0 || image_height == 0 {
+        return None;
+    }
+    let scale = (view_width / image_width as f32).min(view_height / image_height as f32);
+    if scale <= 0.0 || !scale.is_finite() { return None; }
+    let displayed_width = image_width as f32 * scale;
+    let displayed_height = image_height as f32 * scale;
+    let offset_x = (view_width - displayed_width) * 0.5;
+    let offset_y = (view_height - displayed_height) * 0.5;
+    let local_x = mouse_x - offset_x;
+    let local_y = mouse_y - offset_y;
+    if local_x < 0.0 || local_y < 0.0 || local_x >= displayed_width || local_y >= displayed_height {
+        return None;
+    }
+    let source_x = (local_x / scale).floor().clamp(0.0, image_width.saturating_sub(1) as f32) as u32;
+    let source_y = (local_y / scale).floor().clamp(0.0, image_height.saturating_sub(1) as f32) as u32;
+    Some((source_x, source_y))
 }
 
 #[cfg(test)]
@@ -74,15 +117,27 @@ mod tests {
     }
 
     #[test]
-    fn selection_file_uses_engine_coordinate_schema() {
+    fn selection_file_uses_engine_coordinate_schema_and_stable_name() {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let root = std::env::temp_dir().join(format!("minesport-selection-{}-{stamp}", std::process::id()));
         let selection = ExactSelection::from_coordinates(vec![[1, 2, 3]], "one").unwrap();
-        let path = write_selection_file(&root, &selection).unwrap();
-        let text = fs::read_to_string(&path).unwrap();
+        let first = write_selection_file(&root, &selection).unwrap();
+        let second = write_selection_file(&root, &selection).unwrap();
+        assert_eq!(first, second);
+        assert!(first.file_name().unwrap().to_string_lossy().starts_with("preview-selection-"));
+        let text = fs::read_to_string(&first).unwrap();
         assert!(text.contains("\"x\":1"));
         assert!(text.contains("\"y\":2"));
         assert!(text.contains("\"z\":3"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn contain_click_translation_rejects_letterboxing() {
+        // 1200×720 inside a square 1000×1000 viewport becomes 1000×600 with
+        // 200 px bars on the top and bottom.
+        assert_eq!(preview_source_point(500.0, 500.0, 1000.0, 1000.0, 1200, 720), Some((600, 360)));
+        assert_eq!(preview_source_point(500.0, 100.0, 1000.0, 1000.0, 1200, 720), None);
+        assert_eq!(preview_source_point(500.0, 900.0, 1000.0, 1000.0, 1200, 720), None);
     }
 }
