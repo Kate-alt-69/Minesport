@@ -745,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn IPC_command_operation_ids_are_hardcoded_and_searchable() {
+    fn ipc_command_operation_ids_are_hardcoded_and_searchable() {
         assert_eq!(request_operation_id("export"), "IpcRequestDispatchExport");
         assert_eq!(request_operation_id("heightmap"), "IpcRequestDispatchHeightmap");
         assert_eq!(request_operation_id("listBlocks"), "IpcRequestDispatchBlockList");
