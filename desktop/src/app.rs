@@ -1,5 +1,5 @@
 use crate::{
-    MainWindow, blender, bridge_compat,
+    MainWindow, blender, bridge_compat, diagnostics,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
     preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, settings,
 };
@@ -9,7 +9,7 @@ use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use settings::DesktopSettings;
-use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
+use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use std::{
     collections::HashMap,
     fs,
@@ -83,6 +83,7 @@ pub fn run() -> Result<()> {
     wire_viewer(&ui, engine.clone(), state.clone());
     wire_cache_actions(&ui, engine.clone(), state.clone(), cache.clone());
     wire_asset_pickers(&ui, state.clone());
+    wire_settings_persistence(&ui, state.clone());
     wire_docs(&ui);
     wire_blender(&ui);
 
@@ -105,6 +106,7 @@ pub fn run() -> Result<()> {
     ui.run().context("run Minesport Slint event loop")?;
     cache.cancel();
     if let Err(error) = settings::save(&collect_settings(&ui, &state)) {
+        diagnostics::append(&format!("Could not save Minesport desktop settings: {error:#}"));
         eprintln!("Could not save Minesport desktop settings: {error:#}");
     }
     engine.shutdown();
@@ -175,6 +177,23 @@ fn collect_settings(ui: &MainWindow, state: &SharedState) -> DesktopSettings {
         resource_packs: guard.resource_packs.clone(),
         data_packs: guard.data_packs.clone(),
     }
+}
+
+fn wire_settings_persistence(ui: &MainWindow, state: SharedState) {
+    let weak = ui.as_weak();
+    ui.on_settings_changed(move || {
+        let Some(ui) = weak.upgrade() else { return; };
+        persist_settings_snapshot(&ui, &state);
+    });
+}
+
+fn persist_settings_snapshot(ui: &MainWindow, state: &SharedState) {
+    let snapshot = collect_settings(ui, state);
+    thread::spawn(move || {
+        if let Err(error) = settings::save(&snapshot) {
+            diagnostics::append(&format!("Could not persist Minesport desktop settings: {error:#}"));
+        }
+    });
 }
 
 fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: RuntimeCacheManager) {
@@ -250,8 +269,10 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
     });
 
     let weak = ui.as_weak();
+    let output_state = state.clone();
     ui.on_pick_output(move || {
         let weak = weak.clone();
+        let state = output_state.clone();
         thread::spawn(move || {
             let picked = rfd::FileDialog::new().set_title("Choose Minesport export folder").pick_folder();
             let Some(path) = picked else { return; };
@@ -259,6 +280,7 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 ui.set_output_path(display.clone().into());
                 append_diagnostic(&ui, &format!("Export folder: {display}"));
+                persist_settings_snapshot(&ui, &state);
             });
         });
     });
@@ -325,7 +347,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
                 "faceCulling": bool_text(ui.get_face_culling()),
                 "hiddenBlockCulling": bool_text(ui.get_hidden_culling()),
                 "blenderExport": bool_text(ui.get_blender_export()),
-                "blenderAnimationMode": if ui.get_blender_animation_index() == 1 { "static_first_frame" } else { "animate_export" },
+                "blenderAnimationMode": if ui.get_blender_animation_index() == 1 { "animate_static" } else { "animate_export" },
                 "flatterOptimization": bool_text(ui.get_flatter_enabled()),
                 "flatterCellSize": cell_size.to_string(),
                 "resourcePacks": resource_packs,
@@ -655,42 +677,171 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
         thread::spawn(move || {
             let picked = rfd::FileDialog::new().set_title("Add Minecraft resource pack (.zip)").add_filter("Minecraft resource pack", &["zip"]).pick_file();
             let Some(path) = picked else { return; };
-            let summary = {
-                let mut guard = state.lock().expect("resource pack state");
-                if !guard.resource_packs.contains(&path) { guard.resource_packs.push(path.clone()); }
-                format!("{} resource-pack override(s) · last: {}", guard.resource_packs.len(), path.display())
-            };
+            let added = state.lock().map(|mut guard| add_unique_path(&mut guard.resource_packs, path.clone())).unwrap_or(false);
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                ui.set_resource_pack_summary(summary.into());
-                append_diagnostic(&ui, &format!("Resource pack added: {}", path.display()));
+                refresh_asset_summaries(&ui, &state);
+                append_diagnostic(&ui, if added { &format!("Resource pack added: {}", path.display()) } else { "Resource pack already exists in the priority stack" });
+                persist_settings_snapshot(&ui, &state);
             });
         });
     });
 
     let weak = ui.as_weak();
+    let resource_state = state.clone();
+    ui.on_add_resource_pack_folder(move || {
+        let weak = weak.clone();
+        let state = resource_state.clone();
+        thread::spawn(move || {
+            let picked = rfd::FileDialog::new().set_title("Add Minecraft resource pack folder").pick_folder();
+            let Some(path) = picked else { return; };
+            let added = state.lock().map(|mut guard| add_unique_path(&mut guard.resource_packs, path.clone())).unwrap_or(false);
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                refresh_asset_summaries(&ui, &state);
+                append_diagnostic(&ui, if added { &format!("Resource pack folder added: {}", path.display()) } else { "Resource pack already exists in the priority stack" });
+                persist_settings_snapshot(&ui, &state);
+            });
+        });
+    });
+
+    let weak = ui.as_weak();
+    let resource_state = state.clone();
+    ui.on_move_resource_pack(move |delta| {
+        let Some(ui) = weak.upgrade() else { return; };
+        let index = ui.get_resource_pack_selected();
+        if let Ok(mut guard) = resource_state.lock() {
+            if move_path_entry(&mut guard.resource_packs, index, delta) {
+                ui.set_resource_pack_selected((index + delta).max(0));
+            }
+        }
+        refresh_asset_summaries(&ui, &resource_state);
+        persist_settings_snapshot(&ui, &resource_state);
+    });
+
+    let weak = ui.as_weak();
+    let resource_state = state.clone();
+    ui.on_remove_resource_pack(move || {
+        let Some(ui) = weak.upgrade() else { return; };
+        let index = ui.get_resource_pack_selected();
+        if let Ok(mut guard) = resource_state.lock() {
+            remove_path_entry(&mut guard.resource_packs, index);
+        }
+        refresh_asset_summaries(&ui, &resource_state);
+        persist_settings_snapshot(&ui, &resource_state);
+    });
+
+    let weak = ui.as_weak();
+    let data_state = state.clone();
     ui.on_add_data_pack(move || {
         let weak = weak.clone();
-        let state = state.clone();
+        let state = data_state.clone();
         thread::spawn(move || {
             let picked = rfd::FileDialog::new().set_title("Add Minecraft data pack folder").pick_folder();
             let Some(path) = picked else { return; };
-            let summary = {
-                let mut guard = state.lock().expect("data pack state");
-                if !guard.data_packs.contains(&path) { guard.data_packs.push(path.clone()); }
-                format!("{} data-pack override(s) · last: {}", guard.data_packs.len(), path.display())
-            };
+            let added = state.lock().map(|mut guard| add_unique_path(&mut guard.data_packs, path.clone())).unwrap_or(false);
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                ui.set_data_pack_summary(summary.into());
-                append_diagnostic(&ui, &format!("Data pack added: {}", path.display()));
+                refresh_asset_summaries(&ui, &state);
+                append_diagnostic(&ui, if added { &format!("Data pack added: {}", path.display()) } else { "Data pack already exists in the priority stack" });
+                persist_settings_snapshot(&ui, &state);
             });
         });
+    });
+
+    let weak = ui.as_weak();
+    let data_state = state.clone();
+    ui.on_move_data_pack(move |delta| {
+        let Some(ui) = weak.upgrade() else { return; };
+        let index = ui.get_data_pack_selected();
+        if let Ok(mut guard) = data_state.lock() {
+            if move_path_entry(&mut guard.data_packs, index, delta) {
+                ui.set_data_pack_selected((index + delta).max(0));
+            }
+        }
+        refresh_asset_summaries(&ui, &data_state);
+        persist_settings_snapshot(&ui, &data_state);
+    });
+
+    let weak = ui.as_weak();
+    ui.on_remove_data_pack(move || {
+        let Some(ui) = weak.upgrade() else { return; };
+        let index = ui.get_data_pack_selected();
+        if let Ok(mut guard) = state.lock() {
+            remove_path_entry(&mut guard.data_packs, index);
+        }
+        refresh_asset_summaries(&ui, &state);
+        persist_settings_snapshot(&ui, &state);
     });
 }
 
 fn refresh_asset_summaries(ui: &MainWindow, state: &SharedState) {
-    let guard = state.lock().expect("asset state");
-    ui.set_resource_pack_summary(if guard.resource_packs.is_empty() { "No resource-pack overrides".into() } else { format!("{} resource-pack override(s)", guard.resource_packs.len()).into() });
-    ui.set_data_pack_summary(if guard.data_packs.is_empty() { "No data-pack overrides".into() } else { format!("{} data-pack override(s)", guard.data_packs.len()).into() });
+    let (resource_packs, data_packs) = state.lock().map(|guard| (guard.resource_packs.clone(), guard.data_packs.clone())).unwrap_or_default();
+
+    ui.set_resource_pack_summary(if resource_packs.is_empty() {
+        "No resource-pack overrides".into()
+    } else {
+        format!("{} resource-pack override(s) · highest priority first", resource_packs.len()).into()
+    });
+    ui.set_data_pack_summary(if data_packs.is_empty() {
+        "No data-pack overrides".into()
+    } else {
+        format!("{} data-pack override(s)", data_packs.len()).into()
+    });
+
+    ui.set_resource_pack_items(path_model(&resource_packs));
+    ui.set_data_pack_items(path_model(&data_packs));
+    ui.set_resource_pack_selected(clamp_selection(ui.get_resource_pack_selected(), resource_packs.len()));
+    ui.set_data_pack_selected(clamp_selection(ui.get_data_pack_selected(), data_packs.len()));
+}
+
+fn path_model(paths: &[PathBuf]) -> ModelRc<SharedString> {
+    let rows = paths.iter().enumerate().map(|(index, path)| {
+        let kind = match fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => "FOLDER",
+            Ok(_) if path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) => "ZIP",
+            Ok(_) => "FILE",
+            Err(_) => "MISSING",
+        };
+        let name = path.file_name().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).unwrap_or_else(|| path.to_str().unwrap_or("path"));
+        SharedString::from(format!("{} · {} · {}", index + 1, name, kind))
+    }).collect::<Vec<_>>();
+    ModelRc::new(VecModel::from(rows))
+}
+
+fn clamp_selection(index: i32, len: usize) -> i32 {
+    if len == 0 { 0 } else { index.clamp(0, len.saturating_sub(1) as i32) }
+}
+
+fn add_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) -> bool {
+    let cleaned = path.components().collect::<PathBuf>();
+    if paths.iter().any(|existing| same_asset_path(existing, &cleaned)) {
+        return false;
+    }
+    paths.push(cleaned);
+    true
+}
+
+fn same_asset_path(left: &Path, right: &Path) -> bool {
+    if cfg!(windows) {
+        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+    } else {
+        left == right
+    }
+}
+
+fn move_path_entry(paths: &mut [PathBuf], index: i32, delta: i32) -> bool {
+    if index < 0 { return false; }
+    let Some(target) = index.checked_add(delta) else { return false; };
+    if target < 0 { return false; }
+    let index = index as usize;
+    let target = target as usize;
+    if index >= paths.len() || target >= paths.len() { return false; }
+    paths.swap(index, target);
+    true
+}
+
+fn remove_path_entry(paths: &mut Vec<PathBuf>, index: i32) -> bool {
+    if index < 0 || index as usize >= paths.len() { return false; }
+    paths.remove(index as usize);
+    true
 }
 
 fn wire_docs(ui: &MainWindow) {
@@ -970,6 +1121,7 @@ fn flush_logs(weak: &slint::Weak<MainWindow>, logs: &mut Vec<String>) {
 }
 
 fn append_diagnostic(ui: &MainWindow, line: &str) {
+    diagnostics::append(line);
     let current = ui.get_diagnostics().to_string();
     let mut combined = if current.is_empty() { line.to_string() } else { format!("{current}\n{line}") };
     const MAX_BYTES: usize = 64 * 1024;
@@ -1130,8 +1282,15 @@ mod tests {
         assert!(bridge_compat::is_supported("1.21.11"));
         assert!(bridge_compat::is_supported("26.2"));
         assert!(!bridge_compat::is_supported("1.5"));
-        // The directory existence portion is intentionally tested separately by
-        // runtime_cache/runtime_worker; this assertion documents the manifest gate.
         assert!(!runtime_registry_supported("forge", "1.21.10", mods));
+    }
+
+    #[test]
+    fn asset_path_move_and_remove_preserve_priority() {
+        let mut values = vec![PathBuf::from("A"), PathBuf::from("B"), PathBuf::from("C")];
+        assert!(move_path_entry(&mut values, 1, -1));
+        assert_eq!(values, vec![PathBuf::from("B"), PathBuf::from("A"), PathBuf::from("C")]);
+        assert!(remove_path_entry(&mut values, 1));
+        assert_eq!(values, vec![PathBuf::from("B"), PathBuf::from("C")]);
     }
 }
