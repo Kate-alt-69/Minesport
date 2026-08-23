@@ -286,15 +286,28 @@ fn create_fast_bundled_workspace(workspace: &Path, version: &str) -> Result<()> 
 fn start_gradle_worker(workspace: &Path, log_path: &Path, java_home: &Path) -> Result<Child> {
     let stdout = File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
     let stderr = stdout.try_clone()?;
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("cmd.exe");
-        command.args(["/D", "/S", "/C", "gradlew.bat --no-daemon --console=plain runClient"]);
-        command
-    } else {
-        let mut command = Command::new(workspace.join("gradlew"));
-        command.args(["--no-daemon", "--console=plain", "runClient"]);
-        command
-    };
+    let java = java_home.join("bin").join(if cfg!(windows) { "java.exe" } else { "java" });
+    if !java.is_file() {
+        bail!("selected runtime JDK has no Java launcher: {}", java.display());
+    }
+    let wrapper = workspace.join("gradle").join("wrapper").join("gradle-wrapper.jar");
+    if !wrapper.is_file() {
+        bail!("runtime worker has no embedded Gradle wrapper: {}", wrapper.display());
+    }
+
+    // Launch the wrapper directly instead of cmd.exe -> gradlew.bat -> Java.
+    // More importantly, keep Gradle's own build JVM small. Minecraft's runClient
+    // process is separate and retains the memory it actually needs for baked
+    // model loading; this only removes the oversized 1.5 GiB Gradle overhead.
+    let mut command = Command::new(&java);
+    command
+        .arg("-Xmx512m")
+        .arg("-XX:MaxMetaspaceSize=384m")
+        .arg("-Dfile.encoding=UTF-8")
+        .arg("-cp")
+        .arg(&wrapper)
+        .arg("org.gradle.wrapper.GradleWrapperMain")
+        .args(["--no-daemon", "--console=plain", "--max-workers=2", "--no-watch-fs", "runClient"]);
     command.current_dir(workspace).stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
     sanitize_java_environment(&mut command, java_home);
     command.env("MINESPORT_BRIDGE_PORT", "25590");
@@ -308,7 +321,14 @@ fn start_gradle_worker(workspace: &Path, log_path: &Path, java_home: &Path) -> R
 fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
     for (key, _) in env::vars_os() {
         let name = key.to_string_lossy();
-        if name.eq_ignore_ascii_case("JAVA_HOME") || name.eq_ignore_ascii_case("JDK_HOME") || name.eq_ignore_ascii_case("GRADLE_JAVA_HOME") {
+        if name.eq_ignore_ascii_case("JAVA_HOME")
+            || name.eq_ignore_ascii_case("JDK_HOME")
+            || name.eq_ignore_ascii_case("GRADLE_JAVA_HOME")
+            || name.eq_ignore_ascii_case("JAVA_OPTS")
+            || name.eq_ignore_ascii_case("GRADLE_OPTS")
+            || name.eq_ignore_ascii_case("_JAVA_OPTIONS")
+            || name.eq_ignore_ascii_case("JDK_JAVA_OPTIONS")
+        {
             command.env_remove(key);
         }
     }
@@ -489,7 +509,9 @@ dependencies {
 "#;
 
 fn gradle_properties(version: &str) -> String {
-    format!("minecraft_version={version}\nloader_version={LOADER_1_21_10}\nfabric_version={FABRIC_API_1_21_10}\norg.gradle.jvmargs=-Xmx1536m -Dfile.encoding=UTF-8\norg.gradle.parallel=false\n")
+    format!(
+        "minecraft_version={version}\nloader_version={LOADER_1_21_10}\nfabric_version={FABRIC_API_1_21_10}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=2\norg.gradle.vfs.watch=false\n"
+    )
 }
 
 #[cfg(windows)]
@@ -518,6 +540,15 @@ mod tests {
     fn workspace_uses_embedded_gradle_wrapper() {
         assert!(!GRADLEW_BAT.is_empty());
         assert!(!GRADLE_WRAPPER_JAR.is_empty());
+    }
+
+    #[test]
+    fn runtime_gradle_properties_do_not_reserve_a_huge_build_heap() {
+        let properties = gradle_properties(MC_1_21_10);
+        assert!(!properties.contains("org.gradle.jvmargs=-Xmx1536m"));
+        assert!(properties.contains("org.gradle.daemon=false"));
+        assert!(properties.contains("org.gradle.workers.max=2"));
+        assert!(properties.contains("org.gradle.vfs.watch=false"));
     }
 
     #[test]
