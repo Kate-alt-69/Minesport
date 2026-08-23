@@ -146,6 +146,8 @@ where
     B: Fn() + 'static,
 {
     close_active();
+    let on_select: Rc<dyn Fn(WorldContext)> = Rc::new(on_select);
+    let on_browse: Rc<dyn Fn()> = Rc::new(on_browse);
     let picker = match LauncherWorldPicker::new() {
         Ok(value) => value,
         Err(_) => {
@@ -197,7 +199,7 @@ where
                 }
             }
         }
-        picker.set_search_text(SharedString::new());
+        picker.set_search_text(SharedString::default());
         refresh(&picker, &activate_state);
     });
 
@@ -229,25 +231,27 @@ where
             state.selected_world = None;
             state.query.clear();
         }
-        picker.set_search_text(SharedString::new());
+        picker.set_search_text(SharedString::default());
         refresh(&picker, &back_state);
     });
 
     let select_state = state.clone();
+    let select_callback = on_select.clone();
     picker.on_use_selected(move || {
-        let selected = select_state
-            .borrow()
-            .selected_world
-            .and_then(|index| select_state.borrow().all.get(index).cloned());
+        let selected = {
+            let state = select_state.borrow();
+            state.selected_world.and_then(|index| state.all.get(index).cloned())
+        };
         if let Some(context) = selected {
             close_active();
-            on_select(context);
+            select_callback(context);
         }
     });
 
+    let browse_callback = on_browse.clone();
     picker.on_browse_folder(move || {
         close_active();
-        on_browse();
+        browse_callback();
     });
 
     if picker.show().is_ok() {
