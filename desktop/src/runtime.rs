@@ -1,19 +1,34 @@
 use anyhow::{Context, Result, bail};
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Component, Path, PathBuf},
+};
 
+const VENDOR_DIR: &str = "kastrick's_software";
+const APP_DIR: &str = "minesport";
 const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
 const BRIDGE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge.jar"));
 
 pub fn materialize_engine() -> Result<PathBuf> {
-    materialize_runtime_asset("minesport-engine-0.2.0.jar", ".minesport-engine-0.2.0.tmp", ENGINE_BYTES)
+    materialize_runtime_asset(
+        "minesport-engine-0.2.0.jar",
+        ".minesport-engine-0.2.0.tmp",
+        ENGINE_BYTES,
+    )
 }
 
 pub fn materialize_bundled_bridge() -> Result<PathBuf> {
-    materialize_runtime_asset("minesport-bridge-0.2.0.jar", ".minesport-bridge-0.2.0.tmp", BRIDGE_BYTES)
+    materialize_runtime_asset(
+        "minesport-bridge-0.2.0.jar",
+        ".minesport-bridge-0.2.0.tmp",
+        BRIDGE_BYTES,
+    )
 }
 
 fn materialize_runtime_asset(name: &str, temporary_name: &str, bytes: &[u8]) -> Result<PathBuf> {
-    if bytes.is_empty() { bail!("embedded runtime asset {name} is empty"); }
+    if bytes.is_empty() {
+        bail!("embedded runtime asset {name} is empty");
+    }
     let root = data_root().join("runtime");
     fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
     let destination = root.join(name);
@@ -25,78 +40,159 @@ fn materialize_runtime_asset(name: &str, temporary_name: &str, bytes: &[u8]) -> 
         let temporary = root.join(temporary_name);
         fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
         let _ = fs::remove_file(&destination);
-        fs::rename(&temporary, &destination).with_context(|| format!("install {}", destination.display()))?;
+        fs::rename(&temporary, &destination)
+            .with_context(|| format!("install {}", destination.display()))?;
     }
     Ok(destination)
 }
 
+/// Durable per-user Minesport state. This preserves the retired Go appdirs
+/// contract, including environment overrides and the macOS Application Support
+/// location, so the Rust migration does not move users' data unexpectedly.
 pub fn data_root() -> PathBuf {
+    if let Some(path) = env_path("MINESPORT_DATA_DIR") {
+        return path;
+    }
+
     if cfg!(windows) {
-        if let Some(local) = env::var_os("LOCALAPPDATA") {
-            return PathBuf::from(local).join("kastrick's_software").join("minesport");
+        if let Some(local) = env_path("LOCALAPPDATA") {
+            return local.join(VENDOR_DIR).join(APP_DIR);
+        }
+    } else if cfg!(target_os = "macos") {
+        if let Some(home) = user_home() {
+            return home
+                .join("Library")
+                .join("Application Support")
+                .join(VENDOR_DIR)
+                .join(APP_DIR);
+        }
+    } else {
+        if let Some(data) = env_path("XDG_DATA_HOME") {
+            return data.join(VENDOR_DIR).join(APP_DIR);
+        }
+        if let Some(home) = user_home() {
+            return home
+                .join(".local")
+                .join("share")
+                .join(VENDOR_DIR)
+                .join(APP_DIR);
         }
     }
-    if let Some(xdg) = env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(xdg).join("kastrick's_software").join("minesport");
+
+    // std has no direct UserConfigDir equivalent; use the conventional config
+    // environment only as a late fallback before the system temp directory.
+    if let Some(config) = env_path("XDG_CONFIG_HOME") {
+        return config.join(VENDOR_DIR).join(APP_DIR);
     }
-    if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) {
-        return PathBuf::from(home).join(".local").join("share").join("kastrick's_software").join("minesport");
-    }
-    env::temp_dir().join("kastrick's_software").join("minesport")
+    env::temp_dir().join(VENDOR_DIR).join(APP_DIR)
 }
 
+/// Regenerable Minesport data. The original Go implementation deliberately
+/// used ~/.cache on every desktop OS when a home directory is available.
 pub fn cache_root() -> PathBuf {
-    if cfg!(windows) {
-        if let Some(home) = env::var_os("USERPROFILE") {
-            return PathBuf::from(home).join(".cache").join("kastrick's_software").join("minesport");
-        }
+    if let Some(path) = env_path("MINESPORT_CACHE_DIR") {
+        return path;
     }
-    if let Some(xdg) = env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(xdg).join("kastrick's_software").join("minesport");
+    if let Some(home) = user_home() {
+        return home.join(".cache").join(VENDOR_DIR).join(APP_DIR);
     }
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home).join(".cache").join("kastrick's_software").join("minesport");
+    if let Some(cache) = env_path("XDG_CACHE_HOME") {
+        return cache.join(VENDOR_DIR).join(APP_DIR);
     }
-    env::temp_dir().join("minesport-cache")
+    env::temp_dir()
+        .join(VENDOR_DIR)
+        .join(APP_DIR)
+        .join(".cache")
 }
 
 pub fn bridge_data_root() -> PathBuf {
-    if let Some(root) = env::var_os("MINESPORT_BRIDGE_DATA") {
-        return PathBuf::from(root);
+    if let Some(root) = env_path("MINESPORT_BRIDGE_DATA") {
+        return root;
     }
     if cfg!(windows) {
-        if let Some(program_files) = env::var_os("ProgramFiles") {
-            return PathBuf::from(program_files).join("kastrick's_software").join("minesport").join("bridge-data");
+        if let Some(program_files) = env_path("ProgramFiles") {
+            return program_files
+                .join(VENDOR_DIR)
+                .join(APP_DIR)
+                .join("bridge-data");
         }
     }
     data_root().join("bridge-data")
 }
 
+/// Remove only Minesport-owned, regenerable data. The validation mirrors the
+/// retired Go cacheclean package: custom cache overrides are allowed, but broad
+/// roots, the user home, and paths containing durable Minesport data fail shut.
 pub fn remove_generated_cache() -> Result<()> {
-    let cache = cache_root();
+    let cache = clean_path(&cache_root());
     validate_cache_root(&cache)?;
 
-    let compiled = bridge_data_root().join("compiled");
+    let compiled = clean_path(&bridge_data_root().join("compiled"));
     validate_compiled_bridge_path(&compiled)?;
 
     if cache.exists() {
+        if !cache.is_dir() {
+            bail!("refusing to remove non-directory Minesport cache path {}", cache.display());
+        }
         fs::remove_dir_all(&cache).with_context(|| format!("remove {}", cache.display()))?;
     }
     if compiled.exists() {
-        fs::remove_dir_all(&compiled).with_context(|| format!("remove {}", compiled.display()))?;
+        if !compiled.is_dir() {
+            bail!("refusing to remove non-directory Bridge cache path {}", compiled.display());
+        }
+        fs::remove_dir_all(&compiled)
+            .with_context(|| format!("remove {}", compiled.display()))?;
     }
     fs::create_dir_all(&cache).with_context(|| format!("recreate {}", cache.display()))?;
     Ok(())
 }
 
-fn validate_cache_root(path: &Path) -> Result<()> {
-    let clean = path.components().collect::<PathBuf>();
-    let text = clean.to_string_lossy().to_ascii_lowercase();
-    if clean.parent().is_none() || !text.contains("minesport") || !text.contains("cache") {
-        bail!("refusing unsafe Minesport cache path: {}", clean.display());
+fn env_path(name: &str) -> Option<PathBuf> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn user_home() -> Option<PathBuf> {
+    env_path(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .or_else(|| env_path("HOME"))
+        .or_else(|| env_path("USERPROFILE"))
+}
+
+fn clean_path(path: &Path) -> PathBuf {
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = clean.pop();
+            }
+            other => clean.push(other.as_os_str()),
+        }
     }
-    if let Some(home) = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")) {
-        if clean == PathBuf::from(home) { bail!("refusing to delete user home as cache"); }
+    clean
+}
+
+fn validate_cache_root(path: &Path) -> Result<()> {
+    let clean = clean_path(path);
+    if clean.as_os_str().is_empty() || path_depth(&clean) < 2 {
+        bail!("refusing to remove an overly broad Minesport cache path: {}", clean.display());
+    }
+    if is_filesystem_root(&clean) {
+        bail!("refusing to remove filesystem root as Minesport cache: {}", clean.display());
+    }
+
+    if let Some(home) = user_home().map(|path| clean_path(&path)) {
+        if same_path(&clean, &home) || contains_path(&clean, &home) {
+            bail!("refusing to remove a path that contains the user home directory: {}", clean.display());
+        }
+    }
+
+    let durable = clean_path(&data_root());
+    if same_path(&clean, &durable) || contains_path(&clean, &durable) {
+        bail!("refusing to remove a path that contains Minesport durable data: {}", clean.display());
     }
     Ok(())
 }
@@ -105,11 +201,36 @@ fn validate_compiled_bridge_path(path: &Path) -> Result<()> {
     if path.file_name().and_then(|name| name.to_str()) != Some("compiled") {
         bail!("refusing unexpected bridge cache path: {}", path.display());
     }
-    let parent = path.parent().and_then(|p| p.file_name()).and_then(|name| name.to_str());
+    let parent = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str());
     if parent != Some("bridge-data") {
         bail!("refusing bridge cache outside bridge-data: {}", path.display());
     }
     Ok(())
+}
+
+fn path_depth(path: &Path) -> usize {
+    path.components()
+        .filter(|component| matches!(component, Component::Normal(_)))
+        .count()
+}
+
+fn is_filesystem_root(path: &Path) -> bool {
+    path.parent().is_none() || path.parent().is_some_and(|parent| parent == path)
+}
+
+fn contains_path(parent: &Path, child: &Path) -> bool {
+    !same_path(parent, child) && child.starts_with(parent)
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    if cfg!(windows) {
+        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+    } else {
+        left == right
+    }
 }
 
 #[cfg(test)]
@@ -119,14 +240,28 @@ mod tests {
     #[test]
     fn generated_cache_root_is_namespaced() {
         let value = cache_root().to_string_lossy().to_ascii_lowercase();
-        assert!(value.contains("minesport"));
-        assert!(value.contains("cache"));
+        assert!(value.contains("minesport") || env::var_os("MINESPORT_CACHE_DIR").is_some());
     }
 
     #[test]
     fn broad_paths_are_rejected() {
         assert!(validate_cache_root(Path::new("/")).is_err());
+        assert!(validate_cache_root(Path::new("/tmp")).is_err());
         assert!(validate_compiled_bridge_path(Path::new("/tmp/compiled")).is_err());
+    }
+
+    #[test]
+    fn dedicated_custom_cache_shape_is_allowed() {
+        let custom = env::temp_dir().join("custom-minesport-tests").join("generated");
+        assert!(validate_cache_root(&custom).is_ok());
+    }
+
+    #[test]
+    fn durable_data_parent_is_rejected() {
+        let durable = clean_path(&data_root());
+        if let Some(parent) = durable.parent() {
+            assert!(validate_cache_root(parent).is_err());
+        }
     }
 
     #[test]
