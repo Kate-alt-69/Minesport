@@ -233,7 +233,8 @@ where
 {
     RUNTIME_WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();
-        if slot.is_none() {
+        let created = slot.is_none();
+        if created {
             let Ok(window) = RuntimeCacheWindow::new() else {
                 diagnostics::append("Could not create Slint runtime-cache window");
                 return;
@@ -265,25 +266,21 @@ where
         }
 
         if let Some(window) = slot.as_ref() {
-            window.set_cancelling(false);
-            window.set_stage(stage.into());
-            window.set_detail(format!("Minecraft {version} · exact current mod set").into());
-            window.set_progress(progress.clamp(0.0, 1.0));
-            let _ = main.hide();
-            if let Err(error) = window.show() {
-                diagnostics::append(&format!("Could not show runtime-cache window: {error}"));
-                let _ = main.show();
+            if created {
+                window.set_cancelling(false);
             }
-        }
-    });
-}
-
-pub fn update_runtime_cache(version: &str, stage: &str, progress: f32) {
-    RUNTIME_WINDOW.with(|slot| {
-        if let Some(window) = slot.borrow().as_ref() {
-            window.set_stage(stage.into());
-            window.set_detail(format!("Minecraft {version} · exact current mod set").into());
+            if !window.get_cancelling() {
+                window.set_stage(stage.into());
+                window.set_detail(format!("Minecraft {version} · exact current mod set").into());
+            }
             window.set_progress(progress.clamp(0.0, 1.0));
+            if created {
+                let _ = main.hide();
+                if let Err(error) = window.show() {
+                    diagnostics::append(&format!("Could not show runtime-cache window: {error}"));
+                    let _ = main.show();
+                }
+            }
         }
     });
 }
@@ -299,13 +296,17 @@ pub fn mark_runtime_cache_cancelling() {
 }
 
 pub fn close_runtime_cache(main: &MainWindow) {
+    let mut had_window = false;
     RUNTIME_WINDOW.with(|slot| {
         if let Some(window) = slot.borrow_mut().take() {
+            had_window = true;
             let _ = window.hide();
         }
     });
-    if let Err(error) = main.show() {
-        diagnostics::append(&format!("Could not restore Minesport workbench: {error}"));
+    if had_window {
+        if let Err(error) = main.show() {
+            diagnostics::append(&format!("Could not restore Minesport workbench: {error}"));
+        }
     }
 }
 
