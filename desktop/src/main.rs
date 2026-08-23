@@ -12,7 +12,6 @@ mod registry;
 mod runtime;
 mod runtime_cache;
 mod runtime_worker;
-mod selection;
 mod settings;
 mod toolchain;
 mod world_context;
