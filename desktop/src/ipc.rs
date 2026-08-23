@@ -75,7 +75,15 @@ pub struct Engine {
 
 impl Engine {
     pub fn start() -> Result<(Self, Receiver<EngineEvent>)> {
+        let logger = diagnostics::Logger::new("IPC").child("UI");
+        let operation = logger.operation("backend.start");
         let executable = env::current_exe().context("resolve current Minesport executable")?;
+        operation.event(
+            "backend.spawn",
+            "starting isolated Minesport backend worker",
+            &[("executable", executable.display().to_string())],
+        );
+
         let mut command = Command::new(&executable);
         command
             .arg("--engine-worker")
@@ -84,11 +92,17 @@ impl Engine {
             .stderr(Stdio::piped());
         hide_console_window(&mut command);
 
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("start Minesport backend worker {}", executable.display()))?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                operation.failure(
+                    "failed to start Minesport backend worker",
+                    &[("error", error.to_string()), ("executable", executable.display().to_string())],
+                );
+                return Err(error).with_context(|| format!("start Minesport backend worker {}", executable.display()));
+            }
+        };
         let pid = child.id();
-        diagnostics::append(&format!("Started Minesport backend worker (PID {pid}) with {}", executable.display()));
         let stdin = child.stdin.take().context("open Minesport backend stdin")?;
         let stdout = child.stdout.take().context("open Minesport backend stdout")?;
         let stderr = child.stderr.take().context("open Minesport backend stderr")?;
@@ -101,6 +115,10 @@ impl Engine {
         spawn_stdout_reader(stdout, tx.clone());
         spawn_stderr_reader(stderr, tx);
 
+        operation.success(
+            "Minesport backend worker started",
+            &[("pid", pid.to_string()), ("executable", executable.display().to_string())],
+        );
         Ok((
             Self {
                 inner: Arc::new(EngineInner {
@@ -114,12 +132,48 @@ impl Engine {
 
     pub fn send<T: Serialize>(&self, request: &T) -> Result<()> {
         let bytes = serde_json::to_vec(request).context("encode backend IPC request")?;
-        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
-            let command = value.get("command").and_then(Value::as_str).unwrap_or("request");
-            diagnostics::append(&format!("IPC -> {command}"));
+        let value = serde_json::from_slice::<Value>(&bytes).ok();
+        let command = value
+            .as_ref()
+            .and_then(|value| value.get("command"))
+            .and_then(Value::as_str)
+            .unwrap_or("request")
+            .to_string();
+        let world = value
+            .as_ref()
+            .and_then(|value| value.get("worldPath"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let output = value
+            .as_ref()
+            .and_then(|value| value.get("outputPath"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let logger = diagnostics::Logger::new("IPC").child("TX");
+        let mut fields = vec![
+            ("command", command.clone()),
+            ("bytes", bytes.len().to_string()),
+        ];
+        if !world.is_empty() {
+            fields.push(("world", world));
         }
+        if !output.is_empty() {
+            fields.push(("output", output));
+        }
+        let borrowed = fields.iter().map(|(key, value)| (key.as_str(), value.clone())).collect::<Vec<_>>();
+        logger.info("request.send", "sending backend IPC request", &borrowed);
+
         let mut stdin = self.inner.stdin.lock().map_err(|_| anyhow!("Minesport backend stdin lock poisoned"))?;
-        stdin.write_all(&bytes).context("write backend IPC request")?;
+        if let Err(error) = stdin.write_all(&bytes) {
+            logger.error(
+                "request.write_failed",
+                "could not write backend IPC request",
+                &[("command", command), ("error", error.to_string())],
+            );
+            return Err(error).context("write backend IPC request");
+        }
         stdin.write_all(b"\n").context("terminate backend IPC request")?;
         stdin.flush().context("flush backend IPC request")?;
         Ok(())
@@ -135,7 +189,9 @@ impl Engine {
     }
 
     pub fn shutdown(&self) {
-        diagnostics::append("Minesport backend shutdown requested");
+        let logger = diagnostics::Logger::new("IPC").child("UI");
+        let operation = logger.operation("backend.shutdown");
+        operation.event("backend.quit_requested", "requesting backend shutdown", &[]);
         let _ = self.send_value(serde_json::json!({ "command": "quit" }));
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -144,17 +200,29 @@ impl Engine {
                 .child
                 .lock()
                 .ok()
-                .and_then(|mut child| child.try_wait().ok().flatten())
-                .is_some();
-            if exited {
-                diagnostics::append("Minesport backend exited cleanly");
+                .and_then(|mut child| child.try_wait().ok().flatten());
+            if let Some(status) = exited {
+                operation.success(
+                    "Minesport backend exited",
+                    &[("status", status.to_string())],
+                );
                 return;
             }
             if Instant::now() >= deadline {
                 if let Ok(mut child) = self.inner.child.lock() {
-                    diagnostics::append("Minesport backend did not exit within 3s; terminating worker");
+                    logger.warn(
+                        "backend.shutdown_timeout",
+                        "backend did not exit within 3 seconds; terminating worker",
+                        &[("pid", child.id().to_string())],
+                    );
                     let _ = child.kill();
-                    let _ = child.wait();
+                    let status = child.wait().ok().map(|status| status.to_string()).unwrap_or_else(|| "unknown".to_string());
+                    operation.failure(
+                        "backend required forced termination",
+                        &[("status", status)],
+                    );
+                } else {
+                    operation.failure("backend shutdown state lock failed", &[]);
                 }
                 return;
             }
@@ -181,6 +249,14 @@ fn prepare_world_storage_payload(request: &mut Value) -> Result<()> {
     }
 
     let storage_root = resolve_overworld_storage_root(Path::new(world_path))?;
+    diagnostics::Logger::new("IPC").child("WORLD").debug(
+        "heightmap.storage_rewrite",
+        "resolved Overworld storage root",
+        &[
+            ("world", world_path.to_string()),
+            ("storage_root", storage_root.display().to_string()),
+        ],
+    );
     let Some(object) = request.as_object_mut() else {
         return Ok(());
     };
@@ -232,12 +308,34 @@ fn has_region_files(region_dir: &Path) -> bool {
 /// stderr; worker stdin is forwarded to Java stdin. The UI can therefore keep
 /// using the established engine protocol while gaining a hard process boundary.
 pub fn run_engine_worker(jar: &Path) -> Result<()> {
+    let logger = diagnostics::Logger::new("IPC").child("WORKER");
+    let operation = logger
+        .operation("java_engine.run")
+        .field("jar", jar.display());
     if !jar.is_file() {
+        operation.failure(
+            "embedded Java engine is unavailable",
+            &[("jar", jar.display().to_string())],
+        );
         return Err(anyhow!("embedded Java engine is unavailable: {}", jar.display()));
     }
 
-    let java = resolve_java()?;
-    diagnostics::append(&format!("Engine worker Java executable: {}", java.display()));
+    let java = match resolve_java() {
+        Ok(java) => java,
+        Err(error) => {
+            operation.failure("could not resolve Java runtime", &[("error", format!("{error:#}"))]);
+            return Err(error);
+        }
+    };
+    let java_major = java_major(&java);
+    operation.event(
+        "java.resolved",
+        "resolved Java runtime for embedded engine",
+        &[
+            ("java", java.display().to_string()),
+            ("major", java_major.to_string()),
+        ],
+    );
     let mut command = Command::new(&java);
     command
         .arg("-jar")
@@ -248,11 +346,22 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         .stderr(Stdio::piped());
     hide_console_window(&mut command);
 
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("start Java engine with {}", java.display()))?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            operation.failure(
+                "failed to start Java engine",
+                &[("java", java.display().to_string()), ("error", error.to_string())],
+            );
+            return Err(error).with_context(|| format!("start Java engine with {}", java.display()));
+        }
+    };
     let java_pid = child.id();
-    diagnostics::append(&format!("Java engine started (PID {java_pid}) with {}", java.display()));
+    operation.event(
+        "java.started",
+        "Java engine process started",
+        &[("pid", java_pid.to_string()), ("java", java.display().to_string())],
+    );
     let mut java_stdin = child.stdin.take().context("open Java engine stdin")?;
     let java_stdout = child.stdout.take().context("open Java engine stdout")?;
     let java_stderr = child.stderr.take().context("open Java engine stderr")?;
@@ -305,17 +414,25 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     });
 
     let status = child.wait().context("wait for Java engine")?;
-    diagnostics::append(&format!("Java engine process exited with {status}"));
     let _ = stdout_relay.join();
     let _ = stderr_relay.join();
     if !status.success() {
+        operation.failure(
+            "Java engine process exited unsuccessfully",
+            &[("status", status.to_string()), ("pid", java_pid.to_string())],
+        );
         return Err(anyhow!("Java engine exited with status {status}"));
     }
+    operation.success(
+        "Java engine process exited cleanly",
+        &[("status", status.to_string()), ("pid", java_pid.to_string())],
+    );
     Ok(())
 }
 
 fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<EngineEvent>) {
     thread::spawn(move || {
+        let logger = diagnostics::Logger::new("IPC").child("RX");
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             match line {
@@ -326,36 +443,63 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                         ..Response::default()
                     });
                     match response.kind.as_str() {
-                        "log" => diagnostics::append(&response.message),
-                        "progress" => diagnostics::append(&format!("IPC <- progress {}% · {}", response.percent, response.message)),
-                        "done" => diagnostics::append(&format!("IPC <- done · {} · {} blocks · {} faces · {} vertices", response.output, response.block_count, response.quad_count, response.vertex_count)),
-                        "error" => diagnostics::append(&format!("IPC <- error · {}", response.message)),
-                        kind => diagnostics::append(&format!("IPC <- {kind}")),
+                        "log" => logger.info("java.log", &response.message, &[]),
+                        "progress" => logger.info(
+                            "response.progress",
+                            &response.message,
+                            &[("percent", response.percent.to_string())],
+                        ),
+                        "done" => logger.info(
+                            "response.done",
+                            "engine operation completed",
+                            &[
+                                ("output", response.output.clone()),
+                                ("blocks", response.block_count.to_string()),
+                                ("faces", response.quad_count.to_string()),
+                                ("vertices", response.vertex_count.to_string()),
+                            ],
+                        ),
+                        "error" => logger.error(
+                            "response.error",
+                            &response.message,
+                            &[],
+                        ),
+                        kind => logger.debug(
+                            "response.received",
+                            "backend response received",
+                            &[("type", kind.to_string())],
+                        ),
                     }
                     if tx.send(EngineEvent::Response(response)).is_err() {
+                        logger.warn("response.consumer_closed", "UI event receiver closed", &[]);
                         return;
                     }
                 }
                 Ok(_) => {}
                 Err(error) => {
                     let message = format!("Minesport backend IPC read failed: {error}");
-                    diagnostics::append(&message);
+                    logger.error(
+                        "response.read_failed",
+                        &message,
+                        &[("error", error.to_string())],
+                    );
                     let _ = tx.send(EngineEvent::ReadEnded(message));
                     return;
                 }
             }
         }
-        diagnostics::append("Minesport backend output closed");
+        logger.info("response.stream_closed", "Minesport backend output closed", &[]);
         let _ = tx.send(EngineEvent::ReadEnded("Minesport backend output closed".to_string()));
     });
 }
 
 fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<EngineEvent>) {
     thread::spawn(move || {
+        let logger = diagnostics::Logger::new("IPC").child("STDERR");
         for line in BufReader::new(stderr).lines() {
             match line {
                 Ok(line) if !line.trim().is_empty() => {
-                    diagnostics::append(&format!("[backend] {line}"));
+                    logger.warn("backend.stderr", &line, &[]);
                     if tx.send(EngineEvent::Stderr(line)).is_err() {
                         return;
                     }
@@ -363,7 +507,11 @@ fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<E
                 Ok(_) => {}
                 Err(error) => {
                     let message = format!("backend stderr read failed: {error}");
-                    diagnostics::append(&message);
+                    logger.error(
+                        "backend.stderr_read_failed",
+                        &message,
+                        &[("error", error.to_string())],
+                    );
                     let _ = tx.send(EngineEvent::Stderr(message));
                     return;
                 }
@@ -373,6 +521,7 @@ fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<E
 }
 
 fn resolve_java() -> Result<PathBuf> {
+    let logger = diagnostics::Logger::new("IPC").child("JAVA");
     let mut candidates = Vec::new();
 
     if let Some(home) = env::var_os("JAVA_HOME") {
@@ -409,15 +558,30 @@ fn resolve_java() -> Result<PathBuf> {
         }
     }
 
+    logger.debug(
+        "java.candidates",
+        "evaluating Java runtime candidates",
+        &[("count", candidates.len().to_string())],
+    );
     for candidate in candidates {
         let major = java_major(&candidate);
         if major >= ENGINE_JAVA_MAJOR {
+            logger.info(
+                "java.selected",
+                "selected Java runtime",
+                &[("path", candidate.display().to_string()), ("major", major.to_string())],
+            );
             return Ok(candidate);
         }
-        diagnostics::append(&format!(
-            "Ignoring Java candidate {} because major version {} is below required {}",
-            candidate.display(), major, ENGINE_JAVA_MAJOR
-        ));
+        logger.warn(
+            "java.rejected",
+            "Java runtime is below the engine requirement",
+            &[
+                ("path", candidate.display().to_string()),
+                ("major", major.to_string()),
+                ("required", ENGINE_JAVA_MAJOR.to_string()),
+            ],
+        );
     }
 
     bail!(
