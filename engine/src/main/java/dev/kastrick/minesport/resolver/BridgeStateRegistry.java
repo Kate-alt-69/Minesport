@@ -89,15 +89,15 @@ public final class BridgeStateRegistry {
         Map<String, List<LightState>> lightRegistry = new LinkedHashMap<>();
         Set<String> runtimeModelBlocks = new HashSet<>();
         for (String blockId : requestedBlockIds) {
-            RuntimeRegistryDataReader.DataBlock source;
+            RuntimeRegistryIndex.BlockMetadata source;
             try {
-                source = index.readBlock(blockId);
+                source = index.readMetadata(blockId);
             } catch (Exception exception) {
-                warn(log, "Runtime state data for " + blockId + " could not be read: " + exception.getMessage());
+                warn(log, "Runtime state metadata for " + blockId + " could not be read: " + exception.getMessage());
                 continue;
             }
             if (source == null) continue;
-            if (source.variants() != null && !source.variants().isEmpty()) {
+            if (source.hasVariants()) {
                 runtimeModelBlocks.add(blockId);
             }
             if (source.lights() == null || source.lights().isEmpty()) continue;
