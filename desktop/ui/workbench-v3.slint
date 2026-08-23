@@ -285,18 +285,6 @@ component WorldMapView inherits Rectangle {
         border-width: 2px;
         border-color: #50beffdc;
     }
-
-    if root.available: Rectangle {
-        x: parent.width - 188px;
-        y: parent.height - 46px;
-        width: 176px;
-        height: 34px;
-        background: #101414e8;
-        border-width: 1px;
-        border-color: #323735;
-        border-radius: 5px;
-        Text { text: root.cursor-label; color: #d0d7d2; font-size: 11px; font-family: "monospace"; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-    }
 }
 
 export component MainWindow inherits Window {
@@ -424,13 +412,9 @@ export component MainWindow inherits Window {
 
     private property <int> export-preset-index: 0;
 
-    changed debug-mode => {
-        root.debug-console-visible = root.debug-mode;
-    }
-
     app-focus := FocusScope {
         capture-key-pressed(event) => {
-            if (root.blender-prompt-visible || root.settings-visible || root.debug-console-visible) {
+            if (root.blender-prompt-visible || root.settings-visible) {
                 return reject;
             }
             if (event.text == Key.F6) {
@@ -685,7 +669,7 @@ export component MainWindow inherits Window {
                                 height: parent.height;
                                 visible: root.viewport-mode == 0;
                                 source: root.map-image;
-                                available: root.map-available && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible && !root.debug-console-visible;
+                                available: root.map-available && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible;
                                 map-min-x <=> root.map-min-x;
                                 map-min-z <=> root.map-min-z;
                                 map-max-x <=> root.map-max-x;
@@ -740,7 +724,7 @@ export component MainWindow inherits Window {
                                     property <length> middle-start-x: 0px;
                                     property <length> middle-start-y: 0px;
 
-                                    enabled: root.preview-available && !root.preview-loading && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible && !root.debug-console-visible;
+                                    enabled: root.preview-available && !root.preview-loading && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible;
                                     mouse-cursor: self.middle-held ? grabbing : crosshair;
                                     clicked => { root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px); }
                                     pointer-event(event) => {
@@ -929,7 +913,7 @@ export component MainWindow inherits Window {
                             spacing: 11px;
                             SectionTitle { label: "GEOMETRY"; }
                             CheckBox { text: "Face culling"; checked <=> root.face-culling; toggled => { root.settings-changed(); } }
-                            HintText { text: "Remove a face only when neighboring geometry and its resolved texture prove the face is fully hidden."; }
+                            HintText { text: "Remove a face only when neighboring geometry and its resolved texture prove that the face is fully hidden."; }
                             CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; toggled => { root.settings-changed(); } }
                             ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; selected(_) => { root.settings-changed(); } }
                             HintText { text: "Controls the spatial FLATTER cell. Smaller cells rebuild more locally; larger cells create fewer objects and broader greedy surfaces."; }
@@ -974,40 +958,6 @@ export component MainWindow inherits Window {
                             Button { text: "Remove all Minesport cache"; enabled: !root.task-active && !root.runtime-cache-busy; clicked => { root.remove-cache(); } }
                             HintText { text: "Deletes only regenerable runtime/cache/toolchain data. Worlds, exports, settings and real mods are never touched."; }
                         }
-                    }
-                }
-            }
-        }
-
-        // The debug option now has visible behavior instead of only persisting
-        // a bool: show the live engine/IPC log in a dedicated modal console.
-        if root.debug-console-visible: Rectangle {
-            x: 0px; y: 0px; width: parent.width; height: parent.height;
-            background: #000000a8;
-            TouchArea { mouse-cursor: default; }
-            Rectangle {
-                width: min(900px, parent.width - 72px);
-                height: min(620px, parent.height - 72px);
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                background: #101313;
-                border-width: 1px;
-                border-color: #4a514c;
-                border-radius: 7px;
-                VerticalLayout {
-                    spacing: 0px;
-                    Rectangle {
-                        height: 50px; background: #1b1e1c;
-                        HorizontalLayout {
-                            padding-left: 16px; padding-right: 10px;
-                            Text { text: "DEBUG ENGINE CONSOLE"; color: #eef2ef; font-size: 15px; font-weight: 700; vertical-alignment: center; }
-                            Rectangle { horizontal-stretch: 1; background: transparent; }
-                            Text { text: root.engine-status; color: root.engine-ready ? #8fc69b : #d39191; font-size: 12px; font-weight: 700; vertical-alignment: center; }
-                            Button { text: "Close"; clicked => { root.debug-mode = false; root.debug-console-visible = false; root.settings-changed(); } }
-                        }
-                    }
-                    ScrollView {
-                        Text { x: 14px; y: 12px; width: parent.width - 28px; text: root.diagnostics; color: #c7d0ca; font-size: 12px; font-family: "monospace"; wrap: word-wrap; }
                     }
                 }
             }
