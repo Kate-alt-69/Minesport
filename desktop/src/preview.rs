@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use std::{fs::File, path::Path};
+use std::{collections::HashMap, fs::File, path::Path, sync::Arc};
 
-const WIDTH: u32 = 1200;
-const HEIGHT: u32 = 720;
+pub const WIDTH: u32 = 1200;
+pub const HEIGHT: u32 = 720;
 const MAX_PREVIEW_BLOCKS: usize = 60_000;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -11,12 +11,53 @@ struct PreviewBlock {
     x: i32,
     y: i32,
     z: i32,
+    #[serde(default)]
+    id: String,
     #[serde(default = "default_color")]
     r: u8,
     #[serde(default = "default_color")]
     g: u8,
     #[serde(default = "default_color")]
     b: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewPick {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewPickMap {
+    width: u32,
+    height: u32,
+    indices: Arc<Vec<i32>>,
+    hits: Arc<Vec<PreviewPick>>,
+    by_id: Arc<HashMap<String, Vec<[i32; 3]>>>,
+}
+
+impl PreviewPickMap {
+    pub fn pick(&self, x: u32, y: u32) -> Option<PreviewPick> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let pixel = (y * self.width + x) as usize;
+        let hit = *self.indices.get(pixel)?;
+        if hit < 0 {
+            return None;
+        }
+        self.hits.get(hit as usize).cloned()
+    }
+
+    pub fn coordinates_for_id(&self, id: &str) -> Vec<[i32; 3]> {
+        self.by_id.get(id).cloned().unwrap_or_default()
+    }
+
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +67,7 @@ pub struct RenderedPreview {
     pub rgba: Vec<u8>,
     pub block_count: usize,
     pub rendered_count: usize,
+    pub pick_map: PreviewPickMap,
 }
 
 pub fn render_file(path: &Path) -> Result<RenderedPreview> {
@@ -37,6 +79,14 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     }
 
     let block_count = blocks.len();
+    let mut by_id: HashMap<String, Vec<[i32; 3]>> = HashMap::new();
+    for block in &blocks {
+        by_id
+            .entry(normalized_id(&block.id))
+            .or_default()
+            .push([block.x, block.y, block.z]);
+    }
+
     blocks.sort_by_key(|block| (block.x + block.z, block.y, block.x));
     if blocks.len() > MAX_PREVIEW_BLOCKS {
         let stride = blocks.len().div_ceil(MAX_PREVIEW_BLOCKS);
@@ -63,6 +113,8 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     let cube_h = tile.max(2);
 
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut hit_indices = vec![-1i32; (WIDTH * HEIGHT) as usize];
+    let mut hits = Vec::with_capacity(blocks.len());
     clear(&mut pixels, [11, 16, 21, 255]);
 
     let center_x = WIDTH as i32 / 2;
@@ -73,7 +125,7 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
     for block in &blocks {
         let dx = block.x as f32 - center_world_x;
         let dz = block.z as f32 - center_world_z;
-        let dy = (block.y - min_y) as i32;
+        let dy = block.y - min_y;
         let sx = center_x + ((dx - dz) * half_w as f32) as i32;
         let sy = base_y + ((dx + dz) * half_h as f32) as i32 - dy * cube_h;
 
@@ -90,9 +142,17 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
         let left_color = shade(base, 0.78);
         let right_color = shade(base, 0.92);
 
-        fill_quad(&mut pixels, left, bottom, down_bottom, down_left, left_color);
-        fill_quad(&mut pixels, bottom, right, down_right, down_bottom, right_color);
-        fill_quad(&mut pixels, top, right, bottom, left, top_color);
+        let hit_index = hits.len() as i32;
+        hits.push(PreviewPick {
+            x: block.x,
+            y: block.y,
+            z: block.z,
+            id: normalized_id(&block.id),
+        });
+
+        fill_quad(&mut pixels, &mut hit_indices, hit_index, left, bottom, down_bottom, down_left, left_color);
+        fill_quad(&mut pixels, &mut hit_indices, hit_index, bottom, right, down_right, down_bottom, right_color);
+        fill_quad(&mut pixels, &mut hit_indices, hit_index, top, right, bottom, left, top_color);
     }
 
     Ok(RenderedPreview {
@@ -101,7 +161,23 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
         rgba: pixels,
         block_count,
         rendered_count: blocks.len(),
+        pick_map: PreviewPickMap {
+            width: WIDTH,
+            height: HEIGHT,
+            indices: Arc::new(hit_indices),
+            hits: Arc::new(hits),
+            by_id: Arc::new(by_id),
+        },
     })
+}
+
+fn normalized_id(id: &str) -> String {
+    let id = id.trim();
+    if id.is_empty() {
+        "minecraft:unknown".to_string()
+    } else {
+        id.to_string()
+    }
 }
 
 fn default_color() -> u8 { 170 }
@@ -121,12 +197,29 @@ fn shade(color: [u8; 4], factor: f32) -> [u8; 4] {
     ]
 }
 
-fn fill_quad(pixels: &mut [u8], a: [i32; 2], b: [i32; 2], c: [i32; 2], d: [i32; 2], color: [u8; 4]) {
-    fill_triangle(pixels, a, b, c, color);
-    fill_triangle(pixels, a, c, d, color);
+fn fill_quad(
+    pixels: &mut [u8],
+    hit_indices: &mut [i32],
+    hit_index: i32,
+    a: [i32; 2],
+    b: [i32; 2],
+    c: [i32; 2],
+    d: [i32; 2],
+    color: [u8; 4],
+) {
+    fill_triangle(pixels, hit_indices, hit_index, a, b, c, color);
+    fill_triangle(pixels, hit_indices, hit_index, a, c, d, color);
 }
 
-fn fill_triangle(pixels: &mut [u8], a: [i32; 2], b: [i32; 2], c: [i32; 2], color: [u8; 4]) {
+fn fill_triangle(
+    pixels: &mut [u8],
+    hit_indices: &mut [i32],
+    hit_index: i32,
+    a: [i32; 2],
+    b: [i32; 2],
+    c: [i32; 2],
+    color: [u8; 4],
+) {
     let min_x = a[0].min(b[0]).min(c[0]).clamp(0, WIDTH as i32 - 1);
     let max_x = a[0].max(b[0]).max(c[0]).clamp(0, WIDTH as i32 - 1);
     let min_y = a[1].min(b[1]).min(c[1]).clamp(0, HEIGHT as i32 - 1);
@@ -140,22 +233,30 @@ fn fill_triangle(pixels: &mut [u8], a: [i32; 2], b: [i32; 2], c: [i32; 2], color
             let w0 = edge(b, c, point);
             let w1 = edge(c, a, point);
             let w2 = edge(a, b, point);
-            let inside = if area > 0 { w0 >= 0 && w1 >= 0 && w2 >= 0 } else { w0 <= 0 && w1 <= 0 && w2 <= 0 };
+            let inside = if area > 0 {
+                w0 >= 0 && w1 >= 0 && w2 >= 0
+            } else {
+                w0 <= 0 && w1 <= 0 && w2 <= 0
+            };
             if inside {
-                let index = ((y as u32 * WIDTH + x as u32) * 4) as usize;
-                pixels[index..index + 4].copy_from_slice(&color);
+                let pixel = (y as u32 * WIDTH + x as u32) as usize;
+                let rgba = pixel * 4;
+                pixels[rgba..rgba + 4].copy_from_slice(&color);
+                hit_indices[pixel] = hit_index;
             }
         }
     }
 }
 
 fn edge(a: [i32; 2], b: [i32; 2], p: [i32; 2]) -> i64 {
-    (p[0] - a[0]) as i64 * (b[1] - a[1]) as i64 - (p[1] - a[1]) as i64 * (b[0] - a[0]) as i64
+    (p[0] - a[0]) as i64 * (b[1] - a[1]) as i64
+        - (p[1] - a[1]) as i64 * (b[0] - a[0]) as i64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
 
     #[test]
     fn shading_clamps() {
@@ -165,5 +266,27 @@ mod tests {
     #[test]
     fn triangle_edge_has_expected_orientation() {
         assert_ne!(edge([0, 0], [2, 0], [0, 2]), 0);
+    }
+
+    #[test]
+    fn rendered_preview_can_pick_a_block_and_group_its_model_id() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("minesport-preview-{}-{stamp}.json", std::process::id()));
+        fs::write(
+            &path,
+            r#"[
+                {"x":0,"y":64,"z":0,"id":"minecraft:stone","r":120,"g":120,"b":120},
+                {"x":1,"y":64,"z":0,"id":"minecraft:stone","r":120,"g":120,"b":120},
+                {"x":0,"y":65,"z":0,"id":"minecraft:glass","r":190,"g":220,"b":230}
+            ]"#,
+        ).unwrap();
+        let rendered = render_file(&path).unwrap();
+        assert_eq!(rendered.block_count, 3);
+        assert_eq!(rendered.pick_map.coordinates_for_id("minecraft:stone").len(), 2);
+        assert_eq!(rendered.pick_map.dimensions(), (WIDTH, HEIGHT));
+        assert!(rendered.pick_map.indices.iter().any(|value| *value >= 0));
+        let picked = rendered.pick_map.indices.iter().find(|value| **value >= 0).copied().unwrap();
+        assert!(rendered.pick_map.hits.get(picked as usize).is_some());
+        let _ = fs::remove_file(path);
     }
 }
