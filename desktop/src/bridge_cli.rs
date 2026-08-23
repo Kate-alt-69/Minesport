@@ -1,12 +1,6 @@
-use crate::{bridge_compat, launcher, runtime, toolchain};
+use crate::{bridge_build, bridge_compat, launcher, runtime, toolchain};
 use anyhow::{Context, Result, anyhow, bail};
-use std::{
-    collections::BTreeSet,
-    env,
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
 const VERSION: &str = "0.2.0";
 
@@ -89,9 +83,9 @@ fn ensure_bridge(raw_version: &str) -> Result<PathBuf> {
     let java_home = toolchain::ensure_jdk(prepared.java, |update| {
         print_progress(update.percent, "JDK", &update.message);
     })?;
-    run_gradle_build(&workspace, &java_home)?;
+    println!("Building compatibility Bridge with {}", java_home.display());
+    let built = bridge_build::compile_bridge(&workspace, &java_home, true)?;
 
-    let built = find_built_bridge(&workspace)?;
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create compiled Bridge cache {}", parent.display()))?;
@@ -151,89 +145,6 @@ fn build_detected_bridges() -> Result<()> {
             failures.join("; ")
         )
     }
-}
-
-fn run_gradle_build(workspace: &Path, java_home: &Path) -> Result<()> {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("cmd.exe");
-        command.args([
-            "/D",
-            "/S",
-            "/C",
-            "gradlew.bat --no-daemon --console=plain build",
-        ]);
-        command
-    } else {
-        let mut command = Command::new(workspace.join("gradlew"));
-        command.args(["--no-daemon", "--console=plain", "build"]);
-        command
-    };
-
-    command.current_dir(workspace);
-    sanitize_java_environment(&mut command, java_home);
-    command.env("GRADLE_USER_HOME", runtime::cache_root().join("gradle"));
-
-    println!("Building compatibility Bridge with {}", java_home.display());
-    let status = command
-        .status()
-        .with_context(|| format!("launch Gradle Bridge build in {}", workspace.display()))?;
-    if !status.success() {
-        bail!("Gradle Bridge build failed with {status}");
-    }
-    Ok(())
-}
-
-fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
-    for (key, _) in env::vars_os() {
-        let name = key.to_string_lossy();
-        if name.eq_ignore_ascii_case("JAVA_HOME")
-            || name.eq_ignore_ascii_case("JDK_HOME")
-            || name.eq_ignore_ascii_case("GRADLE_JAVA_HOME")
-        {
-            command.env_remove(key);
-        }
-    }
-    command.env("JAVA_HOME", java_home);
-    command.env("GRADLE_JAVA_HOME", java_home);
-
-    let current = env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![java_home.join("bin")];
-    paths.extend(env::split_paths(&current));
-    if let Ok(joined) = env::join_paths(paths) {
-        command.env("PATH", joined);
-    }
-}
-
-fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
-    let libs = workspace.join("build").join("libs");
-    let preferred = libs.join("minesport-bridge-0.2.0.jar");
-    if preferred.is_file() {
-        return Ok(preferred);
-    }
-
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(&libs)
-        .with_context(|| format!("read Bridge build output {}", libs.display()))?
-    {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("jar") {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if name.ends_with("-sources.jar") || name.ends_with("-javadoc.jar") || name.contains("-dev") {
-            continue;
-        }
-        candidates.push(path);
-    }
-    candidates.sort();
-    candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("Gradle build completed but no Bridge JAR was found in {}", libs.display()))
 }
 
 fn compiled_bridge_path(version: &str) -> PathBuf {
