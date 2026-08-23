@@ -1,24 +1,31 @@
 use crate::diagnostics;
 use anyhow::{Context, Result, anyhow};
 use slint::ComponentHandle;
-use std::{env, process::Command};
+use std::{
+    env,
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    process::Command,
+};
 
 #[cfg(windows)]
 use std::{thread, time::Duration};
 
 const REPORTER_ARG: &str = "--error-reporter";
+const OPERATION_TAIL_BYTES: u64 = 64 * 1024;
 
 slint::slint! {
     import { Button } from "std-widgets.slint";
 
     export component ErrorReporterWindow inherits Window {
         title: "Minesport — Crash Reporter";
-        preferred-width: 620px;
-        preferred-height: 330px;
+        preferred-width: 660px;
+        preferred-height: 380px;
         background: #111514;
 
         in-out property <string> headline: "Minesport exited unexpectedly";
         in-out property <string> detail: "";
+        in-out property <string> last-operation: "";
         in-out property <string> log-path: "";
         in-out property <string> operations-path: "";
 
@@ -47,6 +54,21 @@ slint::slint! {
             Rectangle {
                 height: 1px;
                 background: #39423d;
+            }
+
+            Text {
+                text: "LAST OPERATION";
+                color: #8f9b94;
+                font-size: 11px;
+                font-weight: 700;
+            }
+
+            Text {
+                text: root.last-operation;
+                color: #d5ddd8;
+                font-size: 12px;
+                font-family: "monospace";
+                wrap: word-wrap;
             }
 
             Text {
@@ -148,9 +170,6 @@ pub fn spawn_for_current_process() -> Result<()> {
 
     #[cfg(not(windows))]
     {
-        // Windows is the packaged desktop target today. Keeping this a clean
-        // no-op preserves cross-platform Rust builds until equivalent native
-        // parent-exit status APIs are added for macOS/Linux.
         Ok(())
     }
 }
@@ -164,6 +183,11 @@ fn run_reporter(parent_pid: u32) -> Result<()> {
     let window = ErrorReporterWindow::new().context("create Minesport crash reporter window")?;
     window.set_headline(format_exit_headline(exit_code).into());
     window.set_detail(format_exit_detail(exit_code, parent_pid).into());
+    window.set_last_operation(
+        latest_operation_summary()
+            .unwrap_or_else(|| "No complete structured operation record was available.".to_string())
+            .into(),
+    );
     window.set_log_path(diagnostics::log_path().display().to_string().into());
     window.set_operations_path(diagnostics::operations_path().display().to_string().into());
 
@@ -190,6 +214,36 @@ fn run_reporter(parent_pid: u32) -> Result<()> {
 
     window.run().context("run Minesport crash reporter window")?;
     Ok(())
+}
+
+fn latest_operation_summary() -> Option<String> {
+    let path = diagnostics::operations_path();
+    let mut file = File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(OPERATION_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+
+    let mut bytes = Vec::with_capacity((length - start).min(OPERATION_TAIL_BYTES) as usize);
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let text = if start > 0 {
+        text.split_once('\n').map(|(_, tail)| tail).unwrap_or_default()
+    } else {
+        text.as_ref()
+    };
+
+    for line in text.lines().rev().filter(|line| !line.trim().is_empty()) {
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
+        let Some(operation_id) = record.get("operation_id").and_then(serde_json::Value::as_str) else { continue; };
+        let trace = record.get("trace_id").and_then(serde_json::Value::as_str).unwrap_or("unknown");
+        let event = record.get("event").and_then(serde_json::Value::as_str).unwrap_or("unknown event");
+        let level = record.get("level").and_then(serde_json::Value::as_str).unwrap_or("?");
+        let message = record.get("message").and_then(serde_json::Value::as_str).unwrap_or_default();
+        return Some(format!(
+            "{level} · operation={operation_id} · trace={trace}\n{event}: {message}"
+        ));
+    }
+    None
 }
 
 fn format_exit_headline(exit_code: u32) -> String {
@@ -263,8 +317,6 @@ fn wait_for_parent_exit(parent_pid: u32) -> Result<u32> {
 
     let mut handle = std::ptr::null_mut();
     for _ in 0..50 {
-        // SAFETY: OpenProcess receives a PID from our trusted parent command
-        // line and returns an owned kernel handle or null. No borrowed memory.
         handle = unsafe {
             open_process(
                 SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
@@ -281,18 +333,14 @@ fn wait_for_parent_exit(parent_pid: u32) -> Result<u32> {
         return Err(std::io::Error::last_os_error()).context("open supervised Minesport process");
     }
 
-    // SAFETY: `handle` is a valid process handle owned by this function.
     let wait_result = unsafe { wait_for_single_object(handle, INFINITE) };
     if wait_result != WAIT_OBJECT_0 {
-        // SAFETY: close the valid handle before returning the wait failure.
         unsafe { close_handle(handle) };
         return Err(std::io::Error::last_os_error()).context("wait for supervised Minesport process");
     }
 
     let mut exit_code = 0u32;
-    // SAFETY: both the process handle and output pointer are valid for this call.
     let ok = unsafe { get_exit_code_process(handle, &mut exit_code) };
-    // SAFETY: this is the final use of the owned process handle.
     unsafe { close_handle(handle) };
     if ok == 0 {
         return Err(std::io::Error::last_os_error()).context("read Minesport process exit code");
