@@ -1,7 +1,8 @@
 use crate::{
-    MainWindow, blender, bridge_compat, diagnostics,
+    MainWindow, blender, bridge_compat, diagnostics, heightmap_cache,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
     preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, settings,
+    world_context,
 };
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -35,6 +36,10 @@ struct AppState {
     data_packs: Vec<PathBuf>,
     pending_export: Option<Value>,
     block_request_purpose: BlockRequestPurpose,
+    selected_world: Option<PathBuf>,
+    selected_mods_path: Option<PathBuf>,
+    selected_version: Option<String>,
+    selected_loader: Option<String>,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -91,6 +96,7 @@ pub fn run() -> Result<()> {
     append_diagnostic(&ui, "Desktop: Rust + Slint · Fyne UI archived under /archive/go-fyne-ui");
     append_diagnostic(&ui, "Runtime registry: Rust binary registry.data capture + isolated Fabric/Loom worker");
     append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover the manifest-supported Fabric version families");
+    append_diagnostic(&ui, "World context: launcher/instance discovery is authoritative when available; folder inference is fallback-only");
 
     let ping_engine = engine.clone();
     let ping_weak = ui.as_weak();
@@ -208,14 +214,8 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
         thread::spawn(move || {
             let picked = rfd::FileDialog::new().set_title("Select a Minecraft world").pick_folder();
             let Some(path) = picked else { return; };
-            let valid = path.join("level.dat").is_file();
-            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("Minecraft World").to_string();
-            let version = detect_minecraft_version(&path).unwrap_or_else(|| "1.21.10".to_string());
-            let loader = detect_loader(&path);
-            let mods_path = infer_mods_path(&path);
-            let display = path.display().to_string();
-
-            if !valid {
+            if !path.join("level.dat").is_file() {
+                let display = path.display().to_string();
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     append_diagnostic(&ui, &format!("Rejected world without level.dat: {display}"));
                     ui.set_task_title("INVALID WORLD".into());
@@ -224,12 +224,66 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
                 return;
             }
 
+            let discovered = world_context::resolve(&path);
+            let name = discovered
+                .as_ref()
+                .map(|context| context.world_name.clone())
+                .or_else(|| path.file_name().and_then(|name| name.to_str()).map(str::to_string))
+                .unwrap_or_else(|| "Minecraft World".to_string());
+            let version = discovered
+                .as_ref()
+                .map(|context| context.version.clone())
+                .filter(|value| !value.trim().is_empty() && value != "?")
+                .or_else(|| detect_minecraft_version(&path))
+                .unwrap_or_else(|| "1.21.10".to_string());
+            let loader = discovered
+                .as_ref()
+                .map(|context| context.loader.clone())
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| detect_loader(&path));
+            let mods_path = discovered
+                .as_ref()
+                .map(|context| context.mods_path.clone())
+                .unwrap_or_else(|| infer_mods_path(&path));
+            let display = path.display().to_string();
+            let context_line = discovered.as_ref().map(|context| {
+                format!(
+                    "Launcher context: {} › {} · MC {} · {}{} · minecraft dir {}",
+                    context.launcher,
+                    context.instance,
+                    context.version,
+                    context.loader,
+                    if context.has_polymer { " · Polymer" } else { "" },
+                    context.minecraft_dir.display()
+                )
+            });
+
             if cache.is_running() && !cache.is_running_for(&version, &mods_path) {
                 cache.cancel();
             }
             if let Ok(mut guard) = state.lock() {
                 guard.pending_export = None;
+                guard.selected_world = Some(path.clone());
+                guard.selected_mods_path = Some(mods_path.clone());
+                guard.selected_version = Some(version.clone());
+                guard.selected_loader = Some(loader.clone());
             }
+
+            let cached_map = match heightmap_cache::load(&path) {
+                Ok(Some((metadata, png))) => match decode_png(&png) {
+                    Ok(raster) => Some((metadata, raster)),
+                    Err(error) => {
+                        diagnostics::append(&format!("Ignored unreadable heightmap cache for {}: {error:#}", path.display()));
+                        None
+                    }
+                },
+                Ok(None) => None,
+                Err(error) => {
+                    diagnostics::append(&format!("Heightmap cache lookup failed for {}: {error:#}", path.display()));
+                    None
+                }
+            };
+            let cache_hit = cached_map.is_some();
 
             let display_for_ui = display.clone();
             let version_for_ui = version.clone();
@@ -240,22 +294,32 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
                 ui.set_minecraft_version(version_for_ui.clone().into());
                 ui.set_loader_type(loader_for_ui.clone().into());
                 ui.set_runtime_cache_status("PREPARING · full instance registry starts automatically".into());
-                ui.set_map_loading(true);
-                ui.set_map_available(false);
                 ui.set_preview_available(false);
                 ui.set_preview_loading(false);
-                ui.set_task_title("WORLD".into());
-                ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · loading 2D map").into());
+                if let Some((metadata, raster)) = cached_map {
+                    apply_map_raster(&ui, raster, metadata.min_x, metadata.min_z, metadata.max_x, metadata.max_z, metadata.scale);
+                    ui.set_task_title("MAP CACHE HIT".into());
+                    ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · saved 2D map restored").into());
+                    append_diagnostic(&ui, "2D map cache hit: using saved heightmap");
+                } else {
+                    ui.set_map_loading(true);
+                    ui.set_map_available(false);
+                    ui.set_task_title("WORLD".into());
+                    ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · loading 2D map").into());
+                }
                 append_diagnostic(&ui, &format!("Selected world: {display_for_ui} (Minecraft {version_for_ui}, {loader_for_ui})"));
+                if let Some(line) = context_line { append_diagnostic(&ui, &line); }
             });
 
-            if let Err(error) = engine.send_value(json!({ "command": "heightmap", "worldPath": display, "scale": 1 })) {
-                let _ = weak.upgrade_in_event_loop(move |ui| {
-                    ui.set_map_loading(false);
-                    ui.set_task_title("MAP FAILED".into());
-                    ui.set_task_detail(error.to_string().into());
-                    append_diagnostic(&ui, &format!("Heightmap request failed: {error:#}"));
-                });
+            if !cache_hit {
+                if let Err(error) = engine.send_value(json!({ "command": "heightmap", "worldPath": display, "scale": 1 })) {
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_map_loading(false);
+                        ui.set_task_title("MAP FAILED".into());
+                        ui.set_task_detail(error.to_string().into());
+                        append_diagnostic(&ui, &format!("Heightmap request failed: {error:#}"));
+                    });
+                }
             }
 
             if runtime_registry_supported(&loader, &version, &mods_path) {
@@ -290,14 +354,28 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
     let reload_engine = engine;
     ui.on_reload_map(move || {
         let Some(ui) = weak.upgrade() else { return; };
-        let world = ui.get_world_path().to_string();
-        if world == "No world selected" { return; }
+        let world = PathBuf::from(ui.get_world_path().to_string());
+        if !world.join("level.dat").is_file() { return; }
         ui.set_map_loading(true);
         ui.set_map_available(false);
-        if let Err(error) = reload_engine.send_value(json!({ "command": "heightmap", "worldPath": world, "scale": 1 })) {
-            ui.set_map_loading(false);
-            append_diagnostic(&ui, &format!("Reload heightmap request failed: {error:#}"));
-        }
+        ui.set_task_title("MAP REFRESH".into());
+        ui.set_task_detail("Invalidating saved heightmap and rebuilding from the world…".into());
+        let engine = reload_engine.clone();
+        let weak = weak.clone();
+        thread::spawn(move || {
+            if let Err(error) = heightmap_cache::invalidate(&world) {
+                diagnostics::append(&format!("Could not invalidate heightmap cache: {error:#}"));
+            }
+            let result = engine.send_value(json!({ "command": "heightmap", "worldPath": world, "scale": 1 }));
+            if let Err(error) = result {
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    ui.set_map_loading(false);
+                    ui.set_task_title("MAP FAILED".into());
+                    ui.set_task_detail(error.to_string().into());
+                    append_diagnostic(&ui, &format!("Reload heightmap request failed: {error:#}"));
+                });
+            }
+        });
     });
 }
 
@@ -325,9 +403,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
         let name = sanitize_export_name(&ui.get_export_name().to_string());
         let output = output_dir.join(format!("{name}.{format}"));
         let export_mode = match ui.get_export_mode_index() { 1 => "individual", 2 => "merged", _ => "grouped" };
-        let version = ui.get_minecraft_version().to_string();
-        let loader = normalize_loader(&ui.get_loader_type().to_string());
-        let mods_path = infer_mods_path(&world);
+        let (version, loader, mods_path) = selected_runtime_context(&state, &ui, &world);
         let cell_size = [8, 16, 32, 64].get(ui.get_flatter_cell_index().max(0) as usize).copied().unwrap_or(16);
         let (resource_packs, data_packs) = asset_paths(&state);
 
@@ -410,7 +486,7 @@ fn wire_preflight(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         if !world.join("level.dat").is_file() { return; }
         if let Ok(mut guard) = state.lock() { guard.block_request_purpose = BlockRequestPurpose::Preflight; }
 
-        let mut request = block_list_request(&ui, &world);
+        let mut request = block_list_request(&ui, &world, &state);
         add_bubble_fields(&ui, &mut request);
         ui.set_task_active(true);
         ui.set_task_progress(0.05);
@@ -433,7 +509,7 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         if !world.join("level.dat").is_file() { return; }
         if let Ok(mut guard) = state.lock() { guard.block_request_purpose = BlockRequestPurpose::Preview; }
 
-        let mut request = block_list_request(&ui, &world);
+        let mut request = block_list_request(&ui, &world, &state);
         add_bubble_fields(&ui, &mut request);
         ui.set_preview_loading(true);
         ui.set_preview_available(false);
@@ -450,12 +526,13 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     });
 }
 
-fn block_list_request(ui: &MainWindow, world: &Path) -> Value {
+fn block_list_request(ui: &MainWindow, world: &Path, state: &SharedState) -> Value {
+    let (_, loader, mods_path) = selected_runtime_context(state, ui, world);
     json!({
         "command": "listBlocks",
         "worldPath": world,
-        "modsPath": infer_mods_path(world),
-        "modLoader": normalize_loader(&ui.get_loader_type().to_string()),
+        "modsPath": mods_path,
+        "modLoader": loader,
         "minX": ui.get_min_x(), "minY": ui.get_min_y(), "minZ": ui.get_min_z(),
         "maxX": ui.get_max_x(), "maxY": ui.get_max_y(), "maxZ": ui.get_max_z()
     })
@@ -503,9 +580,7 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
         let Some(ui) = weak.upgrade() else { return; };
         let world = PathBuf::from(ui.get_world_path().to_string());
         if !world.join("level.dat").is_file() { return; }
-        let version = ui.get_minecraft_version().to_string();
-        let loader = normalize_loader(&ui.get_loader_type().to_string());
-        let mods = infer_mods_path(&world);
+        let (version, loader, mods) = selected_runtime_context(&rebuild_state, &ui, &world);
         if loader != "fabric" {
             ui.set_task_title("RUNTIME CACHE".into());
             ui.set_task_detail("Full runtime registry currently requires a Fabric instance.".into());
@@ -942,21 +1017,25 @@ fn pump_engine_events(weak: slint::Weak<MainWindow>, events: Receiver<EngineEven
 
 fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: SharedState) {
     if response.kind == "heightmap" {
-        let decoded = decode_heightmap(&response.image);
+        let decoded = decode_heightmap_payload(&response.image);
         let bounds = (response.min_x, response.min_z, response.max_x, response.max_z, response.scale);
+        let selected_world = state.lock().ok().and_then(|guard| guard.selected_world.clone());
+        let cache_note = match (&selected_world, &decoded) {
+            (Some(world), Ok((_, png))) => match heightmap_cache::save(world, png, bounds.0, bounds.1, bounds.2, bounds.3, bounds.4) {
+                Ok(()) => Some("2D map cached for the next launch".to_string()),
+                Err(error) => Some(format!("[WARN] Could not cache 2D map: {error:#}")),
+            },
+            _ => None,
+        };
         let _ = weak.clone().upgrade_in_event_loop(move |ui| {
             ui.set_map_loading(false);
             match decoded {
-                Ok(buffer) => {
-                    ui.set_map_image(Image::from_rgba8(buffer));
-                    ui.set_map_available(true);
-                    ui.set_map_min_x(bounds.0); ui.set_map_min_z(bounds.1); ui.set_map_max_x(bounds.2); ui.set_map_max_z(bounds.3); ui.set_map_scale(bounds.4);
-                    if ui.get_min_x() == -256 && ui.get_max_x() == 256 {
-                        ui.set_min_x(bounds.0); ui.set_max_x(bounds.2); ui.set_min_z(bounds.1); ui.set_max_z(bounds.3);
-                    }
+                Ok((raster, _)) => {
+                    apply_map_raster(&ui, raster, bounds.0, bounds.1, bounds.2, bounds.3, bounds.4);
                     ui.set_task_title("MAP READY".into());
                     ui.set_task_detail(format!("X {}..{} · Z {}..{} · scale {}", bounds.0, bounds.2, bounds.1, bounds.3, bounds.4).into());
                     append_diagnostic(&ui, "IPC <- heightmap");
+                    if let Some(note) = cache_note { append_diagnostic(&ui, &note); }
                 }
                 Err(error) => {
                     ui.set_map_available(false);
@@ -1107,11 +1186,42 @@ fn looks_cube_like(id: &str) -> bool {
     !looks_transparent(id) && !looks_shape_heavy(id)
 }
 
-fn decode_heightmap(encoded: &str) -> Result<SharedPixelBuffer<Rgba8Pixel>> {
+struct DecodedRaster {
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+fn decode_png(bytes: &[u8]) -> Result<DecodedRaster> {
+    let rgba = image::load_from_memory(bytes).context("decode heightmap PNG")?.into_rgba8();
+    let width = rgba.width();
+    let height = rgba.height();
+    Ok(DecodedRaster { rgba: rgba.into_raw(), width, height })
+}
+
+fn decode_heightmap_payload(encoded: &str) -> Result<(DecodedRaster, Vec<u8>)> {
     if encoded.is_empty() { return Err(anyhow!("heightmap response did not contain PNG data")); }
     let bytes = BASE64.decode(encoded).context("decode heightmap base64")?;
-    let rgba = image::load_from_memory(&bytes).context("decode heightmap PNG")?.into_rgba8();
-    Ok(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(rgba.as_raw(), rgba.width(), rgba.height()))
+    let raster = decode_png(&bytes)?;
+    Ok((raster, bytes))
+}
+
+fn apply_map_raster(ui: &MainWindow, raster: DecodedRaster, min_x: i32, min_z: i32, max_x: i32, max_z: i32, scale: i32) {
+    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&raster.rgba, raster.width, raster.height);
+    ui.set_map_image(Image::from_rgba8(buffer));
+    ui.set_map_loading(false);
+    ui.set_map_available(true);
+    ui.set_map_min_x(min_x);
+    ui.set_map_min_z(min_z);
+    ui.set_map_max_x(max_x);
+    ui.set_map_max_z(max_z);
+    ui.set_map_scale(scale);
+    if ui.get_min_x() == -256 && ui.get_max_x() == 256 {
+        ui.set_min_x(min_x);
+        ui.set_max_x(max_x);
+        ui.set_min_z(min_z);
+        ui.set_max_z(max_z);
+    }
 }
 
 fn flush_logs(weak: &slint::Weak<MainWindow>, logs: &mut Vec<String>) {
@@ -1149,6 +1259,24 @@ fn asset_paths(state: &SharedState) -> (String, String) {
     let guard = state.lock().expect("asset state");
     let join = |paths: &[PathBuf]| paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(";");
     (join(&guard.resource_packs), join(&guard.data_packs))
+}
+
+fn selected_runtime_context(state: &SharedState, ui: &MainWindow, world: &Path) -> (String, String, PathBuf) {
+    if let Ok(guard) = state.lock() {
+        if guard.selected_world.as_deref() == Some(world) {
+            let version = guard.selected_version.clone().filter(|value| !value.trim().is_empty() && value != "?");
+            let loader = guard.selected_loader.clone().filter(|value| !value.trim().is_empty());
+            let mods = guard.selected_mods_path.clone();
+            if let (Some(version), Some(loader), Some(mods)) = (version, loader, mods) {
+                return (version, normalize_loader(&loader), mods);
+            }
+        }
+    }
+    (
+        ui.get_minecraft_version().to_string(),
+        normalize_loader(&ui.get_loader_type().to_string()),
+        infer_mods_path(world),
+    )
 }
 
 fn show_doc_page(ui: &MainWindow, index: usize) {
