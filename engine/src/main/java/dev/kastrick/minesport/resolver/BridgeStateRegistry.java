@@ -58,20 +58,17 @@ public final class BridgeStateRegistry {
         List<BlockData> blocks,
         Consumer<String> log
     ) {
-        RuntimeRegistryDataReader.DataSnapshot root;
+        RuntimeRegistryIndex index;
         try {
-            root = RuntimeRegistryDataReader.read(snapshot);
+            index = RuntimeRegistryIndex.open(snapshot);
         } catch (Exception exception) {
-            warn(log, "Runtime registry could not be read: " + exception.getMessage());
-            return 0;
-        }
-        if (root.schema() != SNAPSHOT_SCHEMA) {
-            warn(log, "Ignoring runtime registry schema " + root.schema()
-                + " (expected " + SNAPSHOT_SCHEMA + ")");
+            warn(log, "Runtime registry could not be indexed: " + exception.getMessage());
             return 0;
         }
 
-        String capturedVersion = root.minecraftVersion() == null ? "" : root.minecraftVersion().trim();
+        String capturedVersion = index.header().minecraftVersion() == null
+            ? ""
+            : index.header().minecraftVersion().trim();
         String expected = expectedMinecraftVersion == null ? "" : expectedMinecraftVersion.trim();
         if (!expected.isEmpty() && !capturedVersion.equals(expected)) {
             warn(log, "Ignoring runtime registry for Minecraft " + capturedVersion
@@ -79,13 +76,29 @@ public final class BridgeStateRegistry {
             return 0;
         }
 
+        // Only touch records that can affect this world/selection. The complete
+        // baked registry remains on disk and unrelated mod blocks never enter
+        // the Java heap.
+        Set<String> requestedBlockIds = new HashSet<>();
+        for (BlockData block : blocks) {
+            if (block != null && block.blockId != null && !block.blockId.isBlank()) {
+                requestedBlockIds.add(block.blockId);
+            }
+        }
+
         Map<String, List<LightState>> lightRegistry = new LinkedHashMap<>();
         Set<String> runtimeModelBlocks = new HashSet<>();
-        for (var blockEntry : root.blocks().entrySet()) {
-            RuntimeRegistryDataReader.DataBlock source = blockEntry.getValue();
+        for (String blockId : requestedBlockIds) {
+            RuntimeRegistryDataReader.DataBlock source;
+            try {
+                source = index.readBlock(blockId);
+            } catch (Exception exception) {
+                warn(log, "Runtime state data for " + blockId + " could not be read: " + exception.getMessage());
+                continue;
+            }
             if (source == null) continue;
             if (source.variants() != null && !source.variants().isEmpty()) {
-                runtimeModelBlocks.add(blockEntry.getKey());
+                runtimeModelBlocks.add(blockId);
             }
             if (source.lights() == null || source.lights().isEmpty()) continue;
 
@@ -98,7 +111,7 @@ public final class BridgeStateRegistry {
                     level
                 ));
             }
-            if (!states.isEmpty()) lightRegistry.put(blockEntry.getKey(), states);
+            if (!states.isEmpty()) lightRegistry.put(blockId, states);
         }
         return applyResolved(snapshot, blocks, log, lightRegistry, runtimeModelBlocks);
     }
