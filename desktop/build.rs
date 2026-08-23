@@ -138,9 +138,9 @@ fn main() {
         .join("bundled-bridge")
         .join("minesport-bridge-0.2.0.jar");
     let bridge_versions = root.join("bridge-versions");
-    let blender_addon = root
-        .join("wrapper")
-        .join("blendertranslator")
+    let blender_addon = manifest
+        .join("assets")
+        .join("blender")
         .join("minesport_translator");
 
     println!("cargo:rerun-if-changed={}", ui.display());
@@ -157,10 +157,6 @@ fn main() {
 
     let headless_recipe = env::var_os("MINESPORT_HEADLESS_BRIDGE_PREPARE").is_some();
     if headless_recipe {
-        // `cargo run --bin bridge-prepare` does not compile the Slint main binary
-        // and never executes the embedded Java/Bridge materializers. Keep tiny
-        // placeholders only so shared runtime.rs include_bytes! paths remain
-        // syntactically valid for the headless recipe helper.
         fs::write(out.join("minesport-engine.jar"), b"headless-recipe-helper")
             .expect("write headless engine placeholder");
         fs::write(out.join("minesport-bridge.jar"), b"headless-recipe-helper")
