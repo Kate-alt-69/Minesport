@@ -1,0 +1,826 @@
+import { Button, CheckBox, ComboBox, LineEdit, ProgressIndicator, ScrollView, SpinBox, Spinner } from "std-widgets.slint";
+import { AssetEditor } from "asset-editor.slint";
+
+// Rust/Slint recreation of the final Fyne V3 workbench. Keep this file focused
+// on parity with archive/go-fyne-ui/ui/workbench_v3.go + workbench_v2.go.
+component RailButton inherits Rectangle {
+    in property <string> glyph;
+    in property <string> tip;
+    in property <bool> active;
+    callback clicked();
+    width: 48px;
+    height: 48px;
+    background: active ? #1b2b22 : hit.has-hover ? #1b2020 : transparent;
+    border-width: active ? 2px : 0px;
+    border-color: #4e8a3a;
+
+    Text {
+        text: root.glyph;
+        color: root.active ? #f2f5f1 : #939d98;
+        font-size: 18px;
+        font-weight: root.active ? 700 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    hit := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        Tooltip { text: root.tip; }
+    }
+}
+
+component SectionTitle inherits Text {
+    in property <string> label;
+    text: label;
+    height: 22px;
+    color: #9aa39e;
+    font-size: 10px;
+    font-weight: 700;
+    vertical-alignment: center;
+}
+
+component HintText inherits Text {
+    color: #8b938f;
+    font-size: 10px;
+    font-italic: true;
+    wrap: word-wrap;
+}
+
+component Surface inherits Rectangle {
+    background: #171a1a;
+    border-width: 1px;
+    border-color: #2d3230;
+    border-radius: 5px;
+}
+
+component WorldMapView inherits Rectangle {
+    in property <image> source;
+    in property <bool> available;
+    in-out property <int> map-min-x;
+    in-out property <int> map-min-z;
+    in-out property <int> map-max-x;
+    in-out property <int> map-max-z;
+    in-out property <int> selection-mode;
+    in-out property <int> min-x;
+    in-out property <int> max-x;
+    in-out property <int> min-z;
+    in-out property <int> max-z;
+    in-out property <int> center-x;
+    in-out property <int> center-z;
+    in-out property <int> radius-x;
+    in-out property <int> radius-z;
+    in-out property <string> cursor-label;
+
+    private property <float> zoom: 1.0;
+    private property <length> offset-x: 0px;
+    private property <length> offset-y: 0px;
+    private property <bool> panning: false;
+    private property <bool> dragging: false;
+    private property <length> pan-start-x: 0px;
+    private property <length> pan-start-y: 0px;
+    private property <length> pan-offset-x: 0px;
+    private property <length> pan-offset-y: 0px;
+    private property <int> drag-start-x: 0;
+    private property <int> drag-start-z: 0;
+    private property <int> hover-x: 0;
+    private property <int> hover-z: 0;
+
+    background: #0f1216;
+    clip: true;
+
+    function image-width() -> length {
+        return max(1px, root.source.width * 1px * root.zoom);
+    }
+    function image-height() -> length {
+        return max(1px, root.source.height * 1px * root.zoom);
+    }
+    function world-x(sx: length) -> int {
+        if (root.source.width <= 0 || root.map-max-x <= root.map-min-x) { return root.map-min-x; }
+        return max(root.map-min-x, min(root.map-max-x,
+            round(root.map-min-x + ((sx - root.offset-x) / root.image-width()) * (root.map-max-x - root.map-min-x + 1))));
+    }
+    function world-z(sy: length) -> int {
+        if (root.source.height <= 0 || root.map-max-z <= root.map-min-z) { return root.map-min-z; }
+        return max(root.map-min-z, min(root.map-max-z,
+            round(root.map-min-z + ((sy - root.offset-y) / root.image-height()) * (root.map-max-z - root.map-min-z + 1))));
+    }
+    function screen-x(wx: int) -> length {
+        if (root.map-max-x <= root.map-min-x) { return root.offset-x; }
+        return root.offset-x + (((wx - root.map-min-x) * 1.0) / (root.map-max-x - root.map-min-x + 1)) * root.image-width();
+    }
+    function screen-z(wz: int) -> length {
+        if (root.map-max-z <= root.map-min-z) { return root.offset-y; }
+        return root.offset-y + (((wz - root.map-min-z) * 1.0) / (root.map-max-z - root.map-min-z + 1)) * root.image-height();
+    }
+    function clamp-view() {
+        if (!root.available || root.source.width <= 0 || root.source.height <= 0) { return; }
+        let w = root.image-width();
+        let h = root.image-height();
+        let pad-x = max(32px, root.width * 0.1);
+        let pad-y = max(32px, root.height * 0.1);
+        if (w + pad-x * 2 <= root.width) {
+            root.offset-x = (root.width - w) / 2;
+        } else {
+            root.offset-x = min(pad-x, max(root.width - w - pad-x, root.offset-x));
+        }
+        if (h + pad-y * 2 <= root.height) {
+            root.offset-y = (root.height - h) / 2;
+        } else {
+            root.offset-y = min(pad-y, max(root.height - h - pad-y, root.offset-y));
+        }
+    }
+    public function fit() {
+        if (!root.available || root.source.width <= 0 || root.source.height <= 0 || root.width <= 0px || root.height <= 0px) { return; }
+        let zx = root.width / (root.source.width * 1px);
+        let zy = root.height / (root.source.height * 1px);
+        root.zoom = max(0.05, min(64.0, min(zx, zy) * 0.94));
+        root.offset-x = (root.width - root.image-width()) / 2;
+        root.offset-y = (root.height - root.image-height()) / 2;
+        root.clamp-view();
+    }
+
+    changed source => { root.fit(); }
+    changed available => { if (root.available) { root.fit(); } }
+
+    if root.available: Image {
+        x: root.offset-x;
+        y: root.offset-y;
+        width: root.image-width();
+        height: root.image-height();
+        source: root.source;
+        image-fit: fill;
+        image-rendering: pixelated;
+    }
+
+    map-touch := TouchArea {
+        enabled: root.available;
+        mouse-cursor: root.panning ? grabbing : crosshair;
+        pointer-event(event) => {
+            let wx = root.world-x(self.mouse-x);
+            let wz = root.world-z(self.mouse-y);
+            root.hover-x = wx;
+            root.hover-z = wz;
+            root.cursor-label = "X " + wx + "  ·  Z " + wz;
+
+            if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.down) {
+                root.panning = true;
+                root.pan-start-x = self.mouse-x;
+                root.pan-start-y = self.mouse-y;
+                root.pan-offset-x = root.offset-x;
+                root.pan-offset-y = root.offset-y;
+            }
+            if (event.button == PointerEventButton.middle && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
+                root.panning = false;
+            }
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down && root.selection-mode == 1) {
+                root.center-x = wx;
+                root.center-z = wz;
+            }
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                root.dragging = true;
+                root.drag-start-x = wx;
+                root.drag-start-z = wz;
+                if (root.selection-mode == 0) {
+                    root.min-x = wx; root.max-x = wx;
+                    root.min-z = wz; root.max-z = wz;
+                }
+            }
+            if (event.kind == PointerEventKind.move) {
+                if (root.panning) {
+                    root.offset-x = root.pan-offset-x + self.mouse-x - root.pan-start-x;
+                    root.offset-y = root.pan-offset-y + self.mouse-y - root.pan-start-y;
+                    root.clamp-view();
+                } else if (root.dragging && root.selection-mode == 0) {
+                    root.min-x = min(root.drag-start-x, wx);
+                    root.max-x = max(root.drag-start-x, wx);
+                    root.min-z = min(root.drag-start-z, wz);
+                    root.max-z = max(root.drag-start-z, wz);
+                }
+            }
+            if (event.button == PointerEventButton.left && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
+                if (root.selection-mode == 1) {
+                    root.center-x = wx;
+                    root.center-z = wz;
+                } else {
+                    root.min-x = min(root.drag-start-x, wx);
+                    root.max-x = max(root.drag-start-x, wx);
+                    root.min-z = min(root.drag-start-z, wz);
+                    root.max-z = max(root.drag-start-z, wz);
+                }
+                root.dragging = false;
+            }
+        }
+        scroll-event(event) => {
+            if (!root.available || root.zoom <= 0 || event.delta-y == 0px) { return reject; }
+            let old = root.zoom;
+            let next = event.delta-y < 0px ? min(64.0, old * 1.12) : max(0.05, old / 1.12);
+            let factor = next / old;
+            root.offset-x = self.mouse-x - (self.mouse-x - root.offset-x) * factor;
+            root.offset-y = self.mouse-y - (self.mouse-y - root.offset-y) * factor;
+            root.zoom = next;
+            root.clamp-view();
+            return accept;
+        }
+    }
+
+    if root.available && map-touch.has-hover && !root.panning: Rectangle {
+        x: root.screen-x(root.hover-x);
+        y: root.screen-z(root.hover-z);
+        width: max(1px, root.screen-x(root.hover-x + 1) - root.screen-x(root.hover-x));
+        height: max(1px, root.screen-z(root.hover-z + 1) - root.screen-z(root.hover-z));
+        background: #ffffff08;
+        border-width: 1px;
+        border-color: #ffffffbe;
+    }
+
+    if root.available && root.selection-mode == 0: Rectangle {
+        x: root.screen-x(min(root.min-x, root.max-x));
+        y: root.screen-z(min(root.min-z, root.max-z));
+        width: max(1px, root.screen-x(max(root.min-x, root.max-x) + 1) - self.x);
+        height: max(1px, root.screen-z(max(root.min-z, root.max-z) + 1) - self.y);
+        background: #5aff8c2d;
+        border-width: 2px;
+        border-color: #5aff8ce6;
+    }
+
+    if root.available && root.selection-mode == 1: Rectangle {
+        x: root.screen-x(root.center-x - root.radius-x);
+        y: root.screen-z(root.center-z - root.radius-z);
+        width: max(1px, root.screen-x(root.center-x + root.radius-x + 1) - self.x);
+        height: max(1px, root.screen-z(root.center-z + root.radius-z + 1) - self.y);
+        background: #50beff23;
+        border-width: 2px;
+        border-color: #50beffdc;
+    }
+
+    if root.available: Rectangle {
+        x: parent.width - 170px;
+        y: parent.height - 42px;
+        width: 158px;
+        height: 30px;
+        background: #101414e8;
+        border-width: 1px;
+        border-color: #323735;
+        border-radius: 5px;
+        Text { text: root.cursor-label; color: #c3cac6; font-size: 9px; font-family: "monospace"; horizontal-alignment: center; vertical-alignment: center; }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Minesport — by Kastrick";
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 1060px;
+    min-height: 680px;
+    background: #0d0f10;
+    forward-focus: app-focus;
+
+    in-out property <int> active-activity: 0;
+    in-out property <int> settings-page: 0;
+    in-out property <int> viewport-mode: 0;
+
+    in-out property <string> world-path: "No world selected";
+    in-out property <string> world-name: "No world selected";
+    in-out property <string> minecraft-version: "—";
+    in-out property <string> loader-type: "—";
+    in-out property <int> selection-mode: 0;
+    in-out property <int> min-x: -256;
+    in-out property <int> min-y: -64;
+    in-out property <int> min-z: -256;
+    in-out property <int> max-x: 256;
+    in-out property <int> max-y: 320;
+    in-out property <int> max-z: 256;
+    in-out property <int> center-x: 0;
+    in-out property <int> center-y: 64;
+    in-out property <int> center-z: 0;
+    in-out property <int> radius-x: 32;
+    in-out property <int> radius-y: 32;
+    in-out property <int> radius-z: 32;
+
+    in-out property <image> map-image;
+    in-out property <bool> map-available: false;
+    in-out property <bool> map-loading: false;
+    in-out property <int> map-min-x: -256;
+    in-out property <int> map-min-z: -256;
+    in-out property <int> map-max-x: 256;
+    in-out property <int> map-max-z: 256;
+    in-out property <int> map-scale: 1;
+    in-out property <string> map-cursor-label: "X —  ·  Z —";
+
+    in-out property <image> preview-image;
+    in-out property <bool> preview-available: false;
+    in-out property <bool> preview-loading: false;
+    in-out property <int> preview-block-count: 0;
+    in-out property <string> preview-focus-label: "Click a visible block to focus/select it";
+
+    in-out property <string> output-path: "";
+    in-out property <string> export-name: "Minesport_Export";
+    in-out property <int> export-format-index: 0;
+    in-out property <int> export-mode-index: 0;
+    in-out property <bool> optimize: true;
+    in-out property <string> preflight-summary: "Preflight has not been run for this selection.";
+
+    in-out property <bool> face-culling: true;
+    in-out property <bool> flatter-enabled: true;
+    in-out property <int> flatter-cell-index: 3;
+    in-out property <bool> hidden-culling: false;
+    in-out property <bool> blender-export: true;
+    in-out property <bool> select-by-model: false;
+    in-out property <bool> debug-mode: false;
+    in-out property <int> blender-animation-index: 0;
+    in-out property <string> resource-pack-summary: "No resource-pack overrides";
+    in-out property <string> data-pack-summary: "No data-pack overrides";
+    in property <[string]> resource-pack-items;
+    in property <[string]> data-pack-items;
+    in-out property <int> resource-pack-selected: 0;
+    in-out property <int> data-pack-selected: 0;
+
+    in-out property <string> engine-status: "STARTING";
+    in-out property <bool> engine-ready: false;
+    in-out property <string> runtime-cache-status: "WAITING FOR WORLD";
+    in-out property <bool> runtime-cache-busy: false;
+    in-out property <string> task-title: "IDLE";
+    in-out property <string> task-detail: "Ready";
+    in-out property <float> task-progress: 0.0;
+    in-out property <bool> task-active: false;
+    in-out property <string> diagnostics: "Minesport Rust/Slint desktop initialized.";
+
+    in-out property <bool> docs-visible: false;
+    in-out property <int> doc-page: 1;
+    in-out property <int> doc-total: 8;
+    in-out property <string> doc-title: "Start Here";
+    in-out property <string> doc-content: "Open Documentation from Settings to load the Minesport manual.";
+    in-out property <bool> doc-video-available: false;
+
+    callback pick-world();
+    callback pick-output();
+    callback reload-map();
+    callback export-requested();
+    callback run-preflight();
+    callback open-3d();
+    callback preview-click(float, float, float, float);
+    callback rebuild-runtime-cache();
+    callback cancel-runtime-cache();
+    callback remove-cache();
+    callback add-resource-pack();
+    callback add-resource-pack-folder();
+    callback move-resource-pack(int);
+    callback remove-resource-pack();
+    callback add-data-pack();
+    callback move-data-pack(int);
+    callback remove-data-pack();
+    callback install-blender-translator();
+    callback open-docs();
+    callback docs-navigate(int);
+    callback docs-open-github();
+    callback docs-open-video();
+    callback settings-changed();
+
+    private property <bool> task-drawer-visible: false;
+    private property <int> export-preset-index: 0;
+
+    changed task-active => {
+        if (root.task-active) {
+            root.task-drawer-visible = true;
+            task-hide.stop();
+        } else if (root.task-drawer-visible) {
+            task-hide.restart();
+        }
+    }
+
+    task-hide := Timer {
+        interval: 1100ms;
+        running: false;
+        triggered => {
+            root.task-drawer-visible = false;
+            self.running = false;
+        }
+    }
+
+    app-focus := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(event) => {
+            if (event.text == Key.F6 && root.viewport-mode == 0) {
+                map-view.fit();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            spacing: 0px;
+
+            Rectangle { height: 3px; background: #4e8a3a; }
+            Rectangle {
+                height: 48px;
+                background: #1e1f1d;
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 10px;
+                    cross-axis-alignment: center;
+                    Text { text: "MINESPORT"; color: #f2f4f1; font-size: 16px; font-weight: 700; vertical-alignment: center; }
+                    Rectangle { width: 1px; height: 24px; background: #444946; }
+                    Text { text: "Minecraft world → production workbench"; color: #a1a7a3; font-size: 10px; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Text {
+                        text: root.world-path == "No world selected" ? "World workbench" : root.world-name + "  ·  " + root.minecraft-version + "  ·  " + root.loader-type;
+                        color: #aeb5b1;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        max-width: 500px;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 0px;
+                vertical-stretch: 1;
+
+                Rectangle {
+                    width: 58px;
+                    background: #0e1010;
+                    VerticalLayout {
+                        padding-left: 5px;
+                        padding-right: 5px;
+                        spacing: 0px;
+                        Rectangle {
+                            height: 44px;
+                            background: transparent;
+                            Text { text: "M"; color: #dce2dd; font-size: 16px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        RailButton { glyph: "▣"; tip: "World"; active: root.active-activity == 0; clicked => { root.active-activity = 0; } }
+                        RailButton { glyph: "⇩"; tip: "Export"; active: root.active-activity == 1; clicked => { root.active-activity = 1; } }
+                        RailButton { glyph: "◆"; tip: "Blender"; active: root.active-activity == 2; clicked => { root.active-activity = 2; } }
+                        RailButton { glyph: "◷"; tip: "Tasks"; active: root.active-activity == 3; clicked => { root.active-activity = 3; } }
+                        Rectangle { vertical-stretch: 1; background: transparent; }
+                        RailButton { glyph: "⚙"; tip: "Settings"; active: root.active-activity == 4; clicked => { root.active-activity = 4; } }
+                    }
+                }
+
+                Rectangle {
+                    width: max(300px, min(360px, parent.width * 0.255));
+                    background: #161818;
+                    border-width: 1px;
+                    border-color: #2b2f2d;
+                    VerticalLayout {
+                        spacing: 0px;
+                        Rectangle {
+                            height: 42px;
+                            background: #181b1a;
+                            border-width: 1px;
+                            border-color: #2d3230;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 8px;
+                                Text {
+                                    text: root.active-activity == 0 ? "WORLD" : root.active-activity == 1 ? "EXPORT" : root.active-activity == 2 ? "BLENDER" : root.active-activity == 3 ? "TASKS" : "SETTINGS";
+                                    color: #e3e7e4;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                                Button { text: "•••"; width: 44px; clicked => { root.active-activity = 4; root.settings-page = 3; } }
+                            }
+                        }
+
+                        if root.active-activity == 0: ScrollView {
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                Text { text: root.world-name; color: #eef0ee; font-size: 14px; font-weight: 700; overflow: elide; }
+                                Text { text: root.world-path; color: #939c97; font-size: 10px; wrap: word-wrap; }
+                                Text { text: root.minecraft-version + "  ·  " + root.loader-type; color: #85a785; font-size: 10px; }
+                                Button { text: "Open Minecraft world…"; primary: true; clicked => { root.pick-world(); } }
+                                SectionTitle { label: "SELECTION"; }
+                                ComboBox { model: ["Box selection", "Bubble selection"]; current-index <=> root.selection-mode; }
+                                if root.selection-mode == 0: VerticalLayout {
+                                    spacing: 6px;
+                                    HorizontalLayout { spacing: 6px; Text { width: 30px; text: "X"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-x; } Text { text: "→"; color: #747b77; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-x; } }
+                                    HorizontalLayout { spacing: 6px; Text { width: 30px; text: "Y"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.min-y; } Text { text: "→"; color: #747b77; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.max-y; } }
+                                    HorizontalLayout { spacing: 6px; Text { width: 30px; text: "Z"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-z; } Text { text: "→"; color: #747b77; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-z; } }
+                                }
+                                if root.selection-mode == 1: VerticalLayout {
+                                    spacing: 6px;
+                                    HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Center X"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.center-x; } }
+                                    HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Center Y"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.center-y; } }
+                                    HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Center Z"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.center-z; } }
+                                    Rectangle { height: 1px; background: #303532; }
+                                    HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius X"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 30000000; value <=> root.radius-x; } }
+                                    HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Y"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 4096; value <=> root.radius-y; } }
+                                    HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Z"; color: #9aa39e; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 30000000; value <=> root.radius-z; } }
+                                }
+                                Button { text: "Use world bounds"; enabled: root.map-available; clicked => { root.min-x = root.map-min-x; root.max-x = root.map-max-x; root.min-z = root.map-min-z; root.max-z = root.map-max-z; } }
+                                HintText { text: "Selection stays editable while maps and exports run in the background."; }
+                                SectionTitle { label: "RUNTIME REGISTRY"; }
+                                Text { text: root.runtime-cache-status; color: root.runtime-cache-busy ? #d6bb77 : #8faa92; font-size: 10px; wrap: word-wrap; }
+                                if root.runtime-cache-busy: Button { text: "Cancel preparation"; clicked => { root.cancel-runtime-cache(); } }
+                            }
+                        }
+
+                        if root.active-activity == 1: ScrollView {
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                SectionTitle { label: "PRESET"; }
+                                ComboBox {
+                                    model: ["Custom", "Blender Animation", "Blender Lightweight", "Raw Minecraft", "Modded Accurate"];
+                                    current-index <=> root.export-preset-index;
+                                    selected(index) => {
+                                        if (index == 1) { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.blender-export = true; }
+                                        if (index == 2) { root.export-format-index = 0; root.export-mode-index = 0; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = true; root.blender-export = true; }
+                                        if (index == 3) { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = false; root.face-culling = false; root.flatter-enabled = false; root.hidden-culling = false; root.blender-export = false; }
+                                        if (index == 4) { root.export-format-index = 0; root.export-mode-index = 0; root.optimize = false; root.face-culling = true; root.flatter-enabled = false; root.hidden-culling = false; root.blender-export = true; }
+                                        if (index > 0) { root.settings-changed(); }
+                                    }
+                                }
+                                HintText { text: "Presets configure the current export controls; Advanced contains diagnostics and manual cache tools."; }
+                                SectionTitle { label: "EXPORT"; }
+                                Text { text: "Name"; color: #9aa39e; font-size: 10px; }
+                                LineEdit { text <=> root.export-name; accepted(_) => { root.settings-changed(); } }
+                                Text { text: "Format"; color: #9aa39e; font-size: 10px; }
+                                ComboBox { model: ["glTF 2.0", "OBJ + MTL"]; current-index <=> root.export-format-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
+                                Text { text: "Objects"; color: #9aa39e; font-size: 10px; }
+                                ComboBox { model: ["Grouped", "Individual blocks", "Merged"]; current-index <=> root.export-mode-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
+                                CheckBox { text: "Optimize mesh output"; checked <=> root.optimize; toggled => { root.settings-changed(); root.export-preset-index = 0; } }
+                                SectionTitle { label: "OUTPUT"; }
+                                Text { text: root.output-path == "" ? "~/Minesport_Exports" : root.output-path; color: #929b96; font-size: 10px; wrap: word-wrap; }
+                                Button { text: "Choose output folder…"; clicked => { root.pick-output(); } }
+                                SectionTitle { label: "OPTIMIZATION"; }
+                                Text { text: "Optimization: face culling " + (root.face-culling ? "ON" : "OFF") + " · FLATTER " + (root.flatter-enabled ? "ON" : "OFF") + " · hidden culling " + (root.hidden-culling ? "ON" : "OFF"); color: #aab1ad; font-size: 10px; wrap: word-wrap; }
+                                Button { text: "Apply safe optimization"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.export-preset-index = 0; root.settings-changed(); } }
+                                Button { text: root.task-active ? "Working…" : "Export world"; primary: true; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.export-requested(); } }
+                                HintText { text: "Export automatically prepares a matching Fabric runtime-model cache when needed. Progress appears in the bottom task drawer."; }
+                            }
+                        }
+
+                        if root.active-activity == 2: ScrollView {
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                SectionTitle { label: "WORLD INSPECTOR · BLENDER"; }
+                                if !root.blender-export: HintText { text: "Blender integration is disabled in Settings."; }
+                                if root.blender-export: VerticalLayout {
+                                    spacing: 8px;
+                                    Text { text: "Animation"; color: #9aa39e; font-size: 10px; }
+                                    ComboBox { model: ["Animate export", "Animate static"]; current-index <=> root.blender-animation-index; selected(_) => { root.settings-changed(); } }
+                                    Button { text: "Install / repair Minesport translator"; enabled: !root.task-active; clicked => { root.install-blender-translator(); } }
+                                    HintText { text: "Animate export prepares dynamic state descriptors plus animated textures. Animate static preserves interactable world state while keeping continuously animated textures."; }
+                                    HintText { text: "For OBJ, use Minesport's Blender translator import path. Blender's stock Wavefront importer bypasses Minesport metadata."; }
+                                }
+                            }
+                        }
+
+                        if root.active-activity == 3: ScrollView {
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                SectionTitle { label: "TASKS & DIAGNOSTICS"; }
+                                HintText { text: "Long engine, download, map and export work stays in the background. The main viewport never needs to disappear during export."; }
+                                SectionTitle { label: "ENGINE"; }
+                                Text { text: root.engine-status; color: root.engine-ready ? #8fc69b : #d39191; font-size: 11px; font-weight: 700; }
+                                SectionTitle { label: "ACTIVE TASK"; }
+                                Text { text: root.task-title; color: #e3e7e4; font-size: 12px; font-weight: 700; }
+                                Text { text: root.task-detail; color: #949d98; font-size: 10px; wrap: word-wrap; }
+                                if root.task-active: ProgressIndicator { progress: root.task-progress; }
+                                SectionTitle { label: "RUNTIME REGISTRY"; }
+                                Text { text: root.runtime-cache-status; color: #a0aaa4; font-size: 10px; wrap: word-wrap; }
+                                if root.runtime-cache-busy: Button { text: "Cancel runtime worker"; clicked => { root.cancel-runtime-cache(); } }
+                                SectionTitle { label: "DIAGNOSTICS"; }
+                                Surface {
+                                    height: 290px;
+                                    ScrollView { Text { x: 10px; y: 10px; width: parent.width - 20px; text: root.diagnostics; color: #aab1ad; font-size: 9px; font-family: "monospace"; wrap: word-wrap; } }
+                                }
+                            }
+                        }
+
+                        if root.active-activity == 4: ScrollView {
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 9px;
+                                Text { text: "Changes save immediately."; color: #929b96; font-size: 10px; }
+                                SectionTitle { label: "GEOMETRY"; }
+                                CheckBox { text: "Face culling"; checked <=> root.face-culling; toggled => { root.settings-changed(); } }
+                                HintText { text: "Remove a face only when neighboring geometry and its resolved texture prove the face is fully hidden."; }
+                                CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; toggled => { root.settings-changed(); } }
+                                ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; selected(_) => { root.settings-changed(); } }
+                                HintText { text: "Controls the spatial FLATTER cell. Smaller cells rebuild more locally; larger cells create fewer objects and broader greedy surfaces."; }
+                                CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; toggled => { root.settings-changed(); } }
+                                CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; toggled => { root.settings-changed(); } }
+                                SectionTitle { label: "PIPELINE"; }
+                                CheckBox { text: "Blender integration"; checked <=> root.blender-export; toggled => { root.settings-changed(); } }
+                                CheckBox { text: "Debug engine console"; checked <=> root.debug-mode; toggled => { root.settings-changed(); } }
+                                Text { text: root.runtime-cache-status; color: #9aa39e; font-size: 10px; wrap: word-wrap; }
+                                Button { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.runtime-cache-busy; clicked => { root.rebuild-runtime-cache(); } }
+                                SectionTitle { label: "ASSETS"; }
+                                Text { text: root.resource-pack-summary; color: #949d98; font-size: 10px; wrap: word-wrap; }
+                                AssetEditor {
+                                    title: "Resource packs · highest priority first";
+                                    help: "Folders and ZIPs are resolved in this order before vanilla/mod fallback.";
+                                    items: root.resource-pack-items;
+                                    selected-index <=> root.resource-pack-selected;
+                                    allow-folder: true;
+                                    allow-file: true;
+                                    add-file => { root.add-resource-pack(); }
+                                    add-folder => { root.add-resource-pack-folder(); }
+                                    move-selected(delta) => { root.move-resource-pack(delta); }
+                                    remove-selected => { root.remove-resource-pack(); }
+                                }
+                                Text { text: root.data-pack-summary; color: #949d98; font-size: 10px; wrap: word-wrap; }
+                                AssetEditor {
+                                    title: "Data packs · block tags";
+                                    help: "Data-pack paths are forwarded to the engine for tag/state resolution.";
+                                    items: root.data-pack-items;
+                                    selected-index <=> root.data-pack-selected;
+                                    allow-folder: true;
+                                    allow-file: false;
+                                    add-folder => { root.add-data-pack(); }
+                                    move-selected(delta) => { root.move-data-pack(delta); }
+                                    remove-selected => { root.remove-data-pack(); }
+                                }
+                                SectionTitle { label: "ADVANCED EXPORT TOOLS"; }
+                                Button { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.run-preflight(); } }
+                                Text { text: root.preflight-summary; color: #949d98; font-size: 10px; wrap: word-wrap; }
+                                Button { text: "Reload 2D map"; enabled: root.world-path != "No world selected" && !root.map-loading; clicked => { root.reload-map(); } }
+                                Button { text: "Open documentation"; clicked => { root.open-docs(); } }
+                                Button { text: "Remove all Minesport cache"; enabled: !root.task-active && !root.runtime-cache-busy; clicked => { root.remove-cache(); } }
+                                HintText { text: "Deletes only regenerable runtime/cache/toolchain data. Worlds, exports, settings and real mods are never touched."; }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: #0d0f10;
+                    VerticalLayout {
+                        spacing: 0px;
+                        Rectangle {
+                            height: 44px;
+                            background: #141718;
+                            border-width: 1px;
+                            border-color: #2d3230;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                Text { text: "LMB select · MMB pan · scroll zoom · F6 fit"; color: #a0a7a3; font-size: 9px; vertical-alignment: center; }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                                Button { text: "2D"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
+                                Button { text: "3D"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-path != "No world selected"; clicked => { root.viewport-mode = 1; root.open-3d(); } }
+                                Button { text: "Fit"; enabled: root.viewport-mode == 0 && root.map-available; clicked => { map-view.fit(); } }
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                            background: #0f1216;
+                            clip: true;
+
+                            map-view := WorldMapView {
+                                visible: root.viewport-mode == 0;
+                                source: root.map-image;
+                                available: root.map-available && !root.docs-visible;
+                                map-min-x <=> root.map-min-x;
+                                map-min-z <=> root.map-min-z;
+                                map-max-x <=> root.map-max-x;
+                                map-max-z <=> root.map-max-z;
+                                selection-mode <=> root.selection-mode;
+                                min-x <=> root.min-x;
+                                max-x <=> root.max-x;
+                                min-z <=> root.min-z;
+                                max-z <=> root.max-z;
+                                center-x <=> root.center-x;
+                                center-z <=> root.center-z;
+                                radius-x <=> root.radius-x;
+                                radius-z <=> root.radius-z;
+                                cursor-label <=> root.map-cursor-label;
+                            }
+                            if root.viewport-mode == 0 && !root.map-available && !root.map-loading: Text { text: root.world-path == "No world selected" ? "SELECT A MINECRAFT WORLD" : "NO 2D MAP LOADED"; color: #6e7672; font-size: 16px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                            if root.viewport-mode == 0 && root.map-loading: VerticalLayout {
+                                alignment: center;
+                                spacing: 10px;
+                                Spinner { width: 34px; height: 34px; indeterminate: true; }
+                                Text { text: "Loading chunks…"; color: #c8ceca; font-size: 12px; font-weight: 700; horizontal-alignment: center; }
+                                Text { text: "Minesport is still responsive — you can change settings or inspect tasks."; color: #8e9691; font-size: 9px; horizontal-alignment: center; }
+                            }
+
+                            if root.viewport-mode == 1: Rectangle {
+                                background: #0f1216;
+                                if root.preview-available: Image { source: root.preview-image; image-fit: contain; width: parent.width; height: parent.height; }
+                                preview-touch := TouchArea {
+                                    enabled: root.preview-available && !root.preview-loading && !root.docs-visible;
+                                    mouse-cursor: crosshair;
+                                    clicked => { root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px); }
+                                }
+                                if root.preview-loading: VerticalLayout {
+                                    alignment: center; spacing: 10px;
+                                    Spinner { width: 34px; height: 34px; indeterminate: true; }
+                                    Text { text: "Rendering 3D preview…"; color: #c8ceca; font-size: 12px; horizontal-alignment: center; }
+                                    Text { text: "Block parsing, hit-map generation and rasterization run outside the Slint event loop."; color: #8e9691; font-size: 9px; horizontal-alignment: center; }
+                                }
+                                if !root.preview-available && !root.preview-loading: VerticalLayout {
+                                    alignment: center; spacing: 10px;
+                                    Text { text: "3D PREVIEW"; color: #aeb5b1; font-size: 18px; font-weight: 700; horizontal-alignment: center; }
+                                    Text { text: "Generate the Rust preview for the current selection."; color: #8e9691; font-size: 10px; horizontal-alignment: center; }
+                                    Button { text: "Generate preview"; clicked => { root.open-3d(); } }
+                                }
+                                if root.preview-available: Rectangle {
+                                    x: 12px; y: 12px; width: 170px; height: 30px; border-radius: 5px; background: #101414e8; border-width: 1px; border-color: #323735;
+                                    Text { text: root.preview-block-count + " blocks"; color: #c3cac6; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                                if root.preview-available: Rectangle {
+                                    x: 12px; y: parent.height - 42px; width: min(520px, parent.width - 24px); height: 30px; border-radius: 5px; background: #101414e8; border-width: 1px; border-color: #323735;
+                                    Text { x: 10px; width: parent.width - 20px; height: parent.height; text: root.preview-focus-label; color: #c3cac6; font-size: 9px; font-family: "monospace"; vertical-alignment: center; overflow: elide; }
+                                }
+                            }
+
+                            if root.docs-visible: Rectangle {
+                                background: #111413f8;
+                                border-width: 1px;
+                                border-color: #343a36;
+                                VerticalLayout {
+                                    spacing: 0px;
+                                    Rectangle {
+                                        height: 48px; background: #191c1a;
+                                        HorizontalLayout {
+                                            padding-left: 14px; padding-right: 10px;
+                                            Text { text: "DOCUMENTATION  ·  Page " + root.doc-page + " of " + root.doc-total + "  ·  " + root.doc-title; color: #eef0ee; font-size: 12px; font-weight: 700; vertical-alignment: center; overflow: elide; }
+                                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                                            Button { text: "GitHub"; clicked => { root.docs-open-github(); } }
+                                            if root.doc-video-available: Button { text: "Video"; clicked => { root.docs-open-video(); } }
+                                            Button { text: "Close"; clicked => { root.docs-visible = false; } }
+                                        }
+                                    }
+                                    ScrollView { Text { x: 20px; y: 18px; width: parent.width - 40px; text: root.doc-content; color: #c1c8c3; font-size: 11px; wrap: word-wrap; } }
+                                    Rectangle {
+                                        height: 52px; background: #181b19; border-width: 1px; border-color: #303532;
+                                        HorizontalLayout {
+                                            padding: 8px; spacing: 7px;
+                                            Button { text: "First"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(0); } }
+                                            Button { text: "Previous"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(-1); } }
+                                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                                            Text { text: "Page " + root.doc-page + " of " + root.doc-total; color: #a0a7a3; font-size: 10px; vertical-alignment: center; }
+                                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                                            Button { text: "Next"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(1); } }
+                                            Button { text: "Last"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(2); } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 34px;
+                            background: #222c23;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Text { text: root.selection-mode == 0 ? "BOX  X " + root.min-x + ".." + root.max-x + "  ·  Y " + root.min-y + ".." + root.max-y + "  ·  Z " + root.min-z + ".." + root.max-z : "BUBBLE  center " + root.center-x + "," + root.center-y + "," + root.center-z + "  ·  radius " + root.radius-x + "," + root.radius-y + "," + root.radius-z; color: #d0d6d2; font-size: 9px; vertical-alignment: center; overflow: elide; }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                                if root.viewport-mode == 0 && root.map-available: Text { text: root.map-cursor-label; color: #c6ccc8; font-size: 9px; font-family: "monospace"; vertical-alignment: center; }
+                                if root.viewport-mode == 1 && root.preview-available: Text { text: root.select-by-model ? "3D PICK · MODEL" : "3D PICK · BLOCK"; color: #9ac7a2; font-size: 9px; font-weight: 700; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 3px; background: #4e8a3a; }
+        }
+
+        if root.task-drawer-visible: Rectangle {
+            x: 18px;
+            y: parent.height - 78px;
+            width: parent.width - 36px;
+            height: 60px;
+            border-radius: 7px;
+            background: #1b211ccf;
+            border-width: 1px;
+            border-color: root.task-active ? #4e8a3a : #56605a;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+                if root.task-active: Spinner { width: 20px; height: 20px; indeterminate: true; }
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    spacing: 3px;
+                    Text { text: root.task-title; color: #e5e9e6; font-size: 10px; font-weight: 700; vertical-alignment: bottom; overflow: elide; }
+                    Text { text: root.task-detail; color: #a4ada7; font-size: 9px; vertical-alignment: top; overflow: elide; }
+                }
+                if root.task-active: Text { text: round(root.task-progress * 100) + "%"; color: #cbd3cd; font-size: 10px; font-family: "monospace"; vertical-alignment: center; }
+            }
+            if root.task-active: Rectangle {
+                x: 0px;
+                y: parent.height - 3px;
+                width: parent.width * max(0.0, min(1.0, root.task-progress));
+                height: 3px;
+                background: #65a84e;
+            }
+        }
+    }
+}

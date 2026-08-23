@@ -131,7 +131,7 @@ fn stage_bridge_sources(root: &Path, out: &Path) {
 fn main() {
     let manifest = manifest_dir();
     let root = repo_root();
-    let ui = manifest.join("ui").join("main.slint");
+    let ui = manifest.join("ui").join("workbench-v3.slint");
     let engine_libs = root.join("engine").join("build").join("libs");
     let bridge_staged = root
         .join("dist")
