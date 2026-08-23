@@ -556,12 +556,13 @@ fn start_runtime_cache_job(
                 Err(error) => format!("FAILED · {}", first_line(error)),
             };
             let ui_weak2 = ui_weak.clone();
+            let ui_completion_state = completion_state.clone();
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
                 ui.set_runtime_cache_busy(false);
                 ui.set_runtime_cache_status(status.into());
                 match &result {
                     Ok(cache_result) => {
-                        if foreground && !has_pending_export(&completion_state) {
+                        if foreground && !has_pending_export(&ui_completion_state) {
                             ui.set_task_active(false);
                             ui.set_task_progress(1.0);
                             ui.set_task_title("RUNTIME REGISTRY READY".into());
@@ -570,7 +571,7 @@ fn start_runtime_cache_job(
                         append_diagnostic(&ui, &format!("Full runtime registry ready: {} · fingerprint {}{}", cache_result.registry_path.display(), fingerprint, if reused { " · reused" } else { "" }));
                     }
                     Err(error) => {
-                        if foreground && !has_pending_export(&completion_state) {
+                        if foreground && !has_pending_export(&ui_completion_state) {
                             ui.set_task_active(false);
                             ui.set_task_title("RUNTIME CACHE FAILED".into());
                             ui.set_task_detail(first_line(error).into());
