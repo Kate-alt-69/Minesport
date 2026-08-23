@@ -7,7 +7,8 @@ import { ProgressIndicator } from "std-widgets.slint";
 //   center mass shrinks while ejecting the same 9 normal-size dots -> orbit.
 // Completion:
 //   dots collapse -> center mass -> an 8x8 monochrome pixel creeper-face mark
-//   assembles from the center -> hold -> fade. Callers own placement.
+//   assembles from the center -> hold -> fade. Callers own placement and may
+//   keep their host alive until `finished()` fires.
 export component MinesportLoader inherits Rectangle {
     in property <bool> active: false;
     in property <string> title: "Working…";
@@ -15,9 +16,10 @@ export component MinesportLoader inherits Rectangle {
     in property <float> progress: 0.0;
     in property <bool> determinate: false;
     in property <bool> compact: false;
+    out property <bool> finishing: false;
+    callback finished();
 
     private property <float> cycle: 0.0;
-    private property <bool> finishing: false;
     private property <bool> was-active: false;
     private property <int> finish-step: 0;
 
@@ -72,6 +74,7 @@ export component MinesportLoader inherits Rectangle {
                 root.finishing = false;
                 root.finish-step = 0;
                 self.running = false;
+                root.finished();
             }
         }
     }
