@@ -12,3 +12,4 @@
 **/target/**
 /desktop/target/
 /desktop/dist/
+/installer/windows/obj/*
