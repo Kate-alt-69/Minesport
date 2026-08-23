@@ -7,24 +7,47 @@ use std::{
 };
 
 slint::slint! {
-    import { Button, ProgressIndicator, ScrollView, Spinner } from "std-widgets.slint";
+    import { Button, ScrollView } from "std-widgets.slint";
+    import { MinesportLoader } from "../ui/minesport-loader.slint";
 
     export component DebugConsoleWindow inherits Window {
         title: "Minesport — Debug Console";
-        preferred-width: 760px;
-        preferred-height: 440px;
-        min-width: 560px;
-        min-height: 320px;
+        preferred-width: 820px;
+        preferred-height: 500px;
+        min-width: 600px;
+        min-height: 340px;
         background: #101313;
 
         in-out property <string> diagnostics: "";
         in-out property <string> log-path: "";
         in-out property <string> engine-status: "STARTING";
         in-out property <bool> engine-ready: false;
+        private property <bool> follow-tail: true;
 
         callback copy-all();
         callback clear-all();
         callback open-log-folder();
+
+        function scroll-to-tail() {
+            console-scroll.viewport-y = min(0px, console-scroll.visible-height - console-scroll.viewport-height);
+        }
+
+        changed diagnostics => {
+            if (root.follow-tail) {
+                tail-timer.running = true;
+            }
+        }
+
+        tail-timer := Timer {
+            interval: 1ms;
+            running: false;
+            triggered() => {
+                self.running = false;
+                if (root.follow-tail) {
+                    root.scroll-to-tail();
+                }
+            }
+        }
 
         VerticalLayout {
             spacing: 0px;
@@ -40,6 +63,14 @@ slint::slint! {
                     Button { text: "Copy all"; clicked => { root.copy-all(); } }
                     Button { text: "Clear"; clicked => { root.clear-all(); } }
                     Button { text: "Open log folder"; clicked => { root.open-log-folder(); } }
+                    Button {
+                        text: root.follow-tail ? "Following latest" : "Follow latest";
+                        enabled: !root.follow-tail;
+                        clicked => {
+                            root.follow-tail = true;
+                            root.scroll-to-tail();
+                        }
+                    }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                     Text {
                         text: root.engine-status;
@@ -67,16 +98,26 @@ slint::slint! {
                     overflow: elide;
                 }
             }
-            ScrollView {
-                Text {
-                    x: 12px;
-                    y: 10px;
-                    width: parent.width - 24px;
-                    text: root.diagnostics;
-                    color: #c7d0ca;
-                    font-size: 12px;
-                    font-family: "monospace";
-                    wrap: word-wrap;
+            console-scroll := ScrollView {
+                vertical-stretch: 1;
+                horizontal-scrollbar-policy: as-needed;
+                vertical-scrollbar-policy: as-needed;
+                scrolled() => {
+                    let bottom = min(0px, self.visible-height - self.viewport-height);
+                    root.follow-tail = self.viewport-y <= bottom + 16px;
+                }
+                VerticalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 10px;
+                    padding-bottom: 14px;
+                    Text {
+                        text: root.diagnostics;
+                        color: #c7d0ca;
+                        font-size: 12px;
+                        font-family: "monospace";
+                        wrap: no-wrap;
+                    }
                 }
             }
         }
@@ -84,10 +125,10 @@ slint::slint! {
 
     export component RuntimeCacheWindow inherits Window {
         title: "Minesport — Preparing runtime models";
-        preferred-width: 520px;
-        preferred-height: 190px;
-        min-width: 460px;
-        min-height: 180px;
+        preferred-width: 540px;
+        preferred-height: 200px;
+        min-width: 480px;
+        min-height: 190px;
         background: #171b18;
 
         in-out property <string> stage: "Preparing Minecraft runtime models…";
@@ -97,42 +138,22 @@ slint::slint! {
         callback cancel();
 
         VerticalLayout {
-            padding: 16px;
-            spacing: 10px;
-            HorizontalLayout {
-                spacing: 10px;
-                Spinner { width: 24px; height: 24px; indeterminate: true; }
-                Text {
-                    horizontal-stretch: 1;
-                    text: root.stage;
-                    color: #edf1ee;
-                    font-size: 14px;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-                Text {
-                    text: round(max(0.0, min(1.0, root.progress)) * 100) + "%";
-                    color: #cdd5cf;
-                    font-size: 12px;
-                    font-family: "monospace";
-                    font-weight: 700;
-                    vertical-alignment: center;
-                }
+            padding: 12px;
+            spacing: 8px;
+            MinesportLoader {
+                horizontal-stretch: 1;
+                active: true;
+                title: root.stage;
+                detail: root.detail;
+                progress: root.progress;
+                determinate: true;
+                compact: true;
             }
-            Text {
-                text: root.detail;
-                color: #aeb7b1;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-            ProgressIndicator { progress: max(0.0, min(1.0, root.progress)); }
-            Rectangle { height: 1px; background: #343a36; }
             HorizontalLayout {
                 spacing: 8px;
                 Text {
                     horizontal-stretch: 1;
-                    text: "Caching Minecraft's registered baked block models. Your real world and mods folder are never modified.";
+                    text: "Caching Minecraft's exact registered baked models. Your real world and mods folder are never modified.";
                     color: #939d97;
                     font-size: 11px;
                     wrap: word-wrap;
@@ -176,6 +197,7 @@ where
 
             let weak = window.as_weak();
             window.on_clear_all(move || {
+                diagnostics::clear_display();
                 if let Some(window) = weak.upgrade() {
                     window.set_diagnostics("".into());
                 }
@@ -221,7 +243,7 @@ pub fn hide_debug_console() {
 }
 
 fn sync_debug_values(window: &DebugConsoleWindow, main: &MainWindow) {
-    window.set_diagnostics(main.get_diagnostics());
+    window.set_diagnostics(diagnostics::display_text().into());
     window.set_engine_status(main.get_engine_status());
     window.set_engine_ready(main.get_engine_ready());
     window.set_log_path(diagnostics::log_path().display().to_string().into());
