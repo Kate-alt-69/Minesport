@@ -4,6 +4,7 @@ mod app;
 mod blender;
 mod bridge_compat;
 mod diagnostics;
+mod heightmap_cache;
 mod ipc;
 mod launcher;
 mod preview;
