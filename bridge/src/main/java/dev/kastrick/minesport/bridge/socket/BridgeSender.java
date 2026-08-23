@@ -1,25 +1,26 @@
 package dev.kastrick.minesport.bridge.socket;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 
 import java.io.*;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
- * Connects to the Minesport engine's local socket and streams
- * bridge data in newline-delimited JSON format.
- *
- * Port is read from env var MINESPORT_BRIDGE_PORT (default 25590).
- * Minesport Go side listens on this port before launching MC.
+ * Connects to Minesport's local registry receiver and streams newline-delimited
+ * JSON. Messages stay line framed for compatibility, but transport is buffered
+ * so a full baked-model dump does not force one kernel/socket flush per block.
  */
 public class BridgeSender implements Closeable {
 
     private static final int DEFAULT_PORT = 25590;
+    private static final int BUFFER_BYTES = 1 << 20;
     private static final Gson GSON = new Gson();
 
     private final Socket socket;
-    private final PrintWriter writer;
+    private final BufferedWriter writer;
 
     public BridgeSender() throws IOException {
         int port = DEFAULT_PORT;
@@ -30,36 +31,46 @@ public class BridgeSender implements Closeable {
 
         socket = new Socket("127.0.0.1", port);
         socket.setSoTimeout(30_000);
-        writer = new PrintWriter(new BufferedWriter(
-            new OutputStreamWriter(socket.getOutputStream())), true);
+        socket.setTcpNoDelay(true);
+        socket.setSendBufferSize(BUFFER_BYTES);
+        writer = new BufferedWriter(
+            new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8),
+            BUFFER_BYTES
+        );
 
         System.out.println("[MinesportBridge] Connected to Minesport on port " + port);
     }
 
-    /** Send any object as a JSON line with a "type" discriminator. */
-    public void send(String type, Object payload) {
-        // Wrap payload with type field
-        var wrapper = new java.util.LinkedHashMap<String, Object>();
-        wrapper.put("type", type);
-
-        // Merge payload fields into wrapper using Gson round-trip
-        var payloadJson = GSON.toJsonTree(payload).getAsJsonObject();
-        payloadJson.entrySet().forEach(e -> wrapper.put(e.getKey(), e.getValue()));
-
-        writer.println(GSON.toJson(wrapper));
+    /** Send any object as one JSON line with a "type" discriminator. */
+    public void send(String type, Object payload) throws IOException {
+        JsonObject object = GSON.toJsonTree(payload).getAsJsonObject();
+        object.addProperty("type", type);
+        writer.write(GSON.toJson(object));
+        writer.newLine();
     }
 
-    /** Send a raw map directly. */
-    public void sendRaw(Map<String, Object> map) {
-        writer.println(GSON.toJson(map));
+    /** Send a raw map directly as one framed JSON line. */
+    public void sendRaw(Map<String, Object> map) throws IOException {
+        writer.write(GSON.toJson(map));
+        writer.newLine();
+    }
+
+    /**
+     * Make the current batch visible to the Rust receiver. Normal writes remain
+     * buffered; callers flush at useful batch/protocol boundaries instead of
+     * after every block.
+     */
+    public void flush() throws IOException {
+        writer.flush();
     }
 
     public boolean isConnected() {
-        return socket != null && socket.isConnected() && !socket.isClosed();
+        return socket.isConnected() && !socket.isClosed();
     }
 
     @Override
     public void close() {
-        try { if (socket != null) socket.close(); } catch (IOException ignored) {}
+        try { writer.flush(); } catch (IOException ignored) {}
+        try { socket.close(); } catch (IOException ignored) {}
     }
 }
