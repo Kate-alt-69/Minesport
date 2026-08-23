@@ -1,5 +1,6 @@
-import { Button, CheckBox, ComboBox, LineEdit, ProgressIndicator, ScrollView, SpinBox, Spinner } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ProgressIndicator, ScrollView, SpinBox } from "std-widgets.slint";
 import { AssetEditor } from "asset-editor.slint";
+import { MinesportLoader } from "minesport-loader.slint";
 
 // Rust/Slint recreation of the final Fyne V3 workbench. Keep this file focused
 // on parity with archive/go-fyne-ui/ui/workbench_v3.go + workbench_v2.go.
@@ -110,6 +111,13 @@ component WorldMapView inherits Rectangle {
     private property <length> pan-start-y: 0px;
     private property <length> pan-offset-x: 0px;
     private property <length> pan-offset-y: 0px;
+    private property <length> pan-latest-x: 0px;
+    private property <length> pan-latest-y: 0px;
+    private property <bool> pan-dirty: false;
+    private property <float> pending-zoom-factor: 1.0;
+    private property <length> zoom-anchor-x: 0px;
+    private property <length> zoom-anchor-y: 0px;
+    private property <bool> zoom-dirty: false;
     private property <int> drag-start-x: 0;
     private property <int> drag-start-z: 0;
     private property <int> hover-x: 0;
@@ -161,8 +169,30 @@ component WorldMapView inherits Rectangle {
             root.offset-y = min(pad-y, max(root.height - h - pad-y, root.offset-y));
         }
     }
+    function apply-pan-frame() {
+        if (!root.panning || !root.pan-dirty) { return; }
+        root.offset-x = root.pan-offset-x + root.pan-latest-x - root.pan-start-x;
+        root.offset-y = root.pan-offset-y + root.pan-latest-y - root.pan-start-y;
+        root.pan-dirty = false;
+        root.clamp-view();
+    }
+    function apply-zoom-frame() {
+        if (!root.zoom-dirty || root.zoom <= 0) { return; }
+        let old = root.zoom;
+        let next = max(0.05, min(64.0, old * root.pending-zoom-factor));
+        let factor = next / old;
+        root.offset-x = root.zoom-anchor-x - (root.zoom-anchor-x - root.offset-x) * factor;
+        root.offset-y = root.zoom-anchor-y - (root.zoom-anchor-y - root.offset-y) * factor;
+        root.zoom = next;
+        root.pending-zoom-factor = 1.0;
+        root.zoom-dirty = false;
+        root.clamp-view();
+    }
     public function fit() {
         if (!root.available || root.source.width <= 0 || root.source.height <= 0 || root.width <= 0px || root.height <= 0px) { return; }
+        root.pan-dirty = false;
+        root.zoom-dirty = false;
+        root.pending-zoom-factor = 1.0;
         let zx = root.width / (root.source.width * 1px);
         let zy = root.height / (root.source.height * 1px);
         root.zoom = max(0.05, min(64.0, min(zx, zy) * 0.94));
@@ -173,6 +203,18 @@ component WorldMapView inherits Rectangle {
 
     changed source => { root.fit(); }
     changed available => { if (root.available) { root.fit(); } }
+
+    pan-frame := Timer {
+        interval: 16ms;
+        running: root.panning;
+        triggered() => { root.apply-pan-frame(); }
+    }
+
+    zoom-frame := Timer {
+        interval: 16ms;
+        running: root.zoom-dirty;
+        triggered() => { root.apply-zoom-frame(); }
+    }
 
     if root.available: Image {
         x: root.offset-x;
@@ -188,22 +230,42 @@ component WorldMapView inherits Rectangle {
         enabled: root.available;
         mouse-cursor: root.panning ? grabbing : crosshair;
         pointer-event(event) => {
+            if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.down) {
+                root.panning = true;
+                root.pan-start-x = self.mouse-x;
+                root.pan-start-y = self.mouse-y;
+                root.pan-latest-x = self.mouse-x;
+                root.pan-latest-y = self.mouse-y;
+                root.pan-offset-x = root.offset-x;
+                root.pan-offset-y = root.offset-y;
+                root.pan-dirty = false;
+                return;
+            }
+
+            if (root.panning) {
+                if (event.kind == PointerEventKind.move) {
+                    root.pan-latest-x = self.mouse-x;
+                    root.pan-latest-y = self.mouse-y;
+                    root.pan-dirty = true;
+                    return;
+                }
+                if (event.button == PointerEventButton.middle && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
+                    root.pan-latest-x = self.mouse-x;
+                    root.pan-latest-y = self.mouse-y;
+                    root.pan-dirty = true;
+                    root.apply-pan-frame();
+                    root.panning = false;
+                    return;
+                }
+                return;
+            }
+
             let wx = root.world-x(self.mouse-x);
             let wz = root.world-z(self.mouse-y);
             root.hover-x = wx;
             root.hover-z = wz;
             root.cursor-label = "X " + wx + "  ·  Z " + wz;
 
-            if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.down) {
-                root.panning = true;
-                root.pan-start-x = self.mouse-x;
-                root.pan-start-y = self.mouse-y;
-                root.pan-offset-x = root.offset-x;
-                root.pan-offset-y = root.offset-y;
-            }
-            if (event.button == PointerEventButton.middle && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
-                root.panning = false;
-            }
             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down && root.selection-mode == 1) {
                 root.center-x = wx;
                 root.center-z = wz;
@@ -217,17 +279,11 @@ component WorldMapView inherits Rectangle {
                     root.min-z = wz; root.max-z = wz;
                 }
             }
-            if (event.kind == PointerEventKind.move) {
-                if (root.panning) {
-                    root.offset-x = root.pan-offset-x + self.mouse-x - root.pan-start-x;
-                    root.offset-y = root.pan-offset-y + self.mouse-y - root.pan-start-y;
-                    root.clamp-view();
-                } else if (root.dragging && root.selection-mode == 0) {
-                    root.min-x = min(root.drag-start-x, wx);
-                    root.max-x = max(root.drag-start-x, wx);
-                    root.min-z = min(root.drag-start-z, wz);
-                    root.max-z = max(root.drag-start-z, wz);
-                }
+            if (event.kind == PointerEventKind.move && root.dragging && root.selection-mode == 0) {
+                root.min-x = min(root.drag-start-x, wx);
+                root.max-x = max(root.drag-start-x, wx);
+                root.min-z = min(root.drag-start-z, wz);
+                root.max-z = max(root.drag-start-z, wz);
             }
             if (event.button == PointerEventButton.left && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
                 if (root.selection-mode == 1) {
@@ -244,13 +300,10 @@ component WorldMapView inherits Rectangle {
         }
         scroll-event(event) => {
             if (!root.available || root.zoom <= 0 || event.delta-y == 0px) { return reject; }
-            let old = root.zoom;
-            let next = event.delta-y > 0px ? min(64.0, old * 1.12) : max(0.05, old / 1.12);
-            let factor = next / old;
-            root.offset-x = self.mouse-x - (self.mouse-x - root.offset-x) * factor;
-            root.offset-y = self.mouse-y - (self.mouse-y - root.offset-y) * factor;
-            root.zoom = next;
-            root.clamp-view();
+            root.zoom-anchor-x = self.mouse-x;
+            root.zoom-anchor-y = self.mouse-y;
+            root.pending-zoom-factor *= event.delta-y > 0px ? 1.12 : (1.0 / 1.12);
+            root.zoom-dirty = true;
             return accept;
         }
     }
@@ -696,22 +749,18 @@ export component MainWindow inherits Window {
                             if root.viewport-mode == 0 && root.map-loading: Rectangle {
                                 x: 0px; y: 0px; width: parent.width; height: parent.height;
                                 background: #0f1216;
-                                Spinner {
-                                    width: 38px; height: 38px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2 - 44px;
-                                    indeterminate: true;
-                                }
-                                Text {
-                                    x: 0px; y: parent.height / 2 + 8px; width: parent.width; height: 24px;
-                                    text: "Loading chunks…"; color: #d2d8d4; font-size: 15px; font-weight: 700;
-                                    horizontal-alignment: center; vertical-alignment: center;
-                                }
-                                Text {
-                                    x: 24px; y: parent.height / 2 + 36px; width: parent.width - 48px; height: 24px;
-                                    text: "The workbench stays interactive while the map is prepared."; color: #9fa8a2; font-size: 12px;
-                                    horizontal-alignment: center; vertical-alignment: center;
-                                }
+                            }
+                            map-loader := MinesportLoader {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: min(460px, parent.width - 48px);
+                                height: 120px;
+                                active: root.map-loading;
+                                visible: root.viewport-mode == 0 && (root.map-loading || self.finishing);
+                                title: root.map-loading ? "Loading chunks…" : "Map ready";
+                                detail: root.map-loading ? "Preparing the Minecraft heightmap without blocking the workbench." : "2D map ready";
+                                determinate: false;
+                                compact: false;
                             }
 
                             if root.viewport-mode == 1: Rectangle {
@@ -762,9 +811,18 @@ export component MainWindow inherits Window {
                                 if root.preview-loading: Rectangle {
                                     x: 0px; y: 0px; width: parent.width; height: parent.height;
                                     background: #0f1216;
-                                    Spinner { width: 38px; height: 38px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2 - 40px; indeterminate: true; }
-                                    Text { x: 0px; y: parent.height / 2 + 8px; width: parent.width; height: 24px; text: "Rendering 3D preview…"; color: #d2d8d4; font-size: 15px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                                    Text { x: 24px; y: parent.height / 2 + 36px; width: parent.width - 48px; height: 24px; text: "Block parsing, voxel-ray indexing and rasterization run outside the Slint event loop."; color: #9fa8a2; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                                preview-loader := MinesportLoader {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    width: min(460px, parent.width - 48px);
+                                    height: 120px;
+                                    active: root.preview-loading;
+                                    visible: root.preview-loading || self.finishing;
+                                    title: root.preview-loading ? "Rendering 3D preview…" : "3D preview ready";
+                                    detail: root.preview-loading ? "Block parsing, voxel-ray indexing and rasterization run outside the Slint event loop." : "Preview ready";
+                                    determinate: false;
+                                    compact: false;
                                 }
                                 if !root.preview-available && !root.preview-loading: Rectangle {
                                     x: 0px; y: 0px; width: parent.width; height: parent.height;
@@ -785,10 +843,19 @@ export component MainWindow inherits Window {
                             if root.task-active && root.task-title == "EXPORT": Rectangle {
                                 x: 0px; y: 0px; width: parent.width; height: parent.height;
                                 background: #0d1012d8;
-                                Spinner { width: 42px; height: 42px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2 - 52px; indeterminate: true; }
-                                Text { x: 0px; y: parent.height / 2 + 4px; width: parent.width; height: 28px; text: "Exporting world…"; color: #e2e7e3; font-size: 16px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                                Text { x: 40px; y: parent.height / 2 + 36px; width: parent.width - 80px; height: 26px; text: root.task-detail; color: #aab3ad; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
-                                Text { x: 0px; y: parent.height / 2 + 68px; width: parent.width; height: 22px; text: round(root.task-progress * 100) + "%"; color: #9bc19f; font-size: 13px; font-family: "monospace"; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            export-loader := MinesportLoader {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: min(500px, parent.width - 64px);
+                                height: 120px;
+                                active: root.task-active && root.task-title == "EXPORT";
+                                visible: (root.task-active && root.task-title == "EXPORT") || self.finishing;
+                                title: root.task-active && root.task-title == "EXPORT" ? "Exporting world…" : "Export complete";
+                                detail: root.task-detail;
+                                progress: root.task-progress;
+                                determinate: true;
+                                compact: false;
                             }
 
                             if root.docs-visible: Rectangle {
@@ -846,35 +913,18 @@ export component MainWindow inherits Window {
             Rectangle { height: 3px; background: #4e8a3a; }
         }
 
-        if root.task-active: Rectangle {
+        task-loader := MinesportLoader {
             width: min(520px, parent.width - 36px);
-            height: 64px;
+            height: 82px;
             x: parent.width - self.width - 18px;
             y: parent.height - self.height - 18px;
-            border-radius: 7px;
-            background: #1b211cf2;
-            border-width: 1px;
-            border-color: #4e8a3a;
-            HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                spacing: 10px;
-                Spinner { width: 22px; height: 22px; indeterminate: true; }
-                VerticalLayout {
-                    vertical-stretch: 1;
-                    spacing: 3px;
-                    Text { text: root.task-title; color: #edf1ee; font-size: 12px; font-weight: 700; vertical-alignment: bottom; overflow: elide; }
-                    Text { text: root.task-detail; color: #b6beb9; font-size: 11px; vertical-alignment: top; overflow: elide; }
-                }
-                Text { text: round(root.task-progress * 100) + "%"; color: #d5ddd7; font-size: 12px; font-family: "monospace"; font-weight: 700; vertical-alignment: center; }
-            }
-            Rectangle {
-                x: 0px;
-                y: parent.height - 3px;
-                width: parent.width * max(0.0, min(1.0, root.task-progress));
-                height: 3px;
-                background: #65a84e;
-            }
+            active: root.task-active && root.task-title != "EXPORT";
+            visible: (root.task-active && root.task-title != "EXPORT") || self.finishing;
+            title: root.task-title;
+            detail: root.task-detail;
+            progress: root.task-progress;
+            determinate: true;
+            compact: true;
         }
 
         if root.settings-visible: Rectangle {
