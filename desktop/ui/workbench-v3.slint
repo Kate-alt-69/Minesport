@@ -4,7 +4,7 @@ import { AssetEditor } from "asset-editor.slint";
 // Rust/Slint recreation of the final Fyne V3 workbench. Keep this file focused
 // on parity with archive/go-fyne-ui/ui/workbench_v3.go + workbench_v2.go.
 component RailButton inherits Rectangle {
-    in property <string> glyph;
+    in property <image> icon;
     in property <string> tip;
     in property <bool> active;
     callback clicked();
@@ -14,13 +14,15 @@ component RailButton inherits Rectangle {
     border-width: active ? 2px : 0px;
     border-color: #4e8a3a;
 
-    Text {
-        text: root.glyph;
-        color: root.active ? #f2f5f1 : #939d98;
-        font-size: 18px;
-        font-weight: root.active ? 700 : 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    Image {
+        x: 12px;
+        y: 12px;
+        width: 24px;
+        height: 24px;
+        source: root.icon;
+        image-fit: contain;
+        colorize: root.active ? #f2f5f1 : #939d98;
+        accessible-role: none;
     }
     hit := TouchArea {
         mouse-cursor: pointer;
@@ -459,12 +461,12 @@ export component MainWindow inherits Window {
                             background: transparent;
                             Text { text: "M"; color: #dce2dd; font-size: 16px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                         }
-                        RailButton { glyph: "▣"; tip: "World"; active: root.active-activity == 0; clicked => { root.active-activity = 0; } }
-                        RailButton { glyph: "⇩"; tip: "Export"; active: root.active-activity == 1; clicked => { root.active-activity = 1; } }
-                        RailButton { glyph: "◆"; tip: "Blender"; active: root.active-activity == 2; clicked => { root.active-activity = 2; } }
-                        RailButton { glyph: "◷"; tip: "Tasks"; active: root.active-activity == 3; clicked => { root.active-activity = 3; } }
+                        RailButton { icon: @image-url("../assets/fyne-theme-icons/folder-open.svg"); tip: "World"; active: root.active-activity == 0; clicked => { root.active-activity = 0; } }
+                        RailButton { icon: @image-url("../assets/fyne-theme-icons/download.svg"); tip: "Export"; active: root.active-activity == 1; clicked => { root.active-activity = 1; } }
+                        RailButton { icon: @image-url("../assets/fyne-theme-icons/media-video.svg"); tip: "Blender"; active: root.active-activity == 2; clicked => { root.active-activity = 2; } }
+                        RailButton { icon: @image-url("../assets/fyne-theme-icons/history.svg"); tip: "Tasks"; active: root.active-activity == 3; clicked => { root.active-activity = 3; } }
                         Rectangle { vertical-stretch: 1; background: transparent; }
-                        RailButton { glyph: "⚙"; tip: "Settings"; active: root.active-activity == 4; clicked => { root.active-activity = 4; } }
+                        RailButton { icon: @image-url("../assets/fyne-theme-icons/settings.svg"); tip: "Settings"; active: root.active-activity == 4; clicked => { root.active-activity = 4; } }
                     }
                 }
 
@@ -641,8 +643,8 @@ export component MainWindow inherits Window {
                                     allow-file: true;
                                     add-file => { root.add-resource-pack(); }
                                     add-folder => { root.add-resource-pack-folder(); }
-                                    move-selected(delta) => { root.move-resource-pack(delta); }
-                                    remove-selected => { root.remove-resource-pack(); }
+                                    move-selected(delta) => { root.move_resource_pack(delta); }
+                                    remove_selected => { root.remove_resource_pack(); }
                                 }
                                 Text { text: root.data-pack-summary; color: #949d98; font-size: 10px; wrap: word-wrap; }
                                 AssetEditor {
@@ -652,9 +654,9 @@ export component MainWindow inherits Window {
                                     selected-index <=> root.data-pack-selected;
                                     allow-folder: true;
                                     allow-file: false;
-                                    add-folder => { root.add-data-pack(); }
-                                    move-selected(delta) => { root.move-data-pack(delta); }
-                                    remove-selected => { root.remove-data-pack(); }
+                                    add-folder => { root.add_data_pack(); }
+                                    move_selected(delta) => { root.move_data_pack(delta); }
+                                    remove_selected => { root.remove_data_pack(); }
                                 }
                                 SectionTitle { label: "ADVANCED EXPORT TOOLS"; }
                                 Button { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.run-preflight(); } }
