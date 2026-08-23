@@ -1,7 +1,10 @@
 use crate::diagnostics;
 use anyhow::{Context, Result, anyhow};
 use slint::ComponentHandle;
-use std::{env, process::Command, thread, time::Duration};
+use std::{env, process::Command};
+
+#[cfg(windows)]
+use std::{thread, time::Duration};
 
 const REPORTER_ARG: &str = "--error-reporter";
 
@@ -209,10 +212,9 @@ fn format_exit_detail(exit_code: u32, parent_pid: u32) -> String {
 }
 
 fn open_logs() -> Result<()> {
-    let log = diagnostics::log_path();
-    let folder = diagnostics::folder();
     #[cfg(windows)]
     {
+        let log = diagnostics::log_path();
         Command::new("explorer.exe")
             .arg(format!("/select,{}", log.display()))
             .spawn()
@@ -221,12 +223,18 @@ fn open_logs() -> Result<()> {
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").arg(folder).spawn().context("open Minesport diagnostics folder")?;
+        Command::new("open")
+            .arg(diagnostics::folder())
+            .spawn()
+            .context("open Minesport diagnostics folder")?;
         return Ok(());
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Command::new("xdg-open").arg(folder).spawn().context("open Minesport diagnostics folder")?;
+        Command::new("xdg-open")
+            .arg(diagnostics::folder())
+            .spawn()
+            .context("open Minesport diagnostics folder")?;
         return Ok(());
     }
 }
@@ -302,9 +310,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normal_desktop_launch_is_the_only_supervised_shape() {
-        // The pure formatting helpers keep reporter behavior testable without
-        // needing to spawn an actual second GUI process in unit tests.
+    fn exit_headline_prefers_plain_codes_and_hex_crash_statuses() {
         assert!(format_exit_headline(1).contains("error code 1"));
         assert!(format_exit_headline(0xC0000005).contains("0xC0000005"));
     }
