@@ -20,6 +20,10 @@ const HORIZONTAL_CAMERA_SCALE: f32 = 1.414_213_5;
 const VERTICAL_CAMERA_SCALE: f32 = 1.224_744_9;
 const CAMERA_LOOK_SENSITIVITY: f32 = 0.0025;
 const MAX_CAMERA_PITCH: f32 = PI / 2.0 - 0.01;
+const HIGHLIGHT_INFLATE: f32 = 0.03;
+const HIGHLIGHT_COLOR: [u8; 4] = [64, 255, 115, 153];
+
+type HighlightBounds = Option<([i32; 3], [i32; 3])>;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Vec3 {
@@ -77,9 +81,6 @@ struct PreviewCamera {
 }
 
 impl PreviewCamera {
-    /// The existing Slint preview looks from +X/+Y/+Z. Express that view as a
-    /// real camera basis so the renderer can grow into the retired Fyne
-    /// viewer's orbit/free-camera controls without another mesh rewrite.
     fn isometric_compat() -> Self {
         Self {
             yaw: -FRAC_PI_4,
@@ -98,10 +99,6 @@ impl PreviewCamera {
     }
 
     fn pan(mut self, dx: f32, dy: f32) -> Self {
-        // The retired perspective viewer moved the camera in its right/up
-        // plane. The software renderer is orthographic for now, so equivalent
-        // screen-space pan preserves the same drag direction without a costly
-        // fake perspective translation.
         self.pan_x += dx;
         self.pan_y += dy;
         self
@@ -150,8 +147,6 @@ impl PreviewCamera {
         ProjectedVertex {
             x: screen_x + self.pan_x + right.dot(delta) * horizontal_scale * self.zoom,
             y: screen_y + self.pan_y - up.dot(delta) * vertical_scale * self.zoom,
-            // The camera looks along `forward`. Smaller view depth is closer
-            // to the orthographic camera and wins the software depth test.
             depth: forward.dot(delta),
         }
     }
@@ -169,9 +164,6 @@ struct PreviewView {
 }
 
 impl PreviewView {
-    /// Reverse the exact orthographic projection used by `PreviewCamera::project`
-    /// into a world-space ray. The origin is placed just in front of the scene's
-    /// camera-depth bounds and then the retired viewer's DDA walks forward.
     fn ray_for_pixel(self, camera: PreviewCamera, x: u32, y: u32) -> ([f32; 3], [f32; 3], f32) {
         let zoom = camera.zoom.max(0.000_001);
         let horizontal = (self.horizontal_scale * zoom).max(0.000_001);
@@ -211,9 +203,6 @@ struct CubeFace {
     texture: FaceTexture,
 }
 
-// Byte-for-byte geometry semantics from the retired Go viewer's cubeFaces
-// table. Keeping one canonical face table also fixes the old software
-// preview limitation where only +X/+Y/+Z were structurally representable.
 const CUBE_FACES: [CubeFace; 6] = [
     CubeFace {
         corners: [[1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]],
@@ -284,6 +273,7 @@ struct PreviewScene {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub struct PreviewPick {
     pub x: i32,
     pub y: i32,
@@ -301,6 +291,7 @@ pub struct PreviewPickMap {
     scene: Arc<PreviewScene>,
     camera: PreviewCamera,
     view: PreviewView,
+    highlight: HighlightBounds,
 }
 
 impl PreviewPickMap {
@@ -323,9 +314,6 @@ impl PreviewPickMap {
             return Some(PreviewPick { x: block_x, y: block_y, z: block_z, id });
         }
 
-        // Keep the raster hit map as a compatibility fallback while the Rust
-        // viewer remains orthographic. DDA is authoritative when it intersects
-        // the same rendered voxel set used to draw this frame.
         let pixel = (y * self.width + x) as usize;
         let hit = *self.indices.get(pixel)?;
         if hit < 0 {
@@ -334,6 +322,7 @@ impl PreviewPickMap {
         self.hits.get(hit as usize).cloned()
     }
 
+    #[allow(dead_code)]
     pub fn coordinates_for_id(&self, id: &str) -> Vec<[i32; 3]> {
         self.scene.by_id.get(id).cloned().unwrap_or_default()
     }
@@ -342,19 +331,13 @@ impl PreviewPickMap {
         let low = [min[0].min(max[0]), min[1].min(max[1]), min[2].min(max[2])];
         let high = [min[0].max(max[0]), min[1].max(max[1]), min[2].max(max[2])];
         let mut result: Vec<[i32; 3]> = self.scene.occupied.iter().copied().filter(|position| {
-            position[0] >= low[0] && position[0] <= high[0]
-                && position[1] >= low[1] && position[1] <= high[1]
-                && position[2] >= low[2] && position[2] <= high[2]
+            inside_box(*position, low, high)
         }).collect();
         result.sort_unstable();
         result
     }
 
-    /// Fyne parity: select face-connected solid blocks without crossing air.
-    /// Block IDs are intentionally ignored, so a touching glass block and
-    /// stone block are part of the same joined structure just like the old
-    /// native viewer's FloodFill selection. The retired Go viewer treated a
-    /// power below 1 as 1, so a zero value still selects the starting block.
+    #[allow(dead_code)]
     pub fn joined_blocks(&self, start: [i32; 3], max_blocks: usize) -> Vec<[i32; 3]> {
         if !self.scene.occupied.contains(&start) {
             return Vec::new();
@@ -388,27 +371,34 @@ impl PreviewPickMap {
         (self.width, self.height)
     }
 
-    /// Re-render the retained Rust scene after an MMB orbit gesture. This is
-    /// intentionally independent from Java/IPC; the source JSON may already
-    /// have been deleted by the time this runs.
+    pub fn camera_forward(&self) -> [f32; 3] {
+        self.camera.forward().as_array()
+    }
+
+    pub fn highlight_box(&self, min: [i32; 3], max: [i32; 3]) -> Result<RenderedPreview> {
+        let low = [min[0].min(max[0]), min[1].min(max[1]), min[2].min(max[2])];
+        let high = [min[0].max(max[0]), min[1].max(max[1]), min[2].max(max[2])];
+        render_scene(self.scene.clone(), self.camera, Some((low, high)))
+    }
+
+    pub fn clear_highlight(&self) -> Result<RenderedPreview> {
+        render_scene(self.scene.clone(), self.camera, None)
+    }
+
     pub fn orbit(&self, dx: f32, dy: f32) -> Result<RenderedPreview> {
-        render_scene(self.scene.clone(), self.camera.orbit(dx, dy))
+        render_scene(self.scene.clone(), self.camera.orbit(dx, dy), self.highlight)
     }
 
-    /// Shift+MMB parity for the current orthographic software renderer.
     pub fn pan(&self, dx: f32, dy: f32) -> Result<RenderedPreview> {
-        render_scene(self.scene.clone(), self.camera.pan(dx, dy))
+        render_scene(self.scene.clone(), self.camera.pan(dx, dy), self.highlight)
     }
 
-    /// Wheel dolly parity. Until the GPU perspective path replaces the
-    /// software fallback, dolly maps to orthographic zoom with the same wheel
-    /// direction as the retired viewer.
     pub fn dolly(&self, wheel_steps: f32) -> Result<RenderedPreview> {
-        render_scene(self.scene.clone(), self.camera.dolly(wheel_steps))
+        render_scene(self.scene.clone(), self.camera.dolly(wheel_steps), self.highlight)
     }
 
     pub fn fit(&self) -> Result<RenderedPreview> {
-        render_scene(self.scene.clone(), PreviewCamera::isometric_compat())
+        render_scene(self.scene.clone(), PreviewCamera::isometric_compat(), self.highlight)
     }
 }
 
@@ -461,10 +451,10 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
         occupied,
         texture_cache: Mutex::new(HashMap::new()),
     });
-    render_scene(scene, PreviewCamera::isometric_compat())
+    render_scene(scene, PreviewCamera::isometric_compat(), None)
 }
 
-fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<RenderedPreview> {
+fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera, highlight: HighlightBounds) -> Result<RenderedPreview> {
     let block_count = scene.blocks.len();
     if block_count == 0 {
         bail!("No solid blocks were found in the current selection");
@@ -477,8 +467,6 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<Rende
         render_blocks = render_blocks.into_iter().step_by(stride).collect();
     }
 
-    // Face culling and DDA picking must use the blocks that are actually drawn.
-    // Keep the full scene occupancy separately for exact box/flood selections.
     let rendered_occupied = Arc::new(render_blocks
         .iter()
         .map(|block| [block.x, block.y, block.z])
@@ -569,8 +557,6 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<Rende
             if rendered_occupied.contains(&neighbor) {
                 continue;
             }
-            // The outward normal must face opposite the camera's look vector.
-            // This is the software equivalent of GPU back-face rejection.
             if face.normal.dot(camera_forward) >= -1.0e-6 {
                 continue;
             }
@@ -608,6 +594,35 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<Rende
     }
 
     drop(texture_cache);
+
+    if let Some((highlight_min, highlight_max)) = highlight {
+        for block in &render_blocks {
+            if !inside_box([block.x, block.y, block.z], highlight_min, highlight_max) {
+                continue;
+            }
+            // The retired GL viewer deliberately did not cull highlight faces.
+            // Each face was pushed 0.03 blocks outward, then alpha blended after
+            // the textured mesh with depth testing still enabled.
+            for face in CUBE_FACES {
+                let projected = face.corners.map(|corner| {
+                    camera.project(
+                        Vec3 {
+                            x: block.x as f32 + corner[0] + face.normal.x * HIGHLIGHT_INFLATE,
+                            y: block.y as f32 + corner[1] + face.normal.y * HIGHLIGHT_INFLATE,
+                            z: block.z as f32 + corner[2] + face.normal.z * HIGHLIGHT_INFLATE,
+                        },
+                        anchor,
+                        screen_x,
+                        screen_y,
+                        horizontal_scale,
+                        vertical_scale,
+                    )
+                });
+                fill_solid_quad(&mut pixels, &mut depth, projected, HIGHLIGHT_COLOR);
+            }
+        }
+    }
+
     Ok(RenderedPreview {
         width: WIDTH,
         height: HEIGHT,
@@ -623,8 +638,15 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera) -> Result<Rende
             scene,
             camera,
             view,
+            highlight,
         },
     })
+}
+
+fn inside_box(position: [i32; 3], min: [i32; 3], max: [i32; 3]) -> bool {
+    position[0] >= min[0] && position[0] <= max[0]
+        && position[1] >= min[1] && position[1] <= max[1]
+        && position[2] >= min[2] && position[2] <= max[2]
 }
 
 fn scene_depth_span(
@@ -744,8 +766,6 @@ fn shade(color: [u8; 4], factor: f32) -> [u8; 4] {
     ]
 }
 
-// Matches the retired GLSL fragment shader exactly for axis-aligned voxel
-// normals: side faces 0.65, top 1.0, bottom 0.5.
 fn face_brightness(normal: Vec3) -> f32 {
     if normal.y < -0.5 {
         0.5
@@ -834,6 +854,67 @@ fn fill_textured_triangle(
     }
 }
 
+fn fill_solid_quad(
+    pixels: &mut [u8],
+    depth: &mut [f32],
+    vertices: [ProjectedVertex; 4],
+    color: [u8; 4],
+) {
+    fill_solid_triangle(pixels, depth, [vertices[0], vertices[1], vertices[2]], color);
+    fill_solid_triangle(pixels, depth, [vertices[0], vertices[2], vertices[3]], color);
+}
+
+fn fill_solid_triangle(
+    pixels: &mut [u8],
+    depth: &mut [f32],
+    vertices: [ProjectedVertex; 3],
+    color: [u8; 4],
+) {
+    let min_x = vertices.iter().map(|vertex| vertex.x.floor() as i32).min().unwrap_or(0).clamp(0, WIDTH as i32 - 1);
+    let max_x = vertices.iter().map(|vertex| vertex.x.ceil() as i32).max().unwrap_or(0).clamp(0, WIDTH as i32 - 1);
+    let min_y = vertices.iter().map(|vertex| vertex.y.floor() as i32).min().unwrap_or(0).clamp(0, HEIGHT as i32 - 1);
+    let max_y = vertices.iter().map(|vertex| vertex.y.ceil() as i32).max().unwrap_or(0).clamp(0, HEIGHT as i32 - 1);
+    let area = edge(vertices[0], vertices[1], vertices[2]);
+    if area.abs() < 1.0e-6 { return; }
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let point = ProjectedVertex { x: x as f32 + 0.5, y: y as f32 + 0.5, depth: 0.0 };
+            let w0 = edge(vertices[1], vertices[2], point);
+            let w1 = edge(vertices[2], vertices[0], point);
+            let w2 = edge(vertices[0], vertices[1], point);
+            let inside = if area > 0.0 {
+                w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
+            } else {
+                w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
+            };
+            if !inside { continue; }
+
+            let b0 = w0 / area;
+            let b1 = w1 / area;
+            let b2 = w2 / area;
+            let fragment_depth = vertices[0].depth * b0 + vertices[1].depth * b1 + vertices[2].depth * b2;
+            let pixel = (y as u32 * WIDTH + x as u32) as usize;
+            if fragment_depth >= depth[pixel] { continue; }
+
+            let rgba = pixel * 4;
+            blend_over(&mut pixels[rgba..rgba + 4], color);
+            depth[pixel] = fragment_depth;
+        }
+    }
+}
+
+fn blend_over(destination: &mut [u8], source: [u8; 4]) {
+    let alpha = source[3] as f32 / 255.0;
+    let inverse = 1.0 - alpha;
+    for channel in 0..3 {
+        destination[channel] = (source[channel] as f32 * alpha + destination[channel] as f32 * inverse)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+    }
+    destination[3] = 255;
+}
+
 fn edge(a: ProjectedVertex, b: ProjectedVertex, p: ProjectedVertex) -> f32 {
     (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)
 }
@@ -846,6 +927,16 @@ mod tests {
     #[test]
     fn shading_clamps() {
         assert_eq!(shade([250, 10, 20, 255], 2.0), [255, 20, 40, 255]);
+    }
+
+    #[test]
+    fn fyne_highlight_constants_match_retired_gl_viewer() {
+        assert_eq!(HIGHLIGHT_COLOR, [64, 255, 115, 153]);
+        assert!((HIGHLIGHT_INFLATE - 0.03).abs() < f32::EPSILON);
+        let mut pixel = [100, 100, 100, 255];
+        blend_over(&mut pixel, HIGHLIGHT_COLOR);
+        assert!(pixel[1] > pixel[0]);
+        assert!(pixel[1] > pixel[2]);
     }
 
     #[test]
@@ -916,7 +1007,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_preview_can_pick_group_flood_box_and_rerender_without_source_file() {
+    fn rendered_preview_can_pick_group_flood_box_highlight_and_rerender_without_source_file() {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir().join(format!("minesport-preview-{}-{stamp}.json", std::process::id()));
         fs::write(
@@ -942,8 +1033,14 @@ mod tests {
         let picked = rendered.pick_map.indices.iter().find(|value| **value >= 0).copied().unwrap();
         assert!(rendered.pick_map.hits.get(picked as usize).is_some());
 
+        let highlighted = rendered.pick_map.highlight_box([0, 64, 0], [1, 65, 0]).unwrap();
+        assert_eq!(highlighted.pick_map.highlight, Some(([0, 64, 0], [1, 65, 0])));
+        let cleared = highlighted.pick_map.clear_highlight().unwrap();
+        assert_eq!(cleared.pick_map.highlight, None);
+
         fs::remove_file(&path).unwrap();
-        let orbited = rendered.pick_map.orbit(24.0, -10.0).unwrap();
+        let orbited = highlighted.pick_map.orbit(24.0, -10.0).unwrap();
+        assert!(orbited.pick_map.highlight.is_some());
         let panned = orbited.pick_map.pan(12.0, 8.0).unwrap();
         let zoomed = panned.pick_map.dolly(1.0).unwrap();
         let fitted = zoomed.pick_map.fit().unwrap();
