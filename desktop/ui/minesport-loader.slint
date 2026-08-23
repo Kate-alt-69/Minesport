@@ -4,11 +4,10 @@ import { ProgressIndicator } from "std-widgets.slint";
 //
 // Working loop:
 //   9 constant-size dots orbit -> collapse -> one large center mass -> the
-//   center mass shrinks while ejecting the 9 normal-size dots -> orbit again.
+//   center mass shrinks while ejecting the same 9 normal-size dots -> orbit.
 // Completion:
-//   dots collapse once more -> snap into a 3x3 Minecraft-style grass-block
-//   pixel mark -> hold -> fade. Callers only toggle `active`; the component
-//   keeps itself alive long enough to play the completion sequence.
+//   dots collapse -> center mass -> an 8x8 monochrome pixel creeper-face mark
+//   assembles from the center -> hold -> fade. Callers own placement.
 export component MinesportLoader inherits Rectangle {
     in property <bool> active: false;
     in property <string> title: "Working…";
@@ -22,10 +21,10 @@ export component MinesportLoader inherits Rectangle {
     private property <bool> was-active: false;
     private property <int> finish-step: 0;
 
-    min-width: root.compact ? 230px : 320px;
-    preferred-width: root.compact ? 320px : 440px;
-    min-height: root.compact ? 68px : 98px;
-    preferred-height: root.compact ? 72px : 112px;
+    min-width: root.compact ? 240px : 340px;
+    preferred-width: root.compact ? 330px : 460px;
+    min-height: root.compact ? 76px : 106px;
+    preferred-height: root.compact ? 82px : 120px;
     visible: root.active || root.finishing;
     opacity: root.finish-step >= 4 ? 0.0 : 1.0;
     background: #141817f2;
@@ -80,54 +79,80 @@ export component MinesportLoader inherits Rectangle {
     function working-radius() -> length {
         let p = root.cycle;
         if (p < 0.54) {
-            return 17px;
+            return 21px;
         }
         if (p < 0.70) {
             let t = (p - 0.54) / 0.16;
-            return 17px * (1.0 - t);
+            return 21px * (1.0 - t);
         }
         let t = (p - 0.70) / 0.30;
-        return 17px * t;
+        return 21px * t;
     }
 
     function center-mass-size() -> length {
+        if (root.finishing && root.finish-step == 1) {
+            return 30px;
+        }
         if (!root.active || root.cycle < 0.70) {
             return 0px;
         }
         let t = (root.cycle - 0.70) / 0.30;
-        return 27px * (1.0 - t);
+        return 30px * (1.0 - t);
     }
 
     function dot-x(index: int) -> length {
         if (root.finishing) {
-            if (root.finish-step <= 1) { return 21px; }
-            return index == 0 || index == 3 || index == 6 ? 13px
-                : index == 1 || index == 4 || index == 7 ? 21px
-                : 29px;
+            return 29px;
         }
         let angle = index * 40deg + root.cycle * 600deg;
-        return 21px + cos(angle) * root.working-radius();
+        return 29px + cos(angle) * root.working-radius();
     }
 
     function dot-y(index: int) -> length {
         if (root.finishing) {
-            if (root.finish-step <= 1) { return 21px; }
-            return index <= 2 ? 13px : index <= 5 ? 21px : 29px;
+            return 29px;
         }
         let angle = index * 40deg + root.cycle * 600deg;
-        return 21px + sin(angle) * root.working-radius();
+        return 29px + sin(angle) * root.working-radius();
     }
 
-    function pixel-color(index: int) -> color {
-        return index == 0 ? #6fb24a
-            : index == 1 ? #83c65b
-            : index == 2 ? #5b9b3b
-            : index == 3 ? #80583a
-            : index == 4 ? #936848
-            : index == 5 ? #704a32
-            : index == 6 ? #6b4b37
-            : index == 7 ? #5d4232
-            : #7e5b41;
+    function pixel-column(index: int) -> int {
+        return mod(index, 8);
+    }
+
+    function pixel-row(index: int) -> int {
+        return floor(index / 8);
+    }
+
+    function face-pixel-black(index: int) -> bool {
+        let row = root.pixel-row(index);
+        let col = root.pixel-column(index);
+        if ((row == 1 || row == 2) && ((col >= 1 && col <= 2) || (col >= 5 && col <= 6))) {
+            return true;
+        }
+        if (row == 3 && (col == 3 || col == 4)) {
+            return true;
+        }
+        if ((row == 4 || row == 5) && col >= 2 && col <= 5) {
+            return true;
+        }
+        if (row == 6 && (col == 2 || col == 5)) {
+            return true;
+        }
+        if (row == 7 && ((col >= 1 && col <= 2) || (col >= 5 && col <= 6))) {
+            return true;
+        }
+        return false;
+    }
+
+    function pixel-x(index: int) -> length {
+        if (root.finish-step <= 1) { return 30px; }
+        return 6px + root.pixel-column(index) * 6px;
+    }
+
+    function pixel-y(index: int) -> length {
+        if (root.finish-step <= 1) { return 30px; }
+        return 6px + root.pixel-row(index) * 6px;
     }
 
     HorizontalLayout {
@@ -136,17 +161,17 @@ export component MinesportLoader inherits Rectangle {
         cross-axis-alignment: center;
 
         indicator := Rectangle {
-            width: 48px;
-            height: 48px;
+            width: 64px;
+            height: 64px;
             background: transparent;
 
             center-mass := Rectangle {
                 width: root.center-mass-size();
                 height: self.width;
-                x: 24px - self.width / 2;
-                y: 24px - self.height / 2;
+                x: 32px - self.width / 2;
+                y: 32px - self.height / 2;
                 border-radius: self.width / 2;
-                background: #69c4ff;
+                background: #f2f4f3;
                 visible: self.width > 0px;
             }
 
@@ -155,14 +180,32 @@ export component MinesportLoader inherits Rectangle {
                 y: root.dot-y(index);
                 width: 6px;
                 height: 6px;
-                border-radius: root.finishing && root.finish-step >= 2 ? 0px : 3px;
-                background: root.finishing && root.finish-step >= 2
-                    ? root.pixel-color(index)
-                    : #69c4ff;
+                border-radius: 3px;
+                background: #f2f4f3;
+                visible: !root.finishing || root.finish-step <= 1;
 
                 animate x, y {
-                    duration: 150ms;
+                    duration: 145ms;
                     easing: ease-in-out;
+                    enabled: root.finishing;
+                }
+            }
+
+            // Every square begins at the collapsed center and snaps into the
+            // larger monochrome creeper face. A 1px gap keeps the pixel-grid
+            // character visible instead of looking like a generic flat icon.
+            for pixel[index] in 64: Rectangle {
+                x: root.pixel-x(index);
+                y: root.pixel-y(index);
+                width: 5px;
+                height: 5px;
+                border-radius: 0px;
+                background: root.face-pixel-black(index) ? #080a09 : #f3f5f4;
+                visible: root.finishing && root.finish-step >= 2 && root.finish-step < 5;
+
+                animate x, y {
+                    duration: 170ms;
+                    easing: ease-out;
                     enabled: root.finishing;
                 }
             }
