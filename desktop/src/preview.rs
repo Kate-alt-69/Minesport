@@ -156,6 +156,15 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
         blocks = blocks.into_iter().step_by(stride).collect();
     }
 
+    // Face culling must use the blocks that will actually be rasterized. If
+    // the >60k safety sampler drops a neighbor, treating that absent neighbor
+    // as an occluder punches a hole into the visible sampled preview. Keep the
+    // full `occupied` set above for Joined Blocks / exact-selection semantics.
+    let rendered_occupied: HashSet<[i32; 3]> = blocks
+        .iter()
+        .map(|block| [block.x, block.y, block.z])
+        .collect();
+
     let min_x = blocks.iter().map(|block| block.x).min().unwrap_or(0);
     let max_x = blocks.iter().map(|block| block.x).max().unwrap_or(0);
     let min_y = blocks.iter().map(|block| block.y).min().unwrap_or(0);
@@ -223,8 +232,8 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
 
         // The fixed isometric camera looks from +X/+Y/+Z, so only those three
         // outward faces can be visible. Match the old OpenGL mesh's occupancy
-        // culling so shared/internal faces are never rasterized.
-        if !occupied.contains(&[block.x, block.y, block.z + 1]) {
+        // culling, but only against the subset that is actually rasterized.
+        if !rendered_occupied.contains(&[block.x, block.y, block.z + 1]) {
             fill_textured_quad(
                 &mut pixels,
                 &mut hit_indices,
@@ -237,7 +246,7 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
                 0.65,
             );
         }
-        if !occupied.contains(&[block.x + 1, block.y, block.z]) {
+        if !rendered_occupied.contains(&[block.x + 1, block.y, block.z]) {
             fill_textured_quad(
                 &mut pixels,
                 &mut hit_indices,
@@ -250,7 +259,7 @@ pub fn render_file(path: &Path) -> Result<RenderedPreview> {
                 0.65,
             );
         }
-        if !occupied.contains(&[block.x, block.y + 1, block.z]) {
+        if !rendered_occupied.contains(&[block.x, block.y + 1, block.z]) {
             fill_textured_quad(
                 &mut pixels,
                 &mut hit_indices,
