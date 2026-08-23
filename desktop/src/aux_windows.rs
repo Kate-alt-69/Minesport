@@ -233,6 +233,12 @@ where
 {
     RUNTIME_WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();
+        // Fingerprint verification reports 1% before the cache-hit check. Do
+        // not hide the workbench or flash a second window unless the job has
+        // actually crossed into cache-miss preparation (4%+).
+        if slot.is_none() && progress < 0.04 {
+            return;
+        }
         let created = slot.is_none();
         if created {
             let Ok(window) = RuntimeCacheWindow::new() else {
