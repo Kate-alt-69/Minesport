@@ -71,6 +71,29 @@ impl Logger {
         emit_operational(Level::Error, &self.module, event, None, None, &message.to_string(), fields);
     }
 
+    /// Emit a structured event that belongs to an operation/trace created in
+    /// another process. This is how Java IPC responses keep the Rust request's
+    /// hardcoded operation ID all the way back into the desktop JSONL log.
+    pub fn correlated(
+        &self,
+        level: Level,
+        event: &str,
+        operation_id: &str,
+        trace_id: &str,
+        message: impl Display,
+        fields: &[(&str, String)],
+    ) {
+        emit_operational(
+            level,
+            &self.module,
+            event,
+            non_empty(operation_id),
+            non_empty(trace_id),
+            &message.to_string(),
+            fields,
+        );
+    }
+
     /// Start one traced operation.
     ///
     /// Keep `operation_id` as a literal at the call site, for example:
@@ -264,6 +287,20 @@ pub fn append(message: &str) {
     emit_human(Level::Info, "APP", "RawMessage", None, None, message, &[]);
 }
 
+/// Raw cross-process log text with correlation preserved in the human log and
+/// Debug Console, but deliberately excluded from operations JSONL.
+pub fn append_correlated(message: &str, operation_id: &str, trace_id: &str) {
+    emit_human(
+        Level::Info,
+        "IPC:JAVA",
+        "RawMessage",
+        non_empty(operation_id),
+        non_empty(trace_id),
+        message,
+        &[],
+    );
+}
+
 pub fn display_text() -> String {
     display_log()
         .lock()
@@ -382,6 +419,10 @@ fn emit_human(
     (epoch_ms, display_stamp, repaired, human)
 }
 
+fn non_empty(value: &str) -> Option<&str> {
+    if value.trim().is_empty() { None } else { Some(value) }
+}
+
 fn quote_human_value(value: &str) -> String {
     if value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/' | '\\')) {
         value.to_string()
@@ -480,5 +521,12 @@ mod tests {
         let operation = Logger::new("TEST").operation("TestHardcodedOperationId");
         assert_eq!(operation.operation_id(), "TestHardcodedOperationId");
         assert!(operation.trace_id().starts_with(&format!("{}-", std::process::id())));
+    }
+
+    #[test]
+    fn empty_correlation_values_are_omitted() {
+        assert_eq!(non_empty(""), None);
+        assert_eq!(non_empty("   "), None);
+        assert_eq!(non_empty("Trace"), Some("Trace"));
     }
 }
