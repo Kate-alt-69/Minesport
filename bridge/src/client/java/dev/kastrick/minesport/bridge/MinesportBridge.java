@@ -98,6 +98,7 @@ public class MinesportBridge implements ClientModInitializer {
                 polymerPresent,
                 getLoadedMods()
             ));
+            sender.flush();
 
             System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " registered block types from baked client models...");
             for (int start = 0; start < allBlocks.size(); start += EXTRACTION_BATCH_SIZE) {
@@ -130,10 +131,15 @@ public class MinesportBridge implements ClientModInitializer {
                     }
                 }
 
+                // Make one completed extraction batch visible to Rust. The
+                // socket remains fully buffered between batches instead of
+                // paying a flush syscall for every individual block packet.
+                sender.flush();
                 System.out.println("[MinesportBridge] Baked model extraction " + end + "/" + allBlocks.size());
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
+            sender.flush();
             System.out.println("[MinesportBridge] Registry/model dump complete. Exiting worker.");
             Thread.sleep(500);
 
