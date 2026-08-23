@@ -13,7 +13,7 @@ slint::slint! {
     import { Button, LineEdit, ListView } from "std-widgets.slint";
 
     export struct PickerRow {
-        icon: string,
+        icon-kind: int,
         title: string,
         subtitle: string,
     }
@@ -86,15 +86,35 @@ slint::slint! {
                         background: root.selected-index == index ? #243748 : hover.has-hover ? #18232c : transparent;
                         border-radius: 4px;
 
-                        Text {
-                            x: 10px;
-                            width: 30px;
-                            height: parent.height;
-                            text: row.icon;
-                            color: root.selected-index == index ? #dff1fc : #8fa2b4;
-                            font-size: 17px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                        if row.icon-kind == 0: Image {
+                            x: 13px;
+                            y: (parent.height - 24px) / 2;
+                            width: 24px;
+                            height: 24px;
+                            source: @image-url("../assets/fyne-theme-icons/computer.svg");
+                            image-fit: contain;
+                            colorize: root.selected-index == index ? #dff1fc : #8fa2b4;
+                            accessible-role: none;
+                        }
+                        if row.icon-kind == 1: Image {
+                            x: 13px;
+                            y: (parent.height - 24px) / 2;
+                            width: 24px;
+                            height: 24px;
+                            source: @image-url("../assets/fyne-theme-icons/settings.svg");
+                            image-fit: contain;
+                            colorize: root.selected-index == index ? #dff1fc : #8fa2b4;
+                            accessible-role: none;
+                        }
+                        if row.icon-kind == 2: Image {
+                            x: 13px;
+                            y: (parent.height - 24px) / 2;
+                            width: 24px;
+                            height: 24px;
+                            source: @image-url("../assets/fyne-theme-icons/file.svg");
+                            image-fit: contain;
+                            colorize: root.selected-index == index ? #dff1fc : #8fa2b4;
+                            accessible-role: none;
                         }
                         Text {
                             x: 50px;
@@ -333,7 +353,7 @@ fn refresh(picker: &LauncherWorldPicker, state: &Rc<RefCell<PickerState>>) {
                     continue;
                 }
                 rows.push(PickerRow {
-                    icon: "▣".into(),
+                    icon_kind: 0,
                     title: entry.launcher.name.clone().into(),
                     subtitle: entry.launcher.root.display().to_string().into(),
                 });
@@ -361,7 +381,7 @@ fn refresh(picker: &LauncherWorldPicker, state: &Rc<RefCell<PickerState>>) {
                         continue;
                     }
                     rows.push(PickerRow {
-                        icon: "⚙".into(),
+                        icon_kind: 1,
                         title: instance.name.clone().into(),
                         subtitle: format!(
                             "MC {} · {} · {} world(s){}",
@@ -394,7 +414,7 @@ fn refresh(picker: &LauncherWorldPicker, state: &Rc<RefCell<PickerState>>) {
                         continue;
                     }
                     rows.push(PickerRow {
-                        icon: "◇".into(),
+                        icon_kind: 2,
                         title: world.name.clone().into(),
                         subtitle: format!(
                             "{} · {}",
