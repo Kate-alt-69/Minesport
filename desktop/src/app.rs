@@ -197,12 +197,13 @@ fn persist_settings_snapshot(ui: &MainWindow, state: &SharedState) {
 }
 
 fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: RuntimeCacheManager) {
+    let world_state = state.clone();
     let weak = ui.as_weak();
     let picker_engine = engine.clone();
     ui.on_pick_world(move || {
         let weak = weak.clone();
         let engine = picker_engine.clone();
-        let state = state.clone();
+        let state = world_state.clone();
         let cache = cache.clone();
         thread::spawn(move || {
             let picked = rfd::FileDialog::new().set_title("Select a Minecraft world").pick_folder();
