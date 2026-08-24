@@ -137,15 +137,11 @@ fn main() -> Result<()> {
 }
 
 fn output_name(family: BridgeFamily, version: &str) -> String {
-    if family == BridgeFamily::Fabric {
-        format!("minesport-bridge-{}.jar", safe(version))
-    } else {
-        format!(
-            "minesport-bridge-{}-{}.jar",
-            family.label().to_ascii_lowercase(),
-            safe(version)
-        )
-    }
+    format!(
+        "minesport-bridge-{}-{}.jar",
+        family.label().to_ascii_lowercase(),
+        safe(version)
+    )
 }
 
 fn copy_file(source: &Path, destination: &Path) -> Result<()> {
@@ -195,10 +191,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fabric_keeps_legacy_recipe_filename() {
+    fn fabric_recipe_filename_contains_family() {
         assert_eq!(
             output_name(BridgeFamily::Fabric, "1.21.5"),
-            "minesport-bridge-1.21.5.jar"
+            "minesport-bridge-fabric-1.21.5.jar"
         );
     }
 
