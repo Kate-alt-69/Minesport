@@ -40,7 +40,7 @@ foreach ($Bridge in $BridgeSpecs) {
 if ($Missing.Count -gt 0) {
     if ($AllowMissingArtifacts) {
         Write-Host '[FAST CHECK] skipped: reusable engine/Bridge artifacts do not exist yet.' -ForegroundColor DarkGray
-        exit 0
+        return
     }
     $List = $Missing -join "`n  - "
     throw "Fast check needs previously built runtime artifacts, but these are missing:`n  - $List`nRun one normal build first. After that, check.bat never rebuilds Gradle projects."
@@ -73,8 +73,8 @@ try {
         & rustc --version
         & cargo --version
         Write-Host ''
-        Write-Host 'Running cargo check --bin minesport ...' -ForegroundColor Yellow
-        & cargo check --bin minesport
+        Write-Host 'Running cargo check --all-targets ...' -ForegroundColor Yellow
+        & cargo check --all-targets
         if ($LASTEXITCODE -ne 0) {
             throw 'FAST ERROR CHECK FAILED. Fix the error above before running the full build.'
         }
