@@ -26,6 +26,8 @@ mod runtime_worker;
 mod selection;
 mod settings;
 mod toolchain;
+mod viewer_camera;
+mod viewer_screenshot;
 mod viewer_selection;
 mod world_context;
 mod world_picker;
@@ -44,6 +46,11 @@ const _: fn(&preview::PreviewPickMap) -> anyhow::Result<preview::RenderedPreview
 const _: fn(&preview::PreviewPickMap) -> [f32; 3] = preview::PreviewPickMap::look_direction;
 const _: fn([f32; 3], i32) -> Option<viewer_selection::BoxSelection> =
     viewer_selection::resize_point_b;
+const _: fn(f32, f32, viewer_camera::FlightInput, f32) -> [f32; 3] =
+    viewer_camera::movement_delta;
+const _: fn(f32, f32) -> f32 = viewer_camera::adjusted_speed;
+const _: fn(u32, u32, &[u8]) -> anyhow::Result<std::path::PathBuf> =
+    viewer_screenshot::save_rgba;
 
 // Loader-family runtime wiring is landing incrementally in the Slint app.
 // Keep every embedded loader materializer type-checked in normal builds until
