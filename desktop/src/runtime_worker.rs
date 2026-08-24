@@ -16,10 +16,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const GRADLEW_SH: &[u8] = include_bytes!("../../bridge/gradlew");
-const GRADLEW_BAT: &[u8] = include_bytes!("../../bridge/gradlew.bat");
-const GRADLE_WRAPPER_JAR: &[u8] = include_bytes!("../../bridge/gradle/wrapper/gradle-wrapper.jar");
-const GRADLE_WRAPPER_PROPERTIES: &[u8] = include_bytes!("../../bridge/gradle/wrapper/gradle-wrapper.properties");
+const GRADLEW_SH: &[u8] = include_bytes!("../../minesport-bridge-fabric/gradlew");
+const GRADLEW_BAT: &[u8] = include_bytes!("../../minesport-bridge-fabric/gradlew.bat");
+const GRADLE_WRAPPER_JAR: &[u8] = include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.jar");
+const GRADLE_WRAPPER_PROPERTIES: &[u8] = include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.properties");
 
 const MC_1_21_10: &str = "1.21.10";
 const LOADER_1_21_10: &str = "0.18.5";
@@ -341,7 +341,7 @@ where
 
     if fast_bundled_fabric {
         let bridge = runtime::materialize_bundled_bridge()?;
-        fs::copy(&bridge, run_mods.join("minesport-bridge-0.2.0.jar"))
+        fs::copy(&bridge, run_mods.join("minesport-bridge-fabric-0.2.0.jar"))
             .with_context(|| format!("copy embedded Bridge {}", bridge.display()))?;
     }
 
