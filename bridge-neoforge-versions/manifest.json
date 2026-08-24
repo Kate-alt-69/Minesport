@@ -22,6 +22,17 @@
         "minecraft_version_range": "[1.21.9,1.21.10)",
         "neo_version": "21.9.16-beta"
       }
+    },
+    {
+      "id": "1.21.8",
+      "match": "^1\\.21\\.8$",
+      "patch": "1.21.8/patch.json",
+      "java": 21,
+      "variables": {
+        "minecraft_version": "1.21.8",
+        "minecraft_version_range": "[1.21.8,1.21.9)",
+        "neo_version": "21.8.38"
+      }
     }
   ]
 }
