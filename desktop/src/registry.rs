@@ -193,10 +193,7 @@ where
                 if block_id.is_empty() { continue; }
                 snapshot.blocks.entry(block_id.to_string()).or_default().lights = sanitize_lights(message.states);
             }
-            "texture" => {
-                // Schema 4 deliberately stores texture identifiers in baked
-                // quads, never PNG bytes. Engine resolvers own image lookup.
-            }
+            "texture" => {}
             "error" => {
                 if !message.message.trim().is_empty() {
                     notice(CaptureNotice::WorkerMessage(message.message));
@@ -270,6 +267,7 @@ fn write_snapshot(cache_root: &Path, snapshot: &Snapshot) -> Result<PathBuf> {
         let mut writer = BufWriter::with_capacity(256 * 1024, file);
         write_snapshot_data(&mut writer, snapshot)?;
         writer.flush().context("flush runtime registry")?;
+        writer.get_ref().sync_all().context("sync runtime registry to disk")?;
     }
     let _ = fs::remove_file(&path);
     fs::rename(&temporary, &path).with_context(|| format!("install {}", path.display()))?;
@@ -285,10 +283,8 @@ fn write_snapshot_data(writer: &mut impl Write, snapshot: &Snapshot) -> Result<(
     write_string(writer, &snapshot.loader_version)?;
     write_string(writer, &snapshot.mods_fingerprint)?;
     write_string(writer, &snapshot.captured_at)?;
-
     write_count(writer, snapshot.loaded_mods.len(), MAX_LOADED_MODS, "loaded mods")?;
     for loaded_mod in &snapshot.loaded_mods { write_string(writer, loaded_mod)?; }
-
     write_count(writer, snapshot.blocks.len(), MAX_BLOCKS, "blocks")?;
     for (block_id, block) in &snapshot.blocks {
         write_string(writer, block_id)?;
@@ -324,12 +320,10 @@ fn write_i32(writer: &mut impl Write, value: i32) -> Result<()> {
     writer.write_all(&value.to_be_bytes()).context("write registry int32")?;
     Ok(())
 }
-
 fn write_count(writer: &mut impl Write, count: usize, maximum: usize, label: &str) -> Result<()> {
     if count > maximum || count > i32::MAX as usize { bail!("runtime registry {label} count {count} exceeds limit {maximum}"); }
     write_i32(writer, count as i32)
 }
-
 fn write_string(writer: &mut impl Write, value: &str) -> Result<()> {
     let bytes = value.as_bytes();
     if bytes.len() > MAX_STRING_BYTES { bail!("runtime registry string is too large: {} bytes", bytes.len()); }
@@ -337,16 +331,11 @@ fn write_string(writer: &mut impl Write, value: &str) -> Result<()> {
     writer.write_all(bytes).context("write registry string")?;
     Ok(())
 }
-
 fn write_string_map(writer: &mut impl Write, values: &BTreeMap<String, String>) -> Result<()> {
     write_count(writer, values.len(), MAX_PROPERTIES, "properties")?;
-    for (key, value) in values {
-        write_string(writer, key)?;
-        write_string(writer, value)?;
-    }
+    for (key, value) in values { write_string(writer, key)?; write_string(writer, value)?; }
     Ok(())
 }
-
 fn prune_sibling_fingerprints(cache_root: &Path, version: &str, keep: &str) -> Result<()> {
     let root = runtime_registry_root(cache_root).join(safe_component(version));
     if !root.is_dir() { return Ok(()); }
@@ -360,9 +349,6 @@ fn prune_sibling_fingerprints(cache_root: &Path, version: &str, keep: &str) -> R
     Ok(())
 }
 
-/// Exact content identity used by the runtime model registry. This intentionally
-/// hashes every current JAR once per cache job; callers retain the resulting
-/// fingerprint and never repeat the work in readiness polling/UI rendering.
 pub fn mods_fingerprint(mods_path: &Path) -> Result<String> {
     if !mods_path.is_dir() { bail!("mods folder is unavailable: {}", mods_path.display()); }
     let mut jars = Vec::new();
@@ -377,97 +363,30 @@ pub fn mods_fingerprint(mods_path: &Path) -> Result<String> {
         jars.push((name, path, size));
     }
     jars.sort_by(|left, right| left.0.cmp(&right.0));
-
     let mut total = Sha256::new();
     for (name, path, size) in jars {
         let digest = sha256_file(&path)?;
-        total.update(name.as_bytes());
-        total.update([0]);
-        total.update(size.to_string().as_bytes());
-        total.update([0]);
-        total.update(hex_lower(&digest).as_bytes());
-        total.update(b"\n");
+        total.update(name.as_bytes()); total.update([0]); total.update(size.to_string().as_bytes()); total.update([0]); total.update(hex_lower(&digest).as_bytes()); total.update(b"\n");
     }
     Ok(hex_lower(&total.finalize()))
 }
-
 fn sha256_file(path: &Path) -> Result<Vec<u8>> {
     let mut file = File::open(path).with_context(|| format!("open mod JAR {}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 256 * 1024];
-    loop {
-        let count = file.read(&mut buffer).with_context(|| format!("read mod JAR {}", path.display()))?;
-        if count == 0 { break; }
-        hasher.update(&buffer[..count]);
-    }
+    loop { let count = file.read(&mut buffer).with_context(|| format!("read mod JAR {}", path.display()))?; if count == 0 { break; } hasher.update(&buffer[..count]); }
     Ok(hasher.finalize().to_vec())
 }
-
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes { use std::fmt::Write as _; let _ = write!(output, "{byte:02x}"); }
-    output
-}
-
-fn safe_component(value: &str) -> String {
-    let mut result = String::new();
-    for character in value.trim().chars().take(80) {
-        if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') { result.push(character); }
-        else { result.push('_'); }
-    }
-    if result.is_empty() { "unknown".to_string() } else { result }
-}
-
-fn unix_timestamp_string() -> String {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_secs().to_string()).unwrap_or_else(|_| "0".to_string())
-}
+fn hex_lower(bytes: &[u8]) -> String { let mut output = String::with_capacity(bytes.len() * 2); for byte in bytes { use std::fmt::Write as _; let _ = write!(output, "{byte:02x}"); } output }
+fn safe_component(value: &str) -> String { let mut result = String::new(); for character in value.trim().chars().take(80) { if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') { result.push(character); } else { result.push('_'); } } if result.is_empty() { "unknown".to_string() } else { result } }
+fn unix_timestamp_string() -> String { SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_secs().to_string()).unwrap_or_else(|_| "0".to_string()) }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
-
-    #[test]
-    fn binary_header_matches_java_reader_contract() {
-        let mut snapshot = Snapshot {
-            minecraft_version: "1.21.10".into(),
-            loader_version: "0.18.5".into(),
-            mods_fingerprint: "abc123".into(),
-            captured_at: "test".into(),
-            ..Snapshot::default()
-        };
-        snapshot.blocks.insert("minecraft:light".into(), RuntimeBlock {
-            loader_type: "fabric".into(),
-            lights: vec![LightState { properties: BTreeMap::new(), light_level: 15 }],
-            ..RuntimeBlock::default()
-        });
-        let mut bytes = Vec::new();
-        write_snapshot_data(&mut bytes, &snapshot).unwrap();
-        assert_eq!(&bytes[..8], b"MSREGD01");
-        assert_eq!(i32::from_be_bytes(bytes[8..12].try_into().unwrap()), 4);
-        assert!(bytes.len() > 40);
-    }
-
-    #[test]
-    fn malformed_quads_are_sanitized() {
-        let variants = sanitize_variants(vec![BlockVariant {
-            properties: BTreeMap::new(),
-            quads: vec![BakedQuad { vertices: vec![0.0; 8], ..BakedQuad::default() }],
-        }]);
-        assert!(variants[0].quads.is_empty());
-    }
-
-    #[test]
-    fn safe_components_cannot_escape_registry_root() {
-        assert_eq!(safe_component("../1.21.10"), ".._1.21.10");
-        assert!(!safe_component("../../bad").contains('/'));
-    }
-
-    #[test]
-    fn writer_uses_big_endian_float_bits() {
-        let value = 1.0f32;
-        let mut bytes = Cursor::new(Vec::<u8>::new());
-        bytes.write_all(&value.to_bits().to_be_bytes()).unwrap();
-        assert_eq!(bytes.into_inner(), [0x3f, 0x80, 0x00, 0x00]);
-    }
+    #[test] fn binary_header_matches_java_reader_contract() { let mut snapshot = Snapshot { minecraft_version: "1.21.10".into(), loader_version: "0.18.5".into(), mods_fingerprint: "abc123".into(), captured_at: "test".into(), ..Snapshot::default() }; snapshot.blocks.insert("minecraft:light".into(), RuntimeBlock { loader_type: "fabric".into(), lights: vec![LightState { properties: BTreeMap::new(), light_level: 15 }], ..RuntimeBlock::default() }); let mut bytes = Vec::new(); write_snapshot_data(&mut bytes, &snapshot).unwrap(); assert_eq!(&bytes[..8], b"MSREGD01"); assert_eq!(i32::from_be_bytes(bytes[8..12].try_into().unwrap()), 4); assert!(bytes.len() > 40); }
+    #[test] fn malformed_quads_are_sanitized() { let variants = sanitize_variants(vec![BlockVariant { properties: BTreeMap::new(), quads: vec![BakedQuad { vertices: vec![0.0; 8], ..BakedQuad::default() }], }]); assert!(variants[0].quads.is_empty()); }
+    #[test] fn safe_components_cannot_escape_registry_root() { assert_eq!(safe_component("../1.21.10"), ".._1.21.10"); assert!(!safe_component("../../bad").contains('/')); }
+    #[test] fn writer_uses_big_endian_float_bits() { let value = 1.0f32; let mut bytes = Cursor::new(Vec::<u8>::new()); bytes.write_all(&value.to_bits().to_be_bytes()).unwrap(); assert_eq!(bytes.into_inner(), [0x3f, 0x80, 0x00, 0x00]); }
 }
