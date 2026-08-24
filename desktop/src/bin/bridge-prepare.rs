@@ -5,8 +5,14 @@ mod bridge_build;
 #[path = "../bridge_compat.rs"]
 mod bridge_compat;
 #[allow(dead_code)]
+#[path = "../bridge_family.rs"]
+mod bridge_family;
+#[allow(dead_code)]
 #[path = "../bridge_java.rs"]
 mod bridge_java;
+#[allow(dead_code)]
+#[path = "../launcher.rs"]
+mod launcher;
 #[allow(dead_code)]
 #[path = "../runtime.rs"]
 mod runtime;
@@ -15,6 +21,7 @@ mod runtime;
 mod toolchain;
 
 use anyhow::{Context, Result, anyhow, bail};
+use bridge_family::BridgeFamily;
 use std::{
     env,
     fs,
@@ -24,17 +31,19 @@ use std::{
 
 fn main() -> Result<()> {
     let mut version = None;
+    let mut loader = "fabric".to_string();
     let mut output = None;
     let mut source_only = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-version" | "--version" => version = args.next(),
+            "-loader" | "--loader" => loader = args.next().ok_or_else(|| anyhow!("--loader requires a value"))?,
             "-output" | "--output" => output = args.next().map(PathBuf::from),
             "-source-only" | "--source-only" => source_only = true,
             "-h" | "--help" => {
                 println!(
-                    "Minesport Rust Bridge prepare helper\n\nUsage:\n  bridge-prepare --version <minecraft> [--output <directory>] [--source-only]\n\nOptions:\n  --version <minecraft>   Minecraft version to prepare\n  --output <directory>    Optional directory for the compiled Bridge JAR\n  --source-only           Prepare patched source and print its workspace without compiling"
+                    "Minesport Rust Bridge prepare helper\n\nUsage:\n  bridge-prepare --version <minecraft> [--loader fabric|forge|neoforge|quilt] [--output <directory>] [--source-only]\n\nOptions:\n  --version <minecraft>   Minecraft version to prepare\n  --loader <loader>       Bridge family (default: fabric)\n  --output <directory>    Optional directory for the compiled Bridge JAR\n  --source-only           Prepare patched source and print its workspace without compiling"
                 );
                 return Ok(());
             }
@@ -42,11 +51,16 @@ fn main() -> Result<()> {
         }
     }
 
+    let family = BridgeFamily::parse(&loader)
+        .ok_or_else(|| anyhow!("unsupported Bridge loader {loader:?}"))?;
     let version = version.ok_or_else(|| anyhow!("--version is required"))?;
     let version = bridge_compat::normalize_version(&version)
         .ok_or_else(|| anyhow!("invalid Minecraft version"))?;
-    if !bridge_compat::is_supported(&version) {
-        bail!("no embedded Minesport compatibility recipe for Minecraft {version}");
+    if !bridge_family::is_supported(family, &version) {
+        bail!(
+            "no embedded {} compatibility recipe for Minecraft {version}",
+            family.label()
+        );
     }
 
     let stamp = SystemTime::now()
@@ -56,10 +70,18 @@ fn main() -> Result<()> {
     let workspace = runtime::cache_root()
         .join("bridge-build")
         .join(if source_only { "prepared-sources" } else { "ci-recipes" })
-        .join(format!("{}-{}-{stamp}", safe(&version), std::process::id()));
+        .join(format!(
+            "{}-{}-{}-{stamp}",
+            family.label().to_ascii_lowercase(),
+            safe(&version),
+            std::process::id()
+        ));
 
-    eprintln!("[Minesport] Preparing Rust compatibility recipe for Minecraft {version}");
-    let prepared = bridge_compat::prepare_source(&version, &workspace, |progress| {
+    eprintln!(
+        "[Minesport] Preparing {} compatibility recipe for Minecraft {version}",
+        family.label()
+    );
+    let prepared = bridge_family::prepare_source(family, &version, &workspace, |progress| {
         let detail = if progress.detail.is_empty() {
             progress.stage
         } else {
@@ -68,18 +90,20 @@ fn main() -> Result<()> {
         eprintln!("[{:>3}%] {detail}", progress.percent.clamp(0, 100));
     })?;
 
-    // Match the retired Go helper: source-only mode intentionally leaves the
-    // prepared workspace on disk so a developer or CI job can inspect/use it.
     if source_only {
         println!("{}", prepared.workspace.display());
         return Ok(());
     }
 
     let _cleanup = Cleanup(workspace);
-    let build_java = bridge_java::tooling_java(
-        prepared.java,
-        prepared.variables.get("loom_version").map(String::as_str),
-    );
+    let build_java = if family == BridgeFamily::Fabric {
+        bridge_java::tooling_java(
+            prepared.java,
+            prepared.variables.get("loom_version").map(String::as_str),
+        )
+    } else {
+        prepared.java
+    };
     let java_home = toolchain::ensure_jdk(build_java, |progress| {
         eprintln!(
             "[{:>3}%] {}",
@@ -88,7 +112,8 @@ fn main() -> Result<()> {
         );
     })?;
     eprintln!(
-        "[Minesport] Compiling {} targeting Java {} with build JDK {} at {}",
+        "[Minesport] Compiling {} {} targeting Java {} with build JDK {} at {}",
+        family.label(),
         prepared.profile_id,
         prepared.java,
         build_java,
@@ -100,14 +125,27 @@ fn main() -> Result<()> {
         runtime::cache_root()
             .join("bridge-build")
             .join("compiled")
+            .join(family.label().to_ascii_lowercase())
             .join(safe(&version))
     });
     fs::create_dir_all(&destination_dir)
         .with_context(|| format!("create {}", destination_dir.display()))?;
-    let destination = destination_dir.join(format!("minesport-bridge-{}.jar", safe(&version)));
+    let destination = destination_dir.join(output_name(family, &version));
     copy_file(&jar, &destination)?;
     println!("{}", destination.display());
     Ok(())
+}
+
+fn output_name(family: BridgeFamily, version: &str) -> String {
+    if family == BridgeFamily::Fabric {
+        format!("minesport-bridge-{}.jar", safe(version))
+    } else {
+        format!(
+            "minesport-bridge-{}-{}.jar",
+            family.label().to_ascii_lowercase(),
+            safe(version)
+        )
+    }
 }
 
 fn copy_file(source: &Path, destination: &Path) -> Result<()> {
@@ -149,5 +187,34 @@ struct Cleanup(PathBuf);
 impl Drop for Cleanup {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fabric_keeps_legacy_recipe_filename() {
+        assert_eq!(
+            output_name(BridgeFamily::Fabric, "1.21.5"),
+            "minesport-bridge-1.21.5.jar"
+        );
+    }
+
+    #[test]
+    fn loader_recipe_filename_contains_family() {
+        assert_eq!(
+            output_name(BridgeFamily::Forge, "1.21.5"),
+            "minesport-bridge-forge-1.21.5.jar"
+        );
+        assert_eq!(
+            output_name(BridgeFamily::NeoForge, "1.21.7"),
+            "minesport-bridge-neoforge-1.21.7.jar"
+        );
+        assert_eq!(
+            output_name(BridgeFamily::Quilt, "1.21.6"),
+            "minesport-bridge-quilt-1.21.6.jar"
+        );
     }
 }
