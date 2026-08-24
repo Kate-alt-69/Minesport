@@ -451,7 +451,7 @@ fn activate_world(
             },
             Ok(None) => None,
             Err(error) => {
-                diagnostics::append(&format!("Heightmap cache lookup failed for {}: {error:#}"));
+                diagnostics::append(&format!("Heightmap cache lookup failed for {}: {error:#}", path.display()));
                 None
             }
         };
