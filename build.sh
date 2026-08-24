@@ -51,7 +51,7 @@ for arg in "$@"; do
     --build-installer-all) BUILD_DEB=true; BUILD_APPIMAGE=true ;;
     --build-installer-deb) BUILD_DEB=true ;;
     --build-installer-appimage) BUILD_APPIMAGE=true ;;
-    --build-installer-exe|--build-installer-msi)
+    --build-installer-exe|--build-installer-nsis|--build-installer-inno|--build-installer-msi)
       echo "ERROR: $arg is Windows-only; use build.ps1/build.bat." >&2
       exit 2
       ;;
@@ -129,79 +129,39 @@ state_set() {
   rm -f "$tmp"
 }
 
+newest_input_epoch() {
+  local root="$1"
+  local newest=0
+  while IFS= read -r file; do
+    local stamp
+    stamp="$(stat -c %Y "$file" 2>/dev/null || echo 0)"
+    (( stamp > newest )) && newest=$stamp
+  done < <(tracked_files "$root")
+  printf '%s\n' "$newest"
+}
+
 needs_rebuild() {
-  local key="$1" fingerprint="$2" output="$3"
+  local key="$1" fingerprint="$2" output="$3" source_root="$4"
   $FRESH && return 0
-  [[ -s "$output" ]] || return 0
-  local old=""
-  old="$(state_get "$key" 2>/dev/null || true)"
-  [[ "$old" == "$fingerprint" ]] && return 1
+  [[ -f "$output" ]] || return 0
+  local saved=""
+  saved="$(state_get "$key" 2>/dev/null || true)"
+  [[ "$saved" == "$fingerprint" ]] && return 1
+
+  # Adopt outputs made before smart state existed when they are newer than all
+  # meaningful source/config inputs. Later decisions become hash-based.
+  local output_epoch newest
+  output_epoch="$(stat -c %Y "$output" 2>/dev/null || echo 0)"
+  newest="$(newest_input_epoch "$source_root")"
+  if (( output_epoch >= newest )); then
+    state_set "$key" "$fingerprint"
+    return 1
+  fi
   return 0
 }
 
-find_engine_jar() {
-  find "$ROOT/engine/build/libs" -maxdepth 1 -type f -name 'minesport-engine-*.jar' ! -name '*sources*' -print 2>/dev/null | LC_ALL=C sort | tail -n 1
-}
-
-set_embed_env() {
-  local engine="$1"
-  export MINESPORT_ENGINE_JAR="$engine"
-  export MINESPORT_BRIDGE_JAR="$FABRIC_BRIDGE"
-  export MINESPORT_BRIDGE_FABRIC_JAR="$FABRIC_BRIDGE"
-  export MINESPORT_BRIDGE_FORGE_JAR="$FORGE_BRIDGE"
-  export MINESPORT_BRIDGE_NEOFORGE_JAR="$NEOFORGE_BRIDGE"
-  export MINESPORT_BRIDGE_QUILT_JAR="$QUILT_BRIDGE"
-}
-
-fast_check() {
-  local allow_missing="${1:-false}"
-  local engine
-  engine="$(find_engine_jar)"
-  if [[ -z "$engine" || ! -s "$FABRIC_BRIDGE" || ! -s "$FORGE_BRIDGE" || ! -s "$NEOFORGE_BRIDGE" || ! -s "$QUILT_BRIDGE" ]]; then
-    if [[ "$allow_missing" == "true" ]]; then
-      echo "[FAST CHECK] skipped: reusable engine/Bridge artifacts do not exist yet."
-      return 0
-    fi
-    echo "ERROR: fast check needs previously built engine + four staged Bridge JARs." >&2
-    echo "Run one normal build first." >&2
-    return 1
-  fi
-
-  command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo not found." >&2; return 1; }
-  command -v rustc >/dev/null 2>&1 || { echo "ERROR: rustc not found." >&2; return 1; }
-
-  set_embed_env "$engine"
-  echo "============================================"
-  echo " Minesport FAST ERROR CHECK"
-  echo "============================================"
-  echo "No loader/engine Gradle build."
-  (
-    cd "$ROOT/desktop"
-    cargo check --all-targets
-  )
-}
-
-if $CHECK_ONLY; then
-  fast_check false
-  exit 0
-fi
-
-echo "============================================"
-echo " Minesport $VERSION Smart Build"
-echo "============================================"
-echo "Target: ${OS_NAME} / $(uname -m)"
-echo "Desktop: Rust + Slint 1.17.1"
-echo "Mode: content-aware incremental build"
-$FRESH && echo "Fresh: YES (outputs only; caches preserved)"
-$DESKTOP_ONLY && echo "Desktop-only: YES"
-echo
-
-echo "[0/3] FAST ERROR CHECK..."
-fast_check true
-echo
-
-if $FRESH; then
-  echo "[FRESH] Removing Minesport build outputs only..."
+remove_build_outputs() {
+  echo '[FRESH] Removing Minesport build outputs only...'
   rm -rf \
     "$ROOT/minesport-bridge-fabric/build" \
     "$ROOT/minesport-bridge-forge/build" \
@@ -212,139 +172,153 @@ if $FRESH; then
     "$ROOT/desktop/dist" \
     "$ROOT/dist/bundled-bridge" \
     "$ROOT/dist/source" \
-    "$ROOT/dist/installer"
-  rm -f "$STATE_FILE"
-  echo "Preserved: project .gradle caches, ~/.gradle, Cargo caches, downloaded JDKs."
+    "$ROOT/dist/installer" \
+    "$STATE_FILE"
+  echo '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.'
   echo
+}
+
+fast_check() {
+  if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
+    echo 'ERROR: Rust/Cargo is required for --check.' >&2
+    return 1
+  fi
+
+  echo '============================================'
+  echo ' Minesport FAST ERROR CHECK'
+  echo '============================================'
+  echo 'No Fabric/Forge/NeoForge/Quilt Gradle build.'
+  echo 'Checking Rust + Slint + build.rs + -D warnings only.'
+  echo
+
+  (
+    cd "$ROOT/desktop"
+    MINESPORT_FAST_CHECK=1 cargo check --all-targets
+  )
+  echo
+  echo 'FAST CHECK PASSED - safe to start expensive loader builds.'
+}
+
+if $CHECK_ONLY; then
+  fast_check
+  exit 0
 fi
 
+cd "$ROOT"
+
+printf '%s\n' '============================================'
+printf ' Minesport %s Smart Build\n' "$VERSION"
+printf '%s\n' '============================================'
+printf 'Target: %s / amd64\n' "$OS_NAME"
+printf '%s\n' 'Desktop: Rust + Slint 1.17.1'
+printf '%s\n' 'Mode: content-aware incremental build'
+$FRESH && printf '%s\n' 'Fresh: YES (outputs only; caches preserved)'
+$DESKTOP_ONLY && printf '%s\n' 'Desktop-only: YES'
+if ! $BUILD_DEB && ! $BUILD_APPIMAGE; then
+  printf '%s\n' 'Packaging: disabled (executable only)'
+else
+  formats=()
+  $BUILD_DEB && formats+=(DEB)
+  $BUILD_APPIMAGE && formats+=(AppImage)
+  printf 'Packaging: %s\n' "$(IFS=' + '; echo "${formats[*]}")"
+fi
+printf '\n'
+
+printf '%s\n' '[0/3] FAST ERROR CHECK...'
+fast_check
+printf '\n'
+
+$FRESH && remove_build_outputs
 mkdir -p "$BUNDLED_DIR"
 
 build_bridge() {
-  local label="$1" slug="$2" project="$3" destination="$4"
-  local root="$ROOT/$project"
+  local name="$1" slug="$2" project="$3" output="$4"
+  local project_path="$ROOT/$project"
   local fingerprint
-  fingerprint="$(tree_fingerprint "$root")"
-  if ! needs_rebuild "bridge-$slug" "$fingerprint" "$destination"; then
-    echo "  -> $label: unchanged, SKIP Gradle"
+  fingerprint="$(tree_fingerprint "$project_path")"
+  local key="bridge-$slug"
+
+  printf '  -> %s: ' "$name"
+  if $DESKTOP_ONLY; then
+    [[ -f "$output" ]] || { echo "missing $output" >&2; exit 1; }
+    state_set "$key" "$fingerprint"
+    echo 'reuse existing artifact'
     return
   fi
 
-  echo "  -> $label: changed/missing, building..."
+  if ! needs_rebuild "$key" "$fingerprint" "$output" "$project_path"; then
+    echo 'unchanged, SKIP Gradle'
+    return
+  fi
+  echo 'changed, building...'
   (
-    cd "$root"
-    chmod +x gradlew
-    ./gradlew --no-daemon --stacktrace build
+    cd "$project_path"
+    ./gradlew --no-daemon build
   )
   local jar
-  jar="$(find "$root/build/libs" -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' -print -quit)"
-  [[ -n "$jar" ]] || { echo "ERROR: $label Bridge JAR missing." >&2; exit 1; }
-  cp "$jar" "$destination"
-  [[ -s "$destination" ]] || { echo "ERROR: staged $label Bridge is empty." >&2; exit 1; }
-  state_set "bridge-$slug" "$fingerprint"
+  jar="$(find "$project_path/build/libs" -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-dev.jar' | sort | head -n1)"
+  [[ -n "$jar" && -f "$jar" ]] || { echo "ERROR: $name Bridge jar not found." >&2; exit 1; }
+  cp -f "$jar" "$output"
+  state_set "$key" "$fingerprint"
+  printf '     staged: %s\n' "${output#$ROOT/}"
 }
 
-if ! $DESKTOP_ONLY; then
-  echo "[1/3] Bundled Minecraft 1.21.10 loader Bridges..."
-  build_bridge Fabric fabric minesport-bridge-fabric "$FABRIC_BRIDGE"
-  build_bridge Forge forge minesport-bridge-forge "$FORGE_BRIDGE"
-  build_bridge NeoForge neoforge minesport-bridge-neoforge "$NEOFORGE_BRIDGE"
-  build_bridge Quilt quilt minesport-bridge-quilt "$QUILT_BRIDGE"
-  echo
-else
-  echo "[1/3] Reusing bundled Minecraft loader Bridges..."
-  for spec in \
-    "fabric:minesport-bridge-fabric:$FABRIC_BRIDGE" \
-    "forge:minesport-bridge-forge:$FORGE_BRIDGE" \
-    "neoforge:minesport-bridge-neoforge:$NEOFORGE_BRIDGE" \
-    "quilt:minesport-bridge-quilt:$QUILT_BRIDGE"; do
-    IFS=: read -r slug project jar <<<"$spec"
-    [[ -s "$jar" ]] || { echo "ERROR: --desktop-only requires $jar" >&2; exit 1; }
-    state_set "bridge-$slug" "$(tree_fingerprint "$ROOT/$project")"
-    echo "  $slug: $jar"
-  done
-  echo
-fi
+printf '%s\n' '[1/3] Bundled Minecraft 1.21.10 loader Bridges...'
+build_bridge Fabric fabric minesport-bridge-fabric "$FABRIC_BRIDGE"
+build_bridge Forge forge minesport-bridge-forge "$FORGE_BRIDGE"
+build_bridge NeoForge neoforge minesport-bridge-neoforge "$NEOFORGE_BRIDGE"
+build_bridge Quilt quilt minesport-bridge-quilt "$QUILT_BRIDGE"
+printf '\n'
 
-ENGINE_JAR="$(find_engine_jar)"
-ENGINE_FP="$(tree_fingerprint "$ROOT/engine")"
-if ! $DESKTOP_ONLY; then
-  echo "[2/3] Java engine..."
-  if [[ -z "$ENGINE_JAR" ]] || needs_rebuild engine "$ENGINE_FP" "$ENGINE_JAR"; then
-    echo "  -> changed/missing, building..."
+ENGINE_ROOT="$ROOT/engine"
+ENGINE_JAR="$(find "$ENGINE_ROOT/build/libs" -maxdepth 1 -type f -name 'minesport-engine-*.jar' ! -name '*-sources.jar' 2>/dev/null | sort | head -n1 || true)"
+ENGINE_FINGERPRINT="$(tree_fingerprint "$ENGINE_ROOT")"
+printf '%s\n' '[2/3] Java engine...'
+if $DESKTOP_ONLY; then
+  [[ -n "$ENGINE_JAR" && -f "$ENGINE_JAR" ]] || { echo 'ERROR: --desktop-only needs a previously built engine jar.' >&2; exit 1; }
+  state_set engine "$ENGINE_FINGERPRINT"
+  echo '  -> reuse existing artifact'
+else
+  ENGINE_OUTPUT="${ENGINE_JAR:-$ENGINE_ROOT/build/libs/minesport-engine-${VERSION}.jar}"
+  if needs_rebuild engine "$ENGINE_FINGERPRINT" "$ENGINE_OUTPUT" "$ENGINE_ROOT"; then
+    echo '  -> changed, building...'
     (
-      cd "$ROOT/engine"
-      chmod +x gradlew
-      ./gradlew --no-daemon --stacktrace build
+      cd "$ENGINE_ROOT"
+      ./gradlew --no-daemon build
     )
-    ENGINE_JAR="$(find_engine_jar)"
-    [[ -n "$ENGINE_JAR" && -s "$ENGINE_JAR" ]] || { echo "ERROR: engine JAR missing." >&2; exit 1; }
-    state_set engine "$ENGINE_FP"
+    ENGINE_JAR="$(find "$ENGINE_ROOT/build/libs" -maxdepth 1 -type f -name 'minesport-engine-*.jar' ! -name '*-sources.jar' | sort | head -n1)"
+    [[ -n "$ENGINE_JAR" && -f "$ENGINE_JAR" ]] || { echo 'ERROR: Java engine jar not found.' >&2; exit 1; }
+    state_set engine "$ENGINE_FINGERPRINT"
   else
-    echo "  -> unchanged, SKIP Gradle"
+    echo '  -> unchanged, SKIP Gradle'
+    ENGINE_JAR="$ENGINE_OUTPUT"
   fi
-  echo "  Engine: $ENGINE_JAR"
-  echo
-else
-  echo "[2/3] Reusing Java engine..."
-  [[ -n "$ENGINE_JAR" && -s "$ENGINE_JAR" ]] || { echo "ERROR: --desktop-only requires engine JAR." >&2; exit 1; }
-  state_set engine "$ENGINE_FP"
-  echo "  Engine: $ENGINE_JAR"
-  echo
 fi
+printf '     engine: %s\n\n' "${ENGINE_JAR#$ROOT/}"
 
-echo "[3/3] Rust + Slint desktop..."
-command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo is required." >&2; exit 1; }
-command -v rustc >/dev/null 2>&1 || { echo "ERROR: rustc is required." >&2; exit 1; }
-set_embed_env "$ENGINE_JAR"
+export MINESPORT_ENGINE_JAR="$ENGINE_JAR"
+export MINESPORT_BRIDGE_JAR="$FABRIC_BRIDGE"
+export MINESPORT_BRIDGE_FABRIC_JAR="$FABRIC_BRIDGE"
+export MINESPORT_BRIDGE_FORGE_JAR="$FORGE_BRIDGE"
+export MINESPORT_BRIDGE_NEOFORGE_JAR="$NEOFORGE_BRIDGE"
+export MINESPORT_BRIDGE_QUILT_JAR="$QUILT_BRIDGE"
 
-DESKTOP_OUT="$ROOT/desktop/dist/minesport"
-DESKTOP_FP="$(
-  {
-    printf 'desktop=%s\n' "$(tree_fingerprint "$ROOT/desktop")"
-    printf 'doc=%s\n' "$(tree_fingerprint "$ROOT/doc")"
-    for file in "$ENGINE_JAR" "$FABRIC_BRIDGE" "$FORGE_BRIDGE" "$NEOFORGE_BRIDGE" "$QUILT_BRIDGE"; do
-      printf '%s=%s\n' "$file" "$(sha256sum "$file" | awk '{print $1}')"
-    done
-  } | sha256sum | awk '{print $1}'
-)"
+printf '%s\n' '[3/3] Rust + Slint desktop...'
+(
+  cd "$ROOT/desktop"
+  cargo test --all-targets
+  cargo build --release
+)
 
-if ! needs_rebuild desktop "$DESKTOP_FP" "$DESKTOP_OUT"; then
-  echo "  -> desktop inputs unchanged, SKIP Cargo test/build"
-else
-  (
-    cd "$ROOT/desktop"
-    rustc --version
-    cargo --version
-    cargo test
-    cargo build --release --bin minesport
-  )
-  [[ -x "$ROOT/desktop/target/release/minesport" ]] || { echo "ERROR: Rust binary missing." >&2; exit 1; }
-  mkdir -p "$ROOT/desktop/dist"
-  cp "$ROOT/desktop/target/release/minesport" "$DESKTOP_OUT"
-  state_set desktop "$DESKTOP_FP"
-fi
-
-mkdir -p "$ROOT/dist/source"
-cp "$DESKTOP_OUT" "$ROOT/dist/source/minesport"
+mkdir -p "$ROOT/dist"
+cp -f "$ROOT/desktop/target/release/minesport" "$ROOT/dist/minesport"
+printf 'Desktop built: %s\n' "$ROOT/dist/minesport"
 
 if $BUILD_DEB; then
-  chmod +x "$ROOT/installer/linux/build-deb.sh"
-  MINESPORT_VERSION="$VERSION" "$ROOT/installer/linux/build-deb.sh"
+  "$ROOT/installer/linux/build-deb.sh" "$ROOT/dist/minesport"
 fi
 if $BUILD_APPIMAGE; then
-  chmod +x "$ROOT/installer/linux/build-appimage.sh"
-  MINESPORT_VERSION="$VERSION" "$ROOT/installer/linux/build-appimage.sh"
+  "$ROOT/installer/linux/build-appimage.sh" "$ROOT/dist/minesport"
 fi
 
-echo
-echo "============================================"
-echo " Build complete!"
-echo "============================================"
-echo " desktop/dist/minesport"
-echo " dist/source/minesport"
-$BUILD_DEB && echo " dist/installer/Minesport-*.deb"
-$BUILD_APPIMAGE && echo " dist/installer/Minesport-*.AppImage"
-echo
-echo "Fast check:    ./build.sh --check"
-echo "Force rebuild: ./build.sh --fresh"
+printf '\n%s\n' 'BUILD COMPLETE'
