@@ -73,6 +73,10 @@ jobs:
                   '        assert!(!runtime_registry_supported("forge", "1.21.10", mods));\n',
                   '        assert!(runtime_registry_supported("forge", "1.21.10", mods) == mods.is_dir());\n        assert!(bridge_family::is_supported(BridgeFamily::Forge, "1.21.10"));\n        assert!(bridge_family::is_supported(BridgeFamily::NeoForge, "1.21.10"));\n        assert!(bridge_family::is_supported(BridgeFamily::Quilt, "1.21.10"));\n',
               ),
+              (
+                  '    if let Some(path) = registry_path {\n        attach_registry(&mut request, &path);\n    }\n    let engine = engine.clone();',
+                  '    if let Some(error) = cache_error.as_ref() {\n        let error = first_line(error).to_string();\n        let weak = weak.clone();\n        let _ = weak.upgrade_in_event_loop(move |ui| {\n            ui.set_task_active(false);\n            ui.set_task_title("EXPORT WAIT FAILED".into());\n            ui.set_task_detail(format!("Runtime registry failed: {error}").into());\n            append_diagnostic(&ui, &format!("Queued export was not started because runtime preparation failed: {error}"));\n        });\n        return;\n    }\n    let Some(path) = registry_path else {\n        let weak = weak.clone();\n        let _ = weak.upgrade_in_event_loop(move |ui| {\n            ui.set_task_active(false);\n            ui.set_task_title("EXPORT WAIT FAILED".into());\n            ui.set_task_detail("Runtime registry completed without a usable registry file".into());\n        });\n        return;\n    };\n    attach_registry(&mut request, &path);\n    let engine = engine.clone();',
+              ),
           ]
 
           for old, new in replacements:
