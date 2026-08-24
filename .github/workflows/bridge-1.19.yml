@@ -1,11 +1,11 @@
-name: Minesport Bridge 1.19 Compatibility
+name: Minesport Fabric Bridge 1.19 Compatibility
 
 on:
   push:
     branches: [main]
     paths:
-      - 'bridge/**'
-      - 'bridge-versions/**'
+      - 'minesport-bridge-fabric/**'
+      - 'minesport-bridge-fabric-versions/**'
       - 'desktop/src/bridge_build.rs'
       - 'desktop/src/bridge_compat.rs'
       - 'desktop/src/toolchain.rs'
@@ -16,8 +16,8 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'bridge/**'
-      - 'bridge-versions/**'
+      - 'minesport-bridge-fabric/**'
+      - 'minesport-bridge-fabric-versions/**'
       - 'desktop/src/bridge_build.rs'
       - 'desktop/src/bridge_compat.rs'
       - 'desktop/src/toolchain.rs'
@@ -31,12 +31,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: minesport-bridge-119-${{ github.ref }}
+  group: minesport-bridge-fabric-119-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   bridge-1-19:
-    name: Rust recipe · Minecraft ${{ matrix.minecraft }} · Java 17
+    name: Fabric Rust recipe · Minecraft ${{ matrix.minecraft }} · Java 17
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -62,23 +62,24 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
-      - name: Generate and compile from canonical Bridge with Rust
+      - name: Generate and compile from canonical Fabric Bridge with Rust
         env:
           MINESPORT_HEADLESS_BRIDGE_PREPARE: '1'
         run: |
           cargo run --manifest-path desktop/Cargo.toml --bin bridge-prepare -- \
+            --loader fabric \
             --version '${{ matrix.minecraft }}' \
             --output dist/recipe-bridges
-          test -s "dist/recipe-bridges/minesport-bridge-${{ matrix.minecraft }}.jar"
+          test -s "dist/recipe-bridges/minesport-bridge-fabric-${{ matrix.minecraft }}.jar"
       - uses: actions/upload-artifact@v7
         with:
-          name: minesport-bridge-${{ matrix.minecraft }}
+          name: minesport-bridge-fabric-${{ matrix.minecraft }}
           path: dist/recipe-bridges/*.jar
           if-no-files-found: error
           retention-days: 7
 
   bridge-1-19-clean:
-    name: Minecraft 1.19 Rust recipe family compiles
+    name: Minecraft 1.19 Fabric recipe family compiles
     if: always()
     needs: bridge-1-19
     runs-on: ubuntu-latest
@@ -87,5 +88,5 @@ jobs:
         env:
           RESULT: ${{ needs.bridge-1-19.result }}
         run: |
-          echo "1.19 Rust Bridge matrix result: $RESULT"
+          echo "1.19 Fabric Bridge matrix result: $RESULT"
           test "$RESULT" = success
