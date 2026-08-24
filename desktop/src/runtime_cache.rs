@@ -93,6 +93,14 @@ impl RuntimeCacheManager {
             return Ok(false);
         }
 
+        let same_identity = state.version == version
+            && state.loader.eq_ignore_ascii_case(&loader)
+            && same_path(&state.mods_path, &mods_path);
+        if !same_identity || force {
+            state.fingerprint.clear();
+            state.ready_path = PathBuf::new();
+        }
+
         let operation = logger
             .operation("RuntimeRegistryPrepareFullModelCache")
             .field("version", &version)
@@ -108,10 +116,6 @@ impl RuntimeCacheManager {
         state.listeners.clear();
         state.listeners.push(Box::new(listener));
         state.operation = Some(operation);
-        if force {
-            state.fingerprint.clear();
-            state.ready_path = PathBuf::new();
-        }
         drop(state);
 
         let manager = self.clone();
@@ -174,8 +178,28 @@ impl RuntimeCacheManager {
         }).unwrap_or(false)
     }
 
-    pub fn ready_path(&self, _version: &str, _mods_path: &Path) -> Option<PathBuf> {
-        None
+    /// Return the completed registry remembered for this instance. The first
+    /// export still waits on the completion event, while later exports avoid
+    /// starting/joining runtime preparation again. `ready_path_for_loader` is
+    /// preferred by loader-aware callers; this wrapper preserves Fabric API
+    /// compatibility for the existing desktop wiring.
+    pub fn ready_path(&self, version: &str, mods_path: &Path) -> Option<PathBuf> {
+        self.ready_path_for_loader(version, "fabric", mods_path)
+    }
+
+    pub fn ready_path_for_loader(&self, version: &str, loader: &str, mods_path: &Path) -> Option<PathBuf> {
+        let loader = normalize_loader(loader);
+        let state = self.state.lock().ok()?;
+        if state.running
+            || state.version != version
+            || !state.loader.eq_ignore_ascii_case(&loader)
+            || !same_path(&state.mods_path, mods_path)
+            || state.ready_path.as_os_str().is_empty()
+            || !state.ready_path.is_file()
+        {
+            return None;
+        }
+        Some(state.ready_path.clone())
     }
 
     pub fn fingerprint(&self, version: &str, mods_path: &Path) -> Option<String> {
@@ -307,17 +331,28 @@ mod tests {
     }
 
     #[test]
-    fn remembered_registry_is_not_export_authoritative_without_rehash() {
+    fn completed_registry_is_reused_only_for_matching_loader_instance() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("minesport-runtime-ready-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let registry = root.join("registry.data");
+        std::fs::write(&registry, b"ready").unwrap();
         let manager = RuntimeCacheManager::default();
         {
             let mut state = manager.state.lock().unwrap();
             state.version = "1.21.10".into();
             state.loader = "forge".into();
             state.mods_path = PathBuf::from("mods");
-            state.fingerprint = "old-exact-fingerprint".into();
-            state.ready_path = PathBuf::from("runtime-registry/old/registry.data");
+            state.fingerprint = "exact-fingerprint".into();
+            state.ready_path = registry.clone();
         }
+        assert_eq!(manager.ready_path_for_loader("1.21.10", "Forge", Path::new("mods")), Some(registry));
+        assert!(manager.ready_path_for_loader("1.21.10", "fabric", Path::new("mods")).is_none());
         assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
