@@ -36,9 +36,7 @@ public final class MinesportBridge {
         Minecraft client = Minecraft.getInstance();
         hideWorkerWindow(client);
         System.out.println("[MinesportBridge/Forge] Client resources ready — starting registry/model dump");
-        Thread thread = new Thread(() -> runDump(client), "MinesportBridge-Forge-Dump");
-        thread.setDaemon(false);
-        thread.start();
+        runDump(client);
     }
 
     private static void hideWorkerWindow(Minecraft client) {
@@ -126,7 +124,7 @@ public final class MinesportBridge {
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
             sender.flush();
             System.out.println("[MinesportBridge/Forge] Registry/model dump complete. Exiting worker.");
-            Thread.sleep(500);
+            Thread.sleep(250);
         } catch (Exception error) {
             System.err.println("[MinesportBridge/Forge] Fatal: " + error.getMessage());
             error.printStackTrace();
@@ -136,25 +134,15 @@ public final class MinesportBridge {
     }
 
     private static List<List<BlockVariant>> extractBatchSafe(Minecraft client, List<Block> blocks) {
-        try {
-            var future = new java.util.concurrent.CompletableFuture<List<List<BlockVariant>>>();
-            client.execute(() -> {
-                var result = new ArrayList<List<BlockVariant>>(blocks.size());
-                for (Block block : blocks) {
-                    try {
-                        result.add(BlockGeometryExtractor.extractBlock(block, client));
-                    } catch (Exception ignored) {
-                        result.add(List.of());
-                    }
-                }
-                future.complete(result);
-            });
-            return future.get(60, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (Exception error) {
-            var fallback = new ArrayList<List<BlockVariant>>(blocks.size());
-            for (int i = 0; i < blocks.size(); i++) fallback.add(List.of());
-            return fallback;
+        var result = new ArrayList<List<BlockVariant>>(blocks.size());
+        for (Block block : blocks) {
+            try {
+                result.add(BlockGeometryExtractor.extractBlock(block, client));
+            } catch (Exception ignored) {
+                result.add(List.of());
+            }
         }
+        return result;
     }
 
     private static List<LightState> extractLightStates(Block block) {
