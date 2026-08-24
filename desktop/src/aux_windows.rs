@@ -244,7 +244,7 @@ fn sync_debug_values(window: &DebugConsoleWindow, main: &MainWindow) {
     window.set_log_path(diagnostics::log_path().display().to_string().into());
 }
 
-pub fn show_runtime_cache<C>(main: &MainWindow, version: &str, stage: &str, progress: f32, on_cancel: C)
+pub fn show_runtime_cache<C>(_main: &MainWindow, version: &str, stage: &str, progress: f32, on_cancel: C)
 where
     C: Fn() + 'static,
 {
@@ -270,14 +270,7 @@ where
                 on_cancel();
             });
 
-            let main_weak = main.as_weak();
             window.on_loader_finished(move || {
-                if let Some(main) = main_weak.upgrade() {
-                    if let Err(error) = main.show() {
-                        diagnostics::append(&format!("Could not restore Minesport workbench: {error}"));
-                        return;
-                    }
-                }
                 RUNTIME_WINDOW.with(|slot| {
                     if let Some(window) = slot.borrow_mut().take() {
                         let _ = window.hide();
@@ -285,18 +278,10 @@ where
                 });
             });
 
-            window.window().on_close_requested({
-                let weak = window.as_weak();
-                move || {
-                    if let Some(window) = weak.upgrade() {
-                        window.set_cancelling(true);
-                        window.set_stage("Cancelling…".into());
-                        window.set_detail("".into());
-                        window.invoke_cancel();
-                    }
-                    CloseRequestResponse::KeepWindowShown
-                }
-            });
+            // Closing the progress window only hides the progress UI. The cache
+            // worker keeps running in the background; the explicit Cancel button
+            // is the only UI action that cancels runtime preparation.
+            window.window().on_close_requested(move || CloseRequestResponse::HideWindow);
             *slot = Some(window);
         }
 
@@ -313,9 +298,7 @@ where
             if created {
                 if let Err(error) = window.show() {
                     diagnostics::append(&format!("Could not show runtime-cache window: {error}"));
-                    return;
                 }
-                let _ = main.hide();
             }
         }
     });
@@ -331,20 +314,12 @@ pub fn mark_runtime_cache_cancelling() {
     });
 }
 
-pub fn close_runtime_cache(main: &MainWindow) {
-    let mut had_window = false;
+pub fn close_runtime_cache(_main: &MainWindow) {
     RUNTIME_WINDOW.with(|slot| {
-        if let Some(window) = slot.borrow().as_ref() {
-            had_window = true;
-            window.set_progress(1.0);
-            window.set_stage("Done".into());
-            window.set_detail("".into());
-            window.set_working(false);
+        if let Some(window) = slot.borrow_mut().take() {
+            let _ = window.hide();
         }
     });
-    if !had_window {
-        let _ = main;
-    }
 }
 
 fn copy_to_clipboard(text: &str) -> io::Result<()> {
