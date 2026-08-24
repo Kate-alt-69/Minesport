@@ -1,5 +1,6 @@
 use crate::{
-    MainWindow, aux_windows, blender, bridge_compat, diagnostics, heightmap_cache,
+    MainWindow, aux_windows, blender, bridge_compat,
+    bridge_family::{self, BridgeFamily}, diagnostics, heightmap_cache,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
     preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, selection, settings,
     viewer_selection, world_context, world_picker,
@@ -120,8 +121,8 @@ pub fn run() -> Result<()> {
 
     append_diagnostic(&ui, "Backend boundary: Minesport.exe --engine-worker → embedded Java engine");
     append_diagnostic(&ui, "Desktop: Rust + Slint · Fyne UI archived under /archive/go-fyne-ui");
-    append_diagnostic(&ui, "Runtime registry: Rust binary registry.data capture + isolated Fabric/Loom worker");
-    append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover the manifest-supported Fabric version families");
+    append_diagnostic(&ui, "Runtime registry: Rust binary registry.data capture + isolated loader worker");
+    append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover supported loader/version families");
     append_diagnostic(&ui, "World context: launcher/instance discovery is authoritative when available; folder inference is fallback-only");
     append_diagnostic(&ui, "3D selection: camera-derived voxel DDA + Fyne point A / point B box workflow");
     append_diagnostic(&ui, "3D camera: retained Rust scene supports MMB orbit, Shift+MMB pan, wheel dolly and F6 fit without IPC reruns");
@@ -426,7 +427,7 @@ fn activate_world(
             )
         });
 
-        if cache.is_running() && !cache.is_running_for(&version, &mods_path) {
+        if cache.is_running() && !cache.is_running_for_loader(&version, &loader, &mods_path) {
             cache.cancel();
         }
         viewer_selection::reset();
@@ -450,7 +451,7 @@ fn activate_world(
             },
             Ok(None) => None,
             Err(error) => {
-                diagnostics::append(&format!("Heightmap cache lookup failed for {}: {error:#}", path.display()));
+                diagnostics::append(&format!("Heightmap cache lookup failed for {}: {error:#}"));
                 None
             }
         };
@@ -464,7 +465,7 @@ fn activate_world(
             ui.set_world_name(name.into());
             ui.set_minecraft_version(version_for_ui.clone().into());
             ui.set_loader_type(loader_for_ui.clone().into());
-            ui.set_runtime_cache_status("PREPARING · full instance registry starts automatically".into());
+            ui.set_runtime_cache_status("STARTING".into());
             ui.set_preview_available(false);
             ui.set_preview_loading(false);
             ui.set_preview_focus_label("LMB point A · RMB point B · LMB again confirms".into());
@@ -496,7 +497,7 @@ fn activate_world(
 
         if runtime_registry_supported(&loader, &version, &mods_path) {
             let _ = start_runtime_cache_job(
-                weak.clone(), cache, engine, state, version, mods_path, false, false,
+                weak.clone(), cache, engine, state, version, loader, mods_path, false, false,
             );
         } else {
             let detail = runtime_registry_unavailable_reason(&loader, &version, &mods_path);
@@ -571,7 +572,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             return;
         }
 
-        if let Some(registry_path) = cache.ready_path(&version, &mods_path) {
+        if let Some(registry_path) = cache.ready_path_for_loader(&version, &loader, &mods_path) {
             attach_registry(&mut request, &registry_path);
             send_export_now(&ui, &engine, request, &output);
             return;
@@ -583,12 +584,12 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             }
             ui.set_task_active(false);
             ui.set_task_progress(0.01);
-            ui.set_task_title("RUNTIME CACHE".into());
-            ui.set_task_detail("Export is waiting for the full Minecraft registry…".into());
+            ui.set_task_title("WAITING FOR RUNTIME".into());
+            ui.set_task_detail("Export will start when the runtime registry is ready".into());
 
-            if !cache.is_running_for(&version, &mods_path) {
+            if !cache.is_running_for_loader(&version, &loader, &mods_path) {
                 if let Err(error) = start_runtime_cache_job(
-                    weak.clone(), cache.clone(), engine.clone(), state.clone(), version, mods_path, false, true,
+                    weak.clone(), cache.clone(), engine.clone(), state.clone(), version, loader, mods_path, false, true,
                 ) {
                     append_diagnostic(&ui, &format!("Runtime registry could not start: {error:#}"));
                     dispatch_pending_export(&weak, &engine, &state, None, Some(error.to_string()));
@@ -835,9 +836,6 @@ fn apply_viewer_box_selection(
     box_selection: viewer_selection::BoxSelection,
     count: usize,
 ) {
-    // Match archive/go-fyne-ui/ui/viewer_launcher.go exactly: confirming the
-    // embedded viewer clears custom/exact selection state and writes raw A/B
-    // cuboid bounds into the ordinary Box Selection controls.
     ui.set_selection_mode(0);
     ui.set_min_x(box_selection.min[0]);
     ui.set_min_y(box_selection.min[1]);
@@ -952,7 +950,7 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
             let confirmed = MessageDialog::new()
                 .set_level(MessageLevel::Warning)
                 .set_title("Remove all Minesport cache?")
-                .set_description("This deletes regenerable runtime registries, heightmaps/tooling caches and compiled compatibility Bridge cache. Worlds, exports and your real mods folder are not touched.")
+                .set_description("Delete all generated Minesport cache?")
                 .set_buttons(MessageButtons::YesNo)
                 .show();
             if confirmed != MessageDialogResult::Yes { return; }
@@ -961,7 +959,7 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
             if result.is_ok() { cache.invalidate(); }
             let _ = weak.upgrade_in_event_loop(move |ui| match result {
                 Ok(()) => {
-                    ui.set_runtime_cache_status("CLEARED · will rebuild when needed".into());
+                    ui.set_runtime_cache_status("CLEARED".into());
                     ui.set_task_title("CACHE REMOVED".into());
                     ui.set_task_detail(root.display().to_string().into());
                     append_diagnostic(&ui, &format!("Removed Minesport generated cache: {}", root.display()));
@@ -984,23 +982,13 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
         let world = PathBuf::from(ui.get_world_path().to_string());
         if !world.join("level.dat").is_file() { return; }
         let (version, loader, mods) = selected_runtime_context(&rebuild_state, &ui, &world);
-        if loader != "fabric" {
+        if !runtime_registry_supported(&loader, &version, &mods) {
             ui.set_task_title("RUNTIME CACHE".into());
-            ui.set_task_detail("Full runtime registry currently requires a Fabric instance.".into());
-            return;
-        }
-        if !bridge_compat::is_supported(&version) {
-            ui.set_task_title("RUNTIME CACHE".into());
-            ui.set_task_detail(format!("No embedded runtime compatibility recipe for Minecraft {version}.").into());
-            return;
-        }
-        if !mods.is_dir() {
-            ui.set_task_title("RUNTIME CACHE".into());
-            ui.set_task_detail(format!("Mods folder is unavailable: {}", mods.display()).into());
+            ui.set_task_detail(runtime_registry_unavailable_reason(&loader, &version, &mods).into());
             return;
         }
         if let Err(error) = start_runtime_cache_job(
-            weak.clone(), rebuild_cache.clone(), rebuild_engine.clone(), rebuild_state.clone(), version, mods, true, true,
+            weak.clone(), rebuild_cache.clone(), rebuild_engine.clone(), rebuild_state.clone(), version, loader, mods, true, true,
         ) {
             ui.set_task_title("RUNTIME CACHE FAILED".into());
             ui.set_task_detail(error.to_string().into());
@@ -1013,7 +1001,7 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
             aux_windows::mark_runtime_cache_cancelling();
             if let Some(ui) = weak.upgrade() {
                 ui.set_runtime_cache_status("CANCELLING…".into());
-                ui.set_task_detail("Stopping disposable Minecraft registry worker…".into());
+                ui.set_task_detail("Cancelling…".into());
                 append_diagnostic(&ui, "Runtime registry cancellation requested.");
             }
         }
@@ -1026,6 +1014,7 @@ fn start_runtime_cache_job(
     engine: JavaEngine,
     state: SharedState,
     version: String,
+    loader: String,
     mods_path: PathBuf,
     force: bool,
     foreground: bool,
@@ -1035,7 +1024,7 @@ fn start_runtime_cache_job(
     let completion_state = state.clone();
     let window_version = version.clone();
     let window_cache = cache.clone();
-    let started = cache.start(version.clone(), mods_path.clone(), force, move |event| match event {
+    let started = cache.start_for_loader(version.clone(), loader.clone(), mods_path.clone(), force, move |event| match event {
         RuntimeCacheEvent::Progress(progress) => {
             let detail = progress.message.clone();
             let version = window_version.clone();
@@ -1043,7 +1032,7 @@ fn start_runtime_cache_job(
             let percent = (progress.percent.clamp(0, 100) as f32) / 100.0;
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
                 ui.set_runtime_cache_busy(true);
-                ui.set_runtime_cache_status(format!("PREPARING · {}% · {}", progress.percent, detail).into());
+                ui.set_runtime_cache_status(format!("{}% · {}", progress.percent, detail).into());
                 aux_windows::show_runtime_cache(
                     &ui,
                     &version,
@@ -1075,7 +1064,7 @@ fn start_runtime_cache_job(
                     Ok(cache_result) => {
                         if foreground && !has_pending_export(&ui_completion_state) {
                             ui.set_task_progress(1.0);
-                            ui.set_task_title("RUNTIME REGISTRY READY".into());
+                            ui.set_task_title("RUNTIME READY".into());
                             ui.set_task_detail(cache_result.registry_path.display().to_string().into());
                         }
                         append_diagnostic(&ui, &format!("Full runtime registry ready: {} · fingerprint {}{}", cache_result.registry_path.display(), fingerprint, if reused { " · reused" } else { "" }));
@@ -1095,11 +1084,11 @@ fn start_runtime_cache_job(
 
     let _ = weak.upgrade_in_event_loop(move |ui| {
         ui.set_runtime_cache_busy(true);
-        ui.set_runtime_cache_status(if force { "PREPARING · forced full-registry rebuild" } else { "PREPARING · full instance registry" }.into());
+        ui.set_runtime_cache_status(if force { "REBUILDING" } else { "STARTING" }.into());
         ui.set_task_active(false);
         if foreground {
             ui.set_task_title("RUNTIME CACHE".into());
-            ui.set_task_detail(format!("Minecraft {version} · full registered block/model registry").into());
+            ui.set_task_detail(format!("Minecraft {version}").into());
         }
     });
     Ok(started)
@@ -1114,25 +1103,42 @@ fn dispatch_pending_export(
 ) {
     let request = state.lock().ok().and_then(|mut guard| guard.pending_export.take());
     let Some(mut request) = request else { return; };
-    if let Some(path) = registry_path {
-        attach_registry(&mut request, &path);
+
+    if let Some(error) = cache_error.as_ref() {
+        let error = first_line(error).to_string();
+        let weak = weak.clone();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            ui.set_task_active(false);
+            ui.set_task_title("EXPORT WAIT FAILED".into());
+            ui.set_task_detail(format!("Runtime registry failed: {error}").into());
+            append_diagnostic(&ui, &format!("Queued export was not started because runtime preparation failed: {error}"));
+        });
+        return;
     }
+
+    let Some(path) = registry_path else {
+        let weak = weak.clone();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            ui.set_task_active(false);
+            ui.set_task_title("EXPORT WAIT FAILED".into());
+            ui.set_task_detail("Runtime registry completed without a usable registry file".into());
+        });
+        return;
+    };
+    attach_registry(&mut request, &path);
+
     let engine = engine.clone();
     let weak = weak.clone();
     thread::spawn(move || {
         let send_result = engine.send_value(request);
         let _ = weak.upgrade_in_event_loop(move |ui| {
-            if let Some(error) = cache_error {
-                append_diagnostic(&ui, &format!("Runtime cache failed; continuing export with static resolver fallback: {}", first_line(&error)));
-            } else {
-                append_diagnostic(&ui, "Runtime registry attached to queued export.");
-            }
+            append_diagnostic(&ui, "Runtime registry attached to queued export.");
             match send_result {
                 Ok(()) => {
                     ui.set_task_active(true);
                     ui.set_task_progress(0.02);
                     ui.set_task_title("EXPORT".into());
-                    ui.set_task_detail("Runtime preparation complete · Java geometry export started".into());
+                    ui.set_task_detail("Runtime ready · export started".into());
                 }
                 Err(error) => {
                     ui.set_task_active(false);
@@ -1654,7 +1660,7 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
             ui.set_engine_ready(true);
             ui.set_engine_status("ENGINE READY".into());
             ui.set_task_title("READY".into());
-            ui.set_task_detail("Isolated Minesport backend + Java engine IPC online".into());
+            ui.set_task_detail("Ready".into());
             append_diagnostic(&ui, "IPC <- pong");
         }
         "progress" => {
@@ -1665,7 +1671,7 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         "done" => {
             ui.set_task_active(false);
             ui.set_task_progress(1.0);
-            ui.set_task_title("DONE · EXPORT COMPLETE".into());
+            ui.set_task_title("EXPORT COMPLETE".into());
             ui.set_task_detail(format!("{} · {} blocks · {} faces · {} vertices", response.output, response.block_count, response.quad_count, response.vertex_count).into());
             append_diagnostic(&ui, &format!("IPC <- done · {}", response.output));
         }
@@ -1848,18 +1854,27 @@ fn normalize_loader(value: &str) -> String {
 }
 
 fn runtime_registry_supported(loader: &str, version: &str, mods_path: &Path) -> bool {
-    loader.eq_ignore_ascii_case("fabric") && mods_path.is_dir() && bridge_compat::is_supported(version)
+    let Some(family) = BridgeFamily::parse(loader) else { return false; };
+    if !mods_path.is_dir() { return false; }
+    match family {
+        BridgeFamily::Fabric => bridge_compat::is_supported(version),
+        _ => bridge_family::is_supported(family, version),
+    }
 }
 
 fn runtime_registry_unavailable_reason(loader: &str, version: &str, mods_path: &Path) -> String {
-    if !loader.eq_ignore_ascii_case("fabric") {
-        return format!("STATIC RESOLVER · full runtime registry is currently Fabric-only for {loader}");
-    }
+    let Some(family) = BridgeFamily::parse(loader) else {
+        return format!("STATIC RESOLVER · unsupported loader: {loader}");
+    };
     if !mods_path.is_dir() {
         return format!("STATIC RESOLVER · mods folder unavailable: {}", mods_path.display());
     }
-    if !bridge_compat::is_supported(version) {
-        return format!("STATIC RESOLVER · no embedded runtime compatibility recipe for Minecraft {version}");
+    let supported = match family {
+        BridgeFamily::Fabric => bridge_compat::is_supported(version),
+        _ => bridge_family::is_supported(family, version),
+    };
+    if !supported {
+        return format!("STATIC RESOLVER · no embedded {} runtime recipe for Minecraft {version}", family.label());
     }
     "STATIC RESOLVER · runtime registry unavailable".to_string()
 }
@@ -1960,13 +1975,15 @@ mod tests {
     }
 
     #[test]
-    fn runtime_registry_support_follows_embedded_manifest_not_one_hardcoded_version() {
-        let mods = Path::new("mods");
+    fn runtime_registry_support_follows_embedded_manifests() {
         assert!(bridge_compat::is_supported("1.19.4"));
         assert!(bridge_compat::is_supported("1.21.11"));
         assert!(bridge_compat::is_supported("26.2"));
         assert!(!bridge_compat::is_supported("1.5"));
-        assert!(!runtime_registry_supported("forge", "1.21.10", mods));
+        assert!(bridge_family::is_supported(BridgeFamily::Forge, "1.21.10"));
+        assert!(bridge_family::is_supported(BridgeFamily::NeoForge, "1.21.10"));
+        assert!(bridge_family::is_supported(BridgeFamily::Quilt, "1.21.10"));
+        assert!(!runtime_registry_supported("unknown-loader", "1.21.10", Path::new("mods")));
     }
 
     #[test]
