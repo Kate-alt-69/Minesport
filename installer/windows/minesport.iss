@@ -34,14 +34,11 @@ Name: "translator"; Description: "Install the Minesport 0.2.0 Blender translator
 
 [Dirs]
 Name: "{app}\tools"
-Name: "{commonpf64}\kastrick's_software\minesport\bridge-data\bundled\1.21.10"
-Name: "{commonpf64}\kastrick's_software\minesport\bridge-data\compiled"; Permissions: users-modify
 
 [Files]
+; Fabric, Forge, NeoForge and Quilt Bridge JARs are embedded in Minesport.exe.
 Source: "{#SourceDir}\dist\source\Minesport.exe"; DestDir: "{app}"; DestName: "minesport.exe"; Flags: ignoreversion
 Source: "{#SourceDir}\installer\windows\install-blender.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
-Source: "{#SourceDir}\bridge-versions\manifest.json"; DestDir: "{commonpf64}\kastrick's_software\minesport\bridge-data"; Flags: ignoreversion
-Source: "{#SourceDir}\dist\bundled-bridge\minesport-bridge-0.2.0.jar"; DestDir: "{commonpf64}\kastrick's_software\minesport\bridge-data\bundled\1.21.10"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Minesport"; Filename: "{app}\minesport.exe"; WorkingDir: "{app}"
@@ -52,5 +49,6 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
 Filename: "{app}\minesport.exe"; Parameters: "--install-blender-translator"; StatusMsg: "Installing Minesport 0.2.0 Blender translator..."; Flags: waituntilterminated runhidden runascurrentuser; Tasks: translator
 
 [UninstallDelete]
+; Remove bridge-data left by older pre-embedded installs.
 Type: filesandordirs; Name: "{commonpf64}\kastrick's_software\minesport\bridge-data"
 Type: filesandordirs; Name: "{app}\tools"
