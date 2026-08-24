@@ -3,7 +3,10 @@ use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
+    io::ErrorKind,
     path::{Component, Path, PathBuf},
+    thread,
+    time::Duration,
 };
 
 const BUNDLED_BRIDGES: &[(&str, &str, &str, &str)] = &[
@@ -116,6 +119,32 @@ fn safe_manifest_relative(value: &str) -> PathBuf {
     path
 }
 
+fn reset_directory(path: &Path, label: &str) {
+    if !path.exists() {
+        return;
+    }
+
+    const ATTEMPTS: u32 = 24;
+    for attempt in 1..=ATTEMPTS {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return,
+            Err(error) if error.kind() == ErrorKind::NotFound => return,
+            Err(error) if attempt < ATTEMPTS => {
+                // Windows Defender, Explorer, IDE indexers, or a just-exited
+                // compiler can briefly retain a directory handle. Do not turn
+                // a transient sharing violation into a failed release build.
+                let delay_ms = 50_u64.saturating_mul(attempt as u64).min(500);
+                thread::sleep(Duration::from_millis(delay_ms));
+                if !path.exists() {
+                    return;
+                }
+                let _ = error;
+            }
+            Err(error) => panic!("{label}: {}: {error}", path.display()),
+        }
+    }
+}
+
 fn stage_bridge_sources(root: &Path, out: &Path) {
     let manifest_path = root
         .join("minesport-bridge-fabric-versions")
@@ -142,9 +171,7 @@ fn stage_bridge_sources(root: &Path, out: &Path) {
     }
 
     let staged = out.join("bridge-source");
-    if staged.exists() {
-        fs::remove_dir_all(&staged).expect("reset staged Bridge source directory");
-    }
+    reset_directory(&staged, "reset staged Bridge source directory");
 
     for entry in files {
         let relative = entry
@@ -526,9 +553,10 @@ fn validate_bridge_recipes(root: &Path, out: &Path) {
         ("loom_version", "1.17.18"),
     ]);
     let validation_root = out.join("bridge-recipe-validation");
-    if validation_root.exists() {
-        fs::remove_dir_all(&validation_root).expect("reset bridge recipe validation directory");
-    }
+    reset_directory(
+        &validation_root,
+        "reset bridge recipe validation directory",
+    );
 
     let staged = out.join("bridge-source");
     let mut recipes = recipes.into_iter().collect::<Vec<_>>();
