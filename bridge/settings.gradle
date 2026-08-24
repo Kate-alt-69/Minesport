@@ -5,4 +5,4 @@ pluginManagement {
     }
 }
 
-rootProject.name = 'minesport-bridge'
+rootProject.name = 'minesport-bridge-fabric'
