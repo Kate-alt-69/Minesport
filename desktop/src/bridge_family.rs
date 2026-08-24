@@ -9,13 +9,13 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-static FORGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../bridge-forge-versions");
-static NEOFORGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../bridge-neoforge-versions");
-static QUILT_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../bridge-quilt-versions");
+static FORGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-forge-versions");
+static NEOFORGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-neoforge-versions");
+static QUILT_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-quilt-versions");
 
-const FORGE_MANIFEST_JSON: &str = include_str!("../../bridge-forge-versions/manifest.json");
-const NEOFORGE_MANIFEST_JSON: &str = include_str!("../../bridge-neoforge-versions/manifest.json");
-const QUILT_MANIFEST_JSON: &str = include_str!("../../bridge-quilt-versions/manifest.json");
+const FORGE_MANIFEST_JSON: &str = include_str!("../../minesport-bridge-forge-versions/manifest.json");
+const NEOFORGE_MANIFEST_JSON: &str = include_str!("../../minesport-bridge-neoforge-versions/manifest.json");
+const QUILT_MANIFEST_JSON: &str = include_str!("../../minesport-bridge-quilt-versions/manifest.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeFamily {
@@ -131,51 +131,51 @@ struct EmbeddedFile {
 }
 
 const FORGE_FILES: &[EmbeddedFile] = &[
-    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../bridge-forge/build.gradle"), executable: false },
-    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../bridge-forge/settings.gradle"), executable: false },
-    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../bridge-forge/gradle.properties"), executable: false },
-    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../bridge-forge/gradlew"), executable: true },
-    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../bridge-forge/gradlew.bat"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../bridge-forge/gradle/wrapper/gradle-wrapper.jar"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../bridge-forge/gradle/wrapper/gradle-wrapper.properties"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", bytes: include_bytes!("../../bridge-forge/src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java", bytes: include_bytes!("../../bridge-forge/src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../bridge-forge/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../bridge-forge/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java", bytes: include_bytes!("../../bridge-forge/src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java"), executable: false },
-    EmbeddedFile { path: "src/main/resources/META-INF/mods.toml", bytes: include_bytes!("../../bridge-forge/src/main/resources/META-INF/mods.toml"), executable: false },
+    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../minesport-bridge-forge/build.gradle"), executable: false },
+    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../minesport-bridge-forge/settings.gradle"), executable: false },
+    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../minesport-bridge-forge/gradle.properties"), executable: false },
+    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../minesport-bridge-forge/gradlew"), executable: true },
+    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../minesport-bridge-forge/gradlew.bat"), executable: false },
+    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../minesport-bridge-forge/gradle/wrapper/gradle-wrapper.jar"), executable: false },
+    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../minesport-bridge-forge/gradle/wrapper/gradle-wrapper.properties"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java"), executable: false },
+    EmbeddedFile { path: "src/main/resources/META-INF/mods.toml", bytes: include_bytes!("../../minesport-bridge-forge/src/main/resources/META-INF/mods.toml"), executable: false },
 ];
 
 const NEOFORGE_FILES: &[EmbeddedFile] = &[
-    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../bridge-neoforge/build.gradle"), executable: false },
-    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../bridge-neoforge/settings.gradle"), executable: false },
-    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../bridge-neoforge/gradle.properties"), executable: false },
-    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../bridge-neoforge/gradlew"), executable: true },
-    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../bridge-neoforge/gradlew.bat"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../bridge-neoforge/gradle/wrapper/gradle-wrapper.jar"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../bridge-neoforge/gradle/wrapper/gradle-wrapper.properties"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", bytes: include_bytes!("../../bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java", bytes: include_bytes!("../../bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java", bytes: include_bytes!("../../bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java"), executable: false },
-    EmbeddedFile { path: "src/main/resources/META-INF/neoforge.mods.toml", bytes: include_bytes!("../../bridge-neoforge/src/main/resources/META-INF/neoforge.mods.toml"), executable: false },
+    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../minesport-bridge-neoforge/build.gradle"), executable: false },
+    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../minesport-bridge-neoforge/settings.gradle"), executable: false },
+    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../minesport-bridge-neoforge/gradle.properties"), executable: false },
+    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../minesport-bridge-neoforge/gradlew"), executable: true },
+    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../minesport-bridge-neoforge/gradlew.bat"), executable: false },
+    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../minesport-bridge-neoforge/gradle/wrapper/gradle-wrapper.jar"), executable: false },
+    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../minesport-bridge-neoforge/gradle/wrapper/gradle-wrapper.properties"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java"), executable: false },
+    EmbeddedFile { path: "src/main/resources/META-INF/neoforge.mods.toml", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/resources/META-INF/neoforge.mods.toml"), executable: false },
 ];
 
 const QUILT_FILES: &[EmbeddedFile] = &[
-    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../bridge-quilt/build.gradle"), executable: false },
-    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../bridge-quilt/settings.gradle"), executable: false },
-    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../bridge-quilt/gradle.properties"), executable: false },
-    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../bridge-quilt/gradlew"), executable: true },
-    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../bridge-quilt/gradlew.bat"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../bridge-quilt/gradle/wrapper/gradle-wrapper.jar"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../bridge-quilt/gradle/wrapper/gradle-wrapper.properties"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", bytes: include_bytes!("../../bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java", bytes: include_bytes!("../../bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java", bytes: include_bytes!("../../bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java"), executable: false },
-    EmbeddedFile { path: "src/main/resources/fabric.mod.json", bytes: include_bytes!("../../bridge-quilt/src/main/resources/fabric.mod.json"), executable: false },
+    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../minesport-bridge-quilt/build.gradle"), executable: false },
+    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../minesport-bridge-quilt/settings.gradle"), executable: false },
+    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../minesport-bridge-quilt/gradle.properties"), executable: false },
+    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../minesport-bridge-quilt/gradlew"), executable: true },
+    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../minesport-bridge-quilt/gradlew.bat"), executable: false },
+    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../minesport-bridge-quilt/gradle/wrapper/gradle-wrapper.jar"), executable: false },
+    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../minesport-bridge-quilt/gradle/wrapper/gradle-wrapper.properties"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
+    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java"), executable: false },
+    EmbeddedFile { path: "src/main/resources/fabric.mod.json", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/resources/fabric.mod.json"), executable: false },
 ];
 
 pub fn is_supported(family: BridgeFamily, version: &str) -> bool {
