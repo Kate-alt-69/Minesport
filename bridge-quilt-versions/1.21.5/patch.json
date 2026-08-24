@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "description": "Adapt the canonical Quilt 1.21.10 Bridge to Minecraft 1.21.5, including the older collectParts output-list API.",
+  "description": "Adapt the canonical Quilt 1.21.10 Bridge to Minecraft 1.21.5.",
   "operations": [
     {"op":"set_property","file":"gradle.properties","key":"minecraft_version","value":"${minecraft_version}"},
     {"op":"set_property","file":"gradle.properties","key":"quilt_loader_version","value":"${quilt_loader_version}"},
     {"op":"set_property","file":"gradle.properties","key":"fabric_version","value":"${fabric_version}"},
     {"op":"replace","file":"src/main/resources/fabric.mod.json","from":"\"minecraft\": \">=1.21.9 <=1.21.10\"","to":"\"minecraft\": \">=1.21.5 <1.21.6\""},
-    {"op":"overlay","source":"1.21.5/BlockGeometryExtractor.java","target":"src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"}
+    {"op":"replace","file":"src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java","from":"net.minecraft.SharedConstants.getCurrentVersion().id()","to":"net.minecraft.SharedConstants.getCurrentVersion().getId()"}
   ]
 }
