@@ -17,7 +17,7 @@ loom {
     splitEnvironmentSourceSets()
 
     mods {
-        "minesport_bridge" {
+        "minesport_bridge_fabric" {
             sourceSet sourceSets.main
             sourceSet sourceSets.client
         }
