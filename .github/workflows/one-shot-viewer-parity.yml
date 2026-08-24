@@ -1,0 +1,227 @@
+name: One-shot viewer parity migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-viewer-parity.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply Rust/Slint viewer parity slice
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one migration match, found {count}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          app = "desktop/src/app.rs"
+          slint = "desktop/ui/workbench-v3.slint"
+
+          replace_once(app, '''enum PreviewCameraAction {
+              Orbit { dx: f32, dy: f32 },
+              Pan { dx: f32, dy: f32 },
+              Dolly(f32),
+              Fit,
+          }''', '''enum PreviewCameraAction {
+              Orbit { dx: f32, dy: f32 },
+              Pan { dx: f32, dy: f32 },
+              Dolly(f32),
+              Fit,
+              Highlight { min: [i32; 3], max: [i32; 3], count: usize },
+              ClearHighlight,
+          }''')
+
+          replace_once(app, '''            Self::Dolly(_) => "dollying",
+                      Self::Fit => "fitting",''', '''            Self::Dolly(_) => "dollying",
+                      Self::Fit => "fitting",
+                      Self::Highlight { .. } => "highlighting selection",
+                      Self::ClearHighlight => "clearing selection",''')
+
+          replace_once(app, '''    ui.on_preview_fit(move || {
+                  rerender_preview(weak.clone(), fit_state.clone(), PreviewCameraAction::Fit);
+              });
+
+              let weak = ui.as_weak();
+              ui.on_preview_click''', '''    ui.on_preview_fit(move || {
+                  rerender_preview(weak.clone(), fit_state.clone(), PreviewCameraAction::Fit);
+              });
+
+              let weak = ui.as_weak();
+              let clear_state = state.clone();
+              ui.on_preview_clear(move || {
+                  viewer_selection::reset();
+                  rerender_preview(weak.clone(), clear_state.clone(), PreviewCameraAction::ClearHighlight);
+              });
+
+              let weak = ui.as_weak();
+              let resize_state = state.clone();
+              ui.on_preview_resize(move |delta| {
+                  if delta == 0 { return; }
+                  let Some(ui) = weak.upgrade() else { return; };
+                  let pick_map = resize_state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+                  let Some(pick_map) = pick_map else {
+                      ui.set_preview_focus_label("Preview voxel picker is not ready yet".into());
+                      return;
+                  };
+                  let Some(box_selection) = viewer_selection::resize_point_b(pick_map.look_direction(), delta) else {
+                      ui.set_preview_focus_label("Set point A and point B before resizing".into());
+                      return;
+                  };
+                  let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
+                  drop(ui);
+                  rerender_preview(
+                      weak.clone(),
+                      resize_state.clone(),
+                      PreviewCameraAction::Highlight { min: box_selection.min, max: box_selection.max, count },
+                  );
+              });
+
+              let weak = ui.as_weak();
+              ui.on_preview_click''')
+
+          replace_once(app, '''            count,
+                  ));
+              });
+          }
+
+          fn apply_viewer_box_selection''', '''            count,
+                  ));
+                  rerender_preview(
+                      weak.clone(),
+                      state.clone(),
+                      PreviewCameraAction::Highlight { min: box_selection.min, max: box_selection.max, count },
+                  );
+              });
+          }
+
+          fn apply_viewer_box_selection''')
+
+          replace_once(app, '''            PreviewCameraAction::Dolly(steps) => pick_map.dolly(steps),
+                      PreviewCameraAction::Fit => pick_map.fit(),''', '''            PreviewCameraAction::Dolly(steps) => pick_map.dolly(steps),
+                      PreviewCameraAction::Fit => pick_map.fit(),
+                      PreviewCameraAction::Highlight { min, max, .. } => pick_map.highlight_box(min, max),
+                      PreviewCameraAction::ClearHighlight => pick_map.clear_highlight(),''')
+
+          replace_once(app, '''                ui.set_preview_block_count(rendered.block_count as i32);
+                          ui.set_preview_focus_label(format!(
+                              "3D camera · {} complete · LMB A · RMB B · LMB confirm · MMB look · wheel dolly",
+                              action.label()
+                          ).into());''', '''                ui.set_preview_block_count(rendered.block_count as i32);
+                          let focus = match action {
+                              PreviewCameraAction::Highlight { min, max, count } => format!(
+                                  "BOX PREVIEW · {count} solid block(s) · X {}..{} · Y {}..{} · Z {}..{} · E + wheel resizes · C clears",
+                                  min[0], max[0], min[1], max[1], min[2], max[2]
+                              ),
+                              PreviewCameraAction::ClearHighlight =>
+                                  "SELECTION CLEARED · LMB point A · RMB point B".to_string(),
+                              _ => format!(
+                                  "3D camera · {} complete · LMB A · RMB B · LMB confirm · MMB look · wheel dolly",
+                                  action.label()
+                              ),
+                          };
+                          ui.set_preview_focus_label(focus.into());''')
+
+          replace_once(slint, '''    in-out property <string> preview-focus-label: "LMB point A · RMB point B · LMB again confirms";
+              in-out property <int> preview-pick-button: 0;''', '''    in-out property <string> preview-focus-label: "LMB point A · RMB point B · LMB again confirms";
+              in-out property <int> preview-pick-button: 0;
+              private property <bool> preview-resize-held: false;''')
+
+          replace_once(slint, '''    callback preview-dolly(float);
+              callback preview-fit();''', '''    callback preview-dolly(float);
+              callback preview-fit();
+              callback preview-clear();
+              callback preview-resize(int);''')
+
+          replace_once(slint, '''        capture-key-pressed(event) => {
+                  if (root.blender-prompt-visible || root.settings-visible) {
+                      return reject;
+                  }
+                  if (event.text == Key.F6) {
+                      if (root.viewport-mode == 0 && root.map-available) {
+                          map-view.fit();
+                          return accept;
+                      }
+                      if (root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
+                          root.preview-fit();
+                          return accept;
+                      }
+                  }
+                  return reject;
+              }
+
+              VerticalLayout {''', '''        capture-key-pressed(event) => {
+                  if (root.blender-prompt-visible || root.settings-visible) {
+                      return reject;
+                  }
+                  if (root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
+                      if (event.text == "c" || event.text == "C") {
+                          root.preview-clear();
+                          return accept;
+                      }
+                      if (event.text == "e" || event.text == "E") {
+                          root.preview-resize-held = true;
+                          return accept;
+                      }
+                      if (event.text == "f" || event.text == "F") {
+                          root.preview-fit();
+                          return accept;
+                      }
+                  }
+                  if (event.text == Key.F6) {
+                      if (root.viewport-mode == 0 && root.map-available) {
+                          map-view.fit();
+                          return accept;
+                      }
+                      if (root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
+                          root.preview-fit();
+                          return accept;
+                      }
+                  }
+                  return reject;
+              }
+              capture-key-released(event) => {
+                  if (event.text == "e" || event.text == "E") {
+                      root.preview-resize-held = false;
+                      return accept;
+                  }
+                  return reject;
+              }
+
+              VerticalLayout {''')
+
+          replace_once(slint, '''                                        root.preview-dolly(event.delta-y > 0px ? 1.0 : -1.0);
+                                              return accept;''', '''                                        if (root.preview-resize-held) {
+                                              root.preview-resize(event.delta-y > 0px ? 1 : -1);
+                                          } else {
+                                              root.preview-dolly(event.delta-y > 0px ? 1.0 : -1.0);
+                                          }
+                                          return accept;''')
+          PY
+
+      - name: Commit migration and remove one-shot workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/one-shot-viewer-parity.yml
+          git config user.name "Minesport migration"
+          git config user.email "actions@github.com"
+          git add desktop/src/app.rs desktop/ui/workbench-v3.slint .github/workflows/one-shot-viewer-parity.yml
+          git diff --cached --check
+          git commit -m "Wire Slint viewer selection parity"
+          git push origin HEAD:main
