@@ -86,9 +86,9 @@ Write-Host ''
 $bundledDir = Join-Path $Root 'dist\bundled-bridge'
 $bridgeSpecs = @(
     @{ Name = 'Fabric'; Slug = 'fabric'; Project = 'minesport-bridge-fabric'; Env = 'MINESPORT_BRIDGE_FABRIC_JAR' },
-    @{ Name = 'Forge'; Slug = 'forge'; Project = 'bridge-forge'; Env = 'MINESPORT_BRIDGE_FORGE_JAR' },
-    @{ Name = 'NeoForge'; Slug = 'neoforge'; Project = 'bridge-neoforge'; Env = 'MINESPORT_BRIDGE_NEOFORGE_JAR' },
-    @{ Name = 'Quilt'; Slug = 'quilt'; Project = 'bridge-quilt'; Env = 'MINESPORT_BRIDGE_QUILT_JAR' }
+    @{ Name = 'Forge'; Slug = 'forge'; Project = 'minesport-bridge-forge'; Env = 'MINESPORT_BRIDGE_FORGE_JAR' },
+    @{ Name = 'NeoForge'; Slug = 'neoforge'; Project = 'minesport-bridge-neoforge'; Env = 'MINESPORT_BRIDGE_NEOFORGE_JAR' },
+    @{ Name = 'Quilt'; Slug = 'quilt'; Project = 'minesport-bridge-quilt'; Env = 'MINESPORT_BRIDGE_QUILT_JAR' }
 )
 $bundledBridges = @{}
 foreach ($bridge in $bridgeSpecs) {
