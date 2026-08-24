@@ -566,6 +566,15 @@ fn validate_bridge_recipes(root: &Path, out: &Path) {
     let _ = fs::remove_dir_all(validation_root);
 }
 
+fn write_placeholder_runtime_assets(out: &Path, label: &[u8]) {
+    fs::write(out.join("minesport-engine.jar"), label)
+        .expect("write placeholder engine payload");
+    for (_, _, _, embedded_name) in BUNDLED_BRIDGES {
+        fs::write(out.join(embedded_name), label)
+            .unwrap_or_else(|error| panic!("write placeholder {embedded_name} payload: {error}"));
+    }
+}
+
 fn main() {
     let manifest = manifest_dir();
     let root = repo_root();
@@ -589,6 +598,7 @@ fn main() {
         );
     }
     println!("cargo:rerun-if-env-changed=MINESPORT_HEADLESS_BRIDGE_PREPARE");
+    println!("cargo:rerun-if-env-changed=MINESPORT_FAST_CHECK");
     println!("cargo:rerun-if-changed={}", engine_libs.display());
     println!("cargo:rerun-if-changed={}", bridge_versions.display());
     println!("cargo:rerun-if-changed={}", blender_addon.display());
@@ -599,16 +609,19 @@ fn main() {
 
     let headless_recipe = env::var_os("MINESPORT_HEADLESS_BRIDGE_PREPARE").is_some();
     if headless_recipe {
-        fs::write(out.join("minesport-engine.jar"), b"headless-recipe-helper")
-            .expect("write headless engine placeholder");
-        for (_, _, _, embedded_name) in BUNDLED_BRIDGES {
-            fs::write(out.join(embedded_name), b"headless-recipe-helper")
-                .unwrap_or_else(|error| panic!("write headless {embedded_name} placeholder: {error}"));
-        }
+        write_placeholder_runtime_assets(&out, b"headless-recipe-helper");
         return;
     }
 
+    // Fast checks must still compile the real Slint contract, but they should
+    // never require a 20-minute Forge/NeoForge build just to satisfy include_bytes!.
+    // Small non-empty placeholders keep every Rust embedding path type-checked.
+    let fast_check = env::var_os("MINESPORT_FAST_CHECK").is_some();
     slint_build::compile(ui).expect("compile Minesport Slint UI");
+    if fast_check {
+        write_placeholder_runtime_assets(&out, b"minesport-fast-check-placeholder");
+        return;
+    }
 
     let engine = find_engine_jar().expect(
         "Minesport engine JAR not found. Build /engine first or set MINESPORT_ENGINE_JAR.",
