@@ -145,6 +145,7 @@ slint::slint! {
             MinesportLoader {
                 horizontal-stretch: 1;
                 active: root.working;
+                animate-working: false;
                 title: root.stage;
                 detail: root.detail;
                 progress: root.progress;
