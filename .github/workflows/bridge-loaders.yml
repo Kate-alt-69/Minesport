@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'bridge/**'
-      - 'bridge-versions/**'
+      - 'minesport-bridge-fabric/**'
+      - 'minesport-bridge-fabric-versions/**'
       - 'bridge-forge/**'
       - 'bridge-forge-versions/**'
       - 'bridge-neoforge/**'
@@ -18,6 +18,7 @@ on:
       - 'desktop/src/bridge_build.rs'
       - 'desktop/src/bridge_java.rs'
       - 'desktop/src/toolchain.rs'
+      - 'desktop/build.rs'
       - '.github/workflows/bridge-loaders.yml'
   workflow_dispatch:
 
@@ -29,6 +30,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Fabric
+            slug: fabric
+            project: minesport-bridge-fabric
           - name: Forge
             slug: forge
             project: bridge-forge
@@ -76,7 +80,7 @@ jobs:
         include:
           - name: Fabric
             slug: fabric
-            jar: minesport-bridge-1.21.5.jar
+            jar: minesport-bridge-fabric-1.21.5.jar
           - name: Forge
             slug: forge
             jar: minesport-bridge-forge-1.21.5.jar
