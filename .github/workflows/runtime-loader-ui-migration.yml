@@ -1,0 +1,103 @@
+name: Runtime Loader UI Migration
+
+on:
+  push:
+    paths:
+      - '.runtime-loader-ui-trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch loader-aware runtime UI
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('desktop/src/app.rs')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  '    MainWindow, aux_windows, blender, bridge_compat, diagnostics, heightmap_cache,\n',
+                  '    MainWindow, aux_windows, blender, bridge_compat,\n    bridge_family::{self, BridgeFamily}, diagnostics, heightmap_cache,\n',
+              ),
+              (
+                  '        if cache.is_running() && !cache.is_running_for(&version, &mods_path) {\n            cache.cancel();\n        }',
+                  '        if cache.is_running() && !cache.is_running_for_loader(&version, &loader, &mods_path) {\n            cache.cancel();\n        }',
+              ),
+              (
+                  '                weak.clone(), cache, engine, state, version, mods_path, false, false,\n',
+                  '                weak.clone(), cache, engine, state, version, loader, mods_path, false, false,\n',
+              ),
+              (
+                  '        if let Some(registry_path) = cache.ready_path(&version, &mods_path) {\n',
+                  '        if let Some(registry_path) = cache.ready_path_for_loader(&version, &loader, &mods_path) {\n',
+              ),
+              (
+                  '            if !cache.is_running_for(&version, &mods_path) {\n',
+                  '            if !cache.is_running_for_loader(&version, &loader, &mods_path) {\n',
+              ),
+              (
+                  '                    weak.clone(), cache.clone(), engine.clone(), state.clone(), version, mods_path, false, true,\n',
+                  '                    weak.clone(), cache.clone(), engine.clone(), state.clone(), version, loader, mods_path, false, true,\n',
+              ),
+              (
+                  '        if loader != "fabric" {\n            ui.set_task_title("RUNTIME CACHE".into());\n            ui.set_task_detail("Full runtime registry currently requires a Fabric instance.".into());\n            return;\n        }\n        if !bridge_compat::is_supported(&version) {\n            ui.set_task_title("RUNTIME CACHE".into());\n            ui.set_task_detail(format!("No embedded runtime compatibility recipe for Minecraft {version}.").into());\n            return;\n        }',
+                  '        if !runtime_registry_supported(&loader, &version, &mods) {\n            ui.set_task_title("RUNTIME CACHE".into());\n            ui.set_task_detail(runtime_registry_unavailable_reason(&loader, &version, &mods).into());\n            return;\n        }',
+              ),
+              (
+                  '            weak.clone(), rebuild_cache.clone(), rebuild_engine.clone(), rebuild_state.clone(), version, mods, true, true,\n',
+                  '            weak.clone(), rebuild_cache.clone(), rebuild_engine.clone(), rebuild_state.clone(), version, loader, mods, true, true,\n',
+              ),
+              (
+                  '    version: String,\n    mods_path: PathBuf,\n    force: bool,',
+                  '    version: String,\n    loader: String,\n    mods_path: PathBuf,\n    force: bool,',
+              ),
+              (
+                  '    let started = cache.start(version.clone(), mods_path.clone(), force, move |event| match event {',
+                  '    let started = cache.start_for_loader(version.clone(), loader.clone(), mods_path.clone(), force, move |event| match event {',
+              ),
+              (
+                  'fn runtime_registry_supported(loader: &str, version: &str, mods_path: &Path) -> bool {\n    loader.eq_ignore_ascii_case("fabric") && mods_path.is_dir() && bridge_compat::is_supported(version)\n}\n\nfn runtime_registry_unavailable_reason(loader: &str, version: &str, mods_path: &Path) -> String {\n    if !loader.eq_ignore_ascii_case("fabric") {\n        return format!("STATIC RESOLVER · full runtime registry is currently Fabric-only for {loader}");\n    }\n    if !mods_path.is_dir() {\n        return format!("STATIC RESOLVER · mods folder unavailable: {}", mods_path.display());\n    }\n    if !bridge_compat::is_supported(version) {\n        return format!("STATIC RESOLVER · no embedded runtime compatibility recipe for Minecraft {version}");\n    }\n    "STATIC RESOLVER · runtime registry unavailable".to_string()\n}',
+                  'fn runtime_registry_supported(loader: &str, version: &str, mods_path: &Path) -> bool {\n    let Some(family) = BridgeFamily::parse(loader) else { return false; };\n    mods_path.is_dir() && bridge_family::is_supported(family, version)\n}\n\nfn runtime_registry_unavailable_reason(loader: &str, version: &str, mods_path: &Path) -> String {\n    let Some(family) = BridgeFamily::parse(loader) else {\n        return format!("STATIC RESOLVER · unsupported loader: {loader}");\n    };\n    if !mods_path.is_dir() {\n        return format!("STATIC RESOLVER · mods folder unavailable: {}", mods_path.display());\n    }\n    if !bridge_family::is_supported(family, version) {\n        return format!("STATIC RESOLVER · no embedded {} runtime recipe for Minecraft {version}", family.label());\n    }\n    "STATIC RESOLVER · runtime registry unavailable".to_string()\n}',
+              ),
+              (
+                  '        assert!(!runtime_registry_supported("forge", "1.21.10", mods));\n',
+                  '        assert!(runtime_registry_supported("forge", "1.21.10", mods) == mods.is_dir());\n        assert!(bridge_family::is_supported(BridgeFamily::Forge, "1.21.10"));\n        assert!(bridge_family::is_supported(BridgeFamily::NeoForge, "1.21.10"));\n        assert!(bridge_family::is_supported(BridgeFamily::Quilt, "1.21.10"));\n',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one match, found {count}: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Format Rust
+        run: cargo fmt --manifest-path desktop/Cargo.toml --all
+
+      - name: Fast Rust + Slint check
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: cargo check --manifest-path desktop/Cargo.toml --all-targets
+
+      - name: Commit migration and remove one-shot files
+        shell: bash
+        run: |
+          rm -f .runtime-loader-ui-trigger
+          rm -f .github/workflows/runtime-loader-ui-migration.yml
+          git config user.name 'Minesport migration bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add desktop/src/app.rs .runtime-loader-ui-trigger .github/workflows/runtime-loader-ui-migration.yml
+          git commit -m 'Wire runtime cache across all loader families'
+          git push origin HEAD:main
