@@ -44,6 +44,14 @@ const _: fn(
 const _: fn(&preview::PreviewPickMap) -> anyhow::Result<preview::RenderedPreview> =
     preview::PreviewPickMap::clear_highlight;
 const _: fn(&preview::PreviewPickMap) -> [f32; 3] = preview::PreviewPickMap::look_direction;
+const _: fn(
+    &preview::PreviewPickMap,
+    viewer_camera::FlightInput,
+    f32,
+) -> anyhow::Result<preview::RenderedPreview> = preview::PreviewPickMap::move_flight;
+const _: fn(&preview::PreviewPickMap, f32) -> anyhow::Result<preview::RenderedPreview> =
+    preview::PreviewPickMap::adjust_flight_speed;
+const _: fn(&preview::PreviewPickMap) -> f32 = preview::PreviewPickMap::flight_speed;
 const _: fn([f32; 3], i32) -> Option<viewer_selection::BoxSelection> =
     viewer_selection::resize_point_b;
 const _: fn(f32, f32, viewer_camera::FlightInput, f32) -> [f32; 3] =

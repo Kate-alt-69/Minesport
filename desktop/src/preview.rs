@@ -1,4 +1,4 @@
-use crate::preview_picking;
+use crate::{preview_picking, viewer_camera};
 use anyhow::{Context, Result, anyhow, bail};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde::Deserialize;
@@ -78,6 +78,8 @@ struct PreviewCamera {
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
+    world_offset: Vec3,
+    move_speed: f32,
 }
 
 impl PreviewCamera {
@@ -88,6 +90,8 @@ impl PreviewCamera {
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
+            world_offset: Vec3::default(),
+            move_speed: viewer_camera::DEFAULT_MOVE_SPEED,
         }
     }
 
@@ -110,6 +114,31 @@ impl PreviewCamera {
                 .clamp(0.05, 64.0);
         }
         self
+    }
+
+    fn move_flight(mut self, input: viewer_camera::FlightInput, dt: f32) -> Self {
+        let delta = viewer_camera::movement_delta(self.yaw, self.move_speed, input, dt);
+        self.world_offset = self.world_offset.add(Vec3 {
+            x: delta[0],
+            y: delta[1],
+            z: delta[2],
+        });
+        self
+    }
+
+    fn adjust_flight_speed(mut self, wheel_steps: f32) -> Self {
+        self.move_speed = viewer_camera::adjusted_speed(self.move_speed, wheel_steps);
+        self
+    }
+
+    fn reset_view(self) -> Self {
+        let mut reset = Self::isometric_compat();
+        reset.move_speed = self.move_speed;
+        reset
+    }
+
+    fn scene_anchor(self, anchor: Vec3) -> Vec3 {
+        anchor.add(self.world_offset)
     }
 
     fn forward(self) -> Vec3 {
@@ -140,7 +169,7 @@ impl PreviewCamera {
         horizontal_scale: f32,
         vertical_scale: f32,
     ) -> ProjectedVertex {
-        let delta = point.sub(anchor);
+        let delta = point.sub(self.scene_anchor(anchor));
         let right = self.right();
         let up = self.up();
         let forward = self.forward();
@@ -173,7 +202,7 @@ impl PreviewView {
         let right_offset = (pixel_x - self.screen_x - camera.pan_x) / horizontal;
         let up_offset = -(pixel_y - self.screen_y - camera.pan_y) / vertical;
         let forward = camera.forward();
-        let plane = self.anchor
+        let plane = camera.scene_anchor(self.anchor)
             .add(camera.right().scale(right_offset))
             .add(camera.up().scale(up_offset));
         let origin = plane.add(forward.scale(self.ray_start_depth));
@@ -375,6 +404,10 @@ impl PreviewPickMap {
         self.camera.forward().as_array()
     }
 
+    pub fn flight_speed(&self) -> f32 {
+        self.camera.move_speed
+    }
+
     pub fn highlight_box(&self, min: [i32; 3], max: [i32; 3]) -> Result<RenderedPreview> {
         let low = [min[0].min(max[0]), min[1].min(max[1]), min[2].min(max[2])];
         let high = [min[0].max(max[0]), min[1].max(max[1]), min[2].max(max[2])];
@@ -397,8 +430,20 @@ impl PreviewPickMap {
         render_scene(self.scene.clone(), self.camera.dolly(wheel_steps), self.highlight)
     }
 
+    pub fn move_flight(&self, input: viewer_camera::FlightInput, dt: f32) -> Result<RenderedPreview> {
+        render_scene(self.scene.clone(), self.camera.move_flight(input, dt), self.highlight)
+    }
+
+    pub fn adjust_flight_speed(&self, wheel_steps: f32) -> Result<RenderedPreview> {
+        render_scene(
+            self.scene.clone(),
+            self.camera.adjust_flight_speed(wheel_steps),
+            self.highlight,
+        )
+    }
+
     pub fn fit(&self) -> Result<RenderedPreview> {
-        render_scene(self.scene.clone(), PreviewCamera::isometric_compat(), self.highlight)
+        render_scene(self.scene.clone(), self.camera.reset_view(), self.highlight)
     }
 }
 
@@ -656,6 +701,7 @@ fn scene_depth_span(
     max_exclusive: [i32; 3],
 ) -> (f32, f32) {
     let forward = camera.forward();
+    let anchor = camera.scene_anchor(anchor);
     let mut min_depth = f32::INFINITY;
     let mut max_depth = f32::NEG_INFINITY;
     for x in [min[0] as f32, max_exclusive[0] as f32] {
@@ -1043,9 +1089,21 @@ mod tests {
         assert!(orbited.pick_map.highlight.is_some());
         let panned = orbited.pick_map.pan(12.0, 8.0).unwrap();
         let zoomed = panned.pick_map.dolly(1.0).unwrap();
-        let fitted = zoomed.pick_map.fit().unwrap();
+        let moved = zoomed.pick_map.move_flight(
+            viewer_camera::FlightInput { forward: true, ..viewer_camera::FlightInput::default() },
+            1.0,
+        ).unwrap();
+        assert!(moved.pick_map.camera.world_offset.x.abs() > 0.01 || moved.pick_map.camera.world_offset.z.abs() > 0.01);
+        assert!((moved.pick_map.flight_speed() - viewer_camera::DEFAULT_MOVE_SPEED).abs() < f32::EPSILON);
+        let faster = moved.pick_map.adjust_flight_speed(1.0).unwrap();
+        assert!((faster.pick_map.flight_speed() - 13.2).abs() < 0.001);
+        let fitted = faster.pick_map.fit().unwrap();
         assert_eq!(fitted.block_count, 4);
         assert_eq!(fitted.pick_map.coordinates_for_id("minecraft:stone").len(), 3);
         assert_eq!(fitted.pick_map.look_direction(), PreviewCamera::isometric_compat().forward().as_array());
+        assert!((fitted.pick_map.flight_speed() - 13.2).abs() < 0.001);
+        assert!(fitted.pick_map.camera.world_offset.x.abs() < f32::EPSILON);
+        assert!(fitted.pick_map.camera.world_offset.y.abs() < f32::EPSILON);
+        assert!(fitted.pick_map.camera.world_offset.z.abs() < f32::EPSILON);
     }
 }
