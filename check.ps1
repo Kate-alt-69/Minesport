@@ -20,7 +20,7 @@ $env:MINESPORT_FAST_CHECK = '1'
 
 try {
     Write-Host '============================================' -ForegroundColor Cyan
-    Write-Host ' Minesport FAST ERROR CHECK' -ForegroundColor Cyan
+    Write-Host ' Minesport ERROR CHECK' -ForegroundColor Cyan
     Write-Host '============================================' -ForegroundColor Cyan
     Write-Host 'No Fabric/Forge/NeoForge/Quilt or Java-engine Gradle build.' -ForegroundColor DarkGray
     Write-Host 'Checking Rust + Slint + build.rs + -D warnings only.' -ForegroundColor DarkGray
@@ -34,7 +34,7 @@ try {
         Write-Host 'Running cargo check --all-targets ...' -ForegroundColor Yellow
         & cargo check --all-targets
         if ($LASTEXITCODE -ne 0) {
-            throw 'FAST ERROR CHECK FAILED. Fix the error above before running the full build.'
+            throw 'ERROR CHECK FAILED. Fix the error above before running the full build.'
         }
     } finally {
         Pop-Location

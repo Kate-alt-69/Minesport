@@ -246,7 +246,7 @@ Write-Host ''
 
 # Run before --fresh removes old outputs. On an existing development tree this
 # catches Rust/Slint/build.rs errors before any expensive loader toolchain.
-Write-Host '[0/3] FAST ERROR CHECK...' -ForegroundColor Yellow
+Write-Host '[0/3] ERROR CHECK...' -ForegroundColor Yellow
 Invoke-FastCheck -AllowMissingArtifacts
 Write-Host ''
 

@@ -185,7 +185,7 @@ fast_check() {
   fi
 
   echo '============================================'
-  echo ' Minesport FAST ERROR CHECK'
+  echo ' Minesport ERROR CHECK'
   echo '============================================'
   echo 'No Fabric/Forge/NeoForge/Quilt Gradle build.'
   echo 'Checking Rust + Slint + build.rs + -D warnings only.'
@@ -224,7 +224,7 @@ else
 fi
 printf '\n'
 
-printf '%s\n' '[0/3] FAST ERROR CHECK...'
+printf '%s\n' '[0/3] ERROR CHECK...'
 fast_check
 printf '\n'
 
