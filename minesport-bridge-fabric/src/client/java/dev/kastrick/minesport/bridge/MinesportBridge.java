@@ -28,18 +28,10 @@ public class MinesportBridge implements ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
             hideWorkerWindow(client);
             System.out.println("[MinesportBridge] Client resources ready — starting registry/model dump");
-            Thread t = new Thread(() -> runDump(client), "MinesportBridge-Dump");
-            t.setDaemon(false);
-            t.start();
+            runDump(client);
         });
     }
 
-    /**
-     * Mojang renamed Window's native-handle accessor across supported versions
-     * (getWindow -> handle, with getHandle used by some mapping sets). Keep the
-     * optional worker-window hiding out of the compile-time compatibility
-     * surface so one cosmetic optimization cannot break the Bridge matrix.
-     */
     private void hideWorkerWindow(Minecraft client) {
         if (!"1".equals(System.getenv("MINESPORT_BRIDGE_WORKER"))) return;
         try {
@@ -47,8 +39,6 @@ public class MinesportBridge implements ClientModInitializer {
             long handle = findWindowHandle(window);
             if (handle != 0L) GLFW.glfwHideWindow(handle);
         } catch (Throwable ignored) {
-            // Hiding is best-effort only. Registry/model capture is still valid
-            // if a compatibility target exposes the handle under another name.
         }
     }
 
@@ -60,7 +50,6 @@ public class MinesportBridge implements ClientModInitializer {
                 Object value = method.invoke(window);
                 if (value instanceof Number number) return number.longValue();
             } catch (ReflectiveOperationException ignored) {
-                // Try the next mapping-era name.
             }
         }
         return 0L;
@@ -115,11 +104,6 @@ public class MinesportBridge implements ClientModInitializer {
                     String loaderType = vanillaMapping != null
                         ? "polymer"
                         : (id.getNamespace().equals("minecraft") ? "vanilla" : "fabric");
-
-                    // Geometry comes straight from Minecraft's already-baked
-                    // client models. Batching only removes thousands of tiny
-                    // client-thread execute/future round-trips; it does not
-                    // change the model source or geometry fidelity.
                     List<BlockVariant> variants = index < extracted.size()
                         ? extracted.get(index)
                         : List.of();
@@ -131,9 +115,6 @@ public class MinesportBridge implements ClientModInitializer {
                     }
                 }
 
-                // Make one completed extraction batch visible to Rust. The
-                // socket remains fully buffered between batches instead of
-                // paying a flush syscall for every individual block packet.
                 sender.flush();
                 System.out.println("[MinesportBridge] Baked model extraction " + end + "/" + allBlocks.size());
             }
@@ -141,8 +122,7 @@ public class MinesportBridge implements ClientModInitializer {
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
             sender.flush();
             System.out.println("[MinesportBridge] Registry/model dump complete. Exiting worker.");
-            Thread.sleep(500);
-
+            Thread.sleep(250);
         } catch (Exception e) {
             System.err.println("[MinesportBridge] Fatal: " + e.getMessage());
             e.printStackTrace();
@@ -152,25 +132,15 @@ public class MinesportBridge implements ClientModInitializer {
     }
 
     private List<List<BlockVariant>> extractBatchSafe(Minecraft client, List<Block> blocks) {
-        try {
-            var future = new java.util.concurrent.CompletableFuture<List<List<BlockVariant>>>();
-            client.execute(() -> {
-                var result = new ArrayList<List<BlockVariant>>(blocks.size());
-                for (Block block : blocks) {
-                    try {
-                        result.add(BlockGeometryExtractor.extractBlock(block, client));
-                    } catch (Exception ignored) {
-                        result.add(List.of());
-                    }
-                }
-                future.complete(result);
-            });
-            return future.get(60, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (Exception e) {
-            var fallback = new ArrayList<List<BlockVariant>>(blocks.size());
-            for (int i = 0; i < blocks.size(); i++) fallback.add(List.of());
-            return fallback;
+        var result = new ArrayList<List<BlockVariant>>(blocks.size());
+        for (Block block : blocks) {
+            try {
+                result.add(BlockGeometryExtractor.extractBlock(block, client));
+            } catch (Exception ignored) {
+                result.add(List.of());
+            }
         }
+        return result;
     }
 
     private List<LightState> extractLightStates(Block block) {
