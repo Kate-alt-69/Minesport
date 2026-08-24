@@ -36,6 +36,8 @@ enum PreviewCameraAction {
     Pan { dx: f32, dy: f32 },
     Dolly(f32),
     Fit,
+    Highlight { min: [i32; 3], max: [i32; 3], count: usize },
+    ClearHighlight,
 }
 
 impl PreviewCameraAction {
@@ -45,6 +47,8 @@ impl PreviewCameraAction {
             Self::Pan { .. } => "panning",
             Self::Dolly(_) => "dollying",
             Self::Fit => "fitting",
+            Self::Highlight { .. } => "highlighting selection",
+            Self::ClearHighlight => "clearing selection",
         }
     }
 }
@@ -723,6 +727,36 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     });
 
     let weak = ui.as_weak();
+    let clear_state = state.clone();
+    ui.on_preview_clear(move || {
+        viewer_selection::reset();
+        rerender_preview(weak.clone(), clear_state.clone(), PreviewCameraAction::ClearHighlight);
+    });
+
+    let weak = ui.as_weak();
+    let resize_state = state.clone();
+    ui.on_preview_resize(move |delta| {
+        if delta == 0 { return; }
+        let Some(ui) = weak.upgrade() else { return; };
+        let pick_map = resize_state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+        let Some(pick_map) = pick_map else {
+            ui.set_preview_focus_label("Preview voxel picker is not ready yet".into());
+            return;
+        };
+        let Some(box_selection) = viewer_selection::resize_point_b(pick_map.look_direction(), delta) else {
+            ui.set_preview_focus_label("Set point A and point B before resizing".into());
+            return;
+        };
+        let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
+        drop(ui);
+        rerender_preview(
+            weak.clone(),
+            resize_state.clone(),
+            PreviewCameraAction::Highlight { min: box_selection.min, max: box_selection.max, count },
+        );
+    });
+
+    let weak = ui.as_weak();
     ui.on_preview_click(move |mouse_x, mouse_y, view_width, view_height| {
         let Some(ui) = weak.upgrade() else { return; };
         let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
@@ -775,7 +809,7 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         };
         let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
         ui.set_preview_focus_label(format!(
-            "POINT B · {},{},{} · {} solid block(s) · LMB confirms · C clears",
+            "POINT B · {},{},{} · {} solid block(s) · LMB confirms · E+wheel resizes · C clears",
             point[0], point[1], point[2], count
         ).into());
         append_diagnostic(&ui, &format!(
@@ -786,6 +820,12 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
             box_selection.min[2], box_selection.max[2],
             count,
         ));
+        drop(ui);
+        rerender_preview(
+            weak.clone(),
+            state.clone(),
+            PreviewCameraAction::Highlight { min: box_selection.min, max: box_selection.max, count },
+        );
     });
 }
 
@@ -845,6 +885,8 @@ fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: P
             PreviewCameraAction::Pan { dx, dy } => pick_map.pan(dx, dy),
             PreviewCameraAction::Dolly(steps) => pick_map.dolly(steps),
             PreviewCameraAction::Fit => pick_map.fit(),
+            PreviewCameraAction::Highlight { min, max, .. } => pick_map.highlight_box(min, max),
+            PreviewCameraAction::ClearHighlight => pick_map.clear_highlight(),
         };
 
         if let Ok(rendered) = &rendered {
@@ -864,10 +906,19 @@ fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: P
                 ui.set_preview_available(true);
                 ui.set_preview_loading(false);
                 ui.set_preview_block_count(rendered.block_count as i32);
-                ui.set_preview_focus_label(format!(
-                    "3D camera · {} complete · LMB A · RMB B · LMB confirm · MMB look · wheel dolly",
-                    action.label()
-                ).into());
+                let focus = match action {
+                    PreviewCameraAction::Highlight { min, max, count } => format!(
+                        "BOX PREVIEW · {count} solid block(s) · X {}..{} · Y {}..{} · Z {}..{} · E + wheel resizes · C clears",
+                        min[0], max[0], min[1], max[1], min[2], max[2]
+                    ),
+                    PreviewCameraAction::ClearHighlight =>
+                        "SELECTION CLEARED · LMB point A · RMB point B".to_string(),
+                    _ => format!(
+                        "3D camera · {} complete · LMB A · RMB B · LMB confirm · MMB look · wheel dolly",
+                        action.label()
+                    ),
+                };
+                ui.set_preview_focus_label(focus.into());
             }
             Err(error) => {
                 ui.set_preview_loading(false);
