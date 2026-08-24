@@ -1,4 +1,8 @@
-use crate::{bridge_compat, bridge_java, diagnostics, registry, runtime, toolchain};
+use crate::{
+    bridge_compat,
+    bridge_family::{self, BridgeFamily},
+    bridge_java, diagnostics, registry, runtime, toolchain,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use std::{
@@ -45,10 +49,51 @@ pub fn prepare_full_registry<F>(version: &str, mods_path: &Path, force: bool, pr
 where
     F: FnMut(Progress) + Send,
 {
-    prepare_full_registry_cancellable(version, mods_path, force, Arc::new(AtomicBool::new(false)), progress)
+    prepare_full_registry_for_loader("fabric", version, mods_path, force, progress)
+}
+
+pub fn prepare_full_registry_for_loader<F>(
+    loader: &str,
+    version: &str,
+    mods_path: &Path,
+    force: bool,
+    progress: F,
+) -> Result<CacheResult>
+where
+    F: FnMut(Progress) + Send,
+{
+    prepare_full_registry_cancellable_for_loader(
+        loader,
+        version,
+        mods_path,
+        force,
+        Arc::new(AtomicBool::new(false)),
+        progress,
+    )
 }
 
 pub fn prepare_full_registry_cancellable<F>(
+    version: &str,
+    mods_path: &Path,
+    force: bool,
+    cancel: Arc<AtomicBool>,
+    progress: F,
+) -> Result<CacheResult>
+where
+    F: FnMut(Progress) + Send,
+{
+    prepare_full_registry_cancellable_for_loader(
+        "fabric",
+        version,
+        mods_path,
+        force,
+        cancel,
+        progress,
+    )
+}
+
+pub fn prepare_full_registry_cancellable_for_loader<F>(
+    loader: &str,
     version: &str,
     mods_path: &Path,
     force: bool,
@@ -58,20 +103,32 @@ pub fn prepare_full_registry_cancellable<F>(
 where
     F: FnMut(Progress) + Send,
 {
+    let family = BridgeFamily::parse(loader)
+        .ok_or_else(|| anyhow!("unsupported runtime Bridge loader {loader:?}"))?;
     let version = bridge_compat::normalize_version(version)
         .ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
-    if !bridge_compat::is_supported(&version) {
-        bail!("Minesport has no embedded Fabric compatibility recipe for Minecraft {version}");
+    if !bridge_family::is_supported(family, &version) {
+        bail!(
+            "Minesport has no embedded {} compatibility recipe for Minecraft {version}",
+            family.label()
+        );
     }
-    if !mods_path.is_dir() { bail!("mods folder is unavailable: {}", mods_path.display()); }
-    if cancel.load(Ordering::Relaxed) { bail!("runtime cache cancelled"); }
+    if !mods_path.is_dir() {
+        bail!("mods folder is unavailable: {}", mods_path.display());
+    }
+    if cancel.load(Ordering::Relaxed) {
+        bail!("runtime cache cancelled");
+    }
 
     progress(Progress { percent: 0, message: "Starting runtime cache…".into() });
     let _cache_lease = runtime::acquire_generated_cache_lease()?;
 
     progress(Progress { percent: 1, message: "Checking mods…".into() });
-    let fingerprint = registry::mods_fingerprint(mods_path)?;
-    if cancel.load(Ordering::Relaxed) { bail!("runtime cache cancelled"); }
+    let raw_fingerprint = registry::mods_fingerprint(mods_path)?;
+    let fingerprint = loader_cache_fingerprint(family, &raw_fingerprint);
+    if cancel.load(Ordering::Relaxed) {
+        bail!("runtime cache cancelled");
+    }
 
     let cache_root = runtime::cache_root();
     let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);
@@ -81,21 +138,32 @@ where
     }
 
     progress(Progress { percent: 4, message: "Preparing worker…".into() });
-    let plan = create_workspace(&version, mods_path, |update| {
+    let plan = create_workspace(family, &version, mods_path, |update| {
         progress(Progress {
             percent: update.percent.clamp(4, 38),
-            message: if update.detail.is_empty() { update.stage } else { format!("{} · {}", update.stage, update.detail) },
+            message: if update.detail.is_empty() {
+                update.stage
+            } else {
+                format!("{} · {}", update.stage, update.detail)
+            },
         });
     })?;
     let workspace = plan.workspace;
     let cleanup = WorkspaceCleanup(workspace.clone());
-    if cancel.load(Ordering::Relaxed) { bail!("runtime cache cancelled"); }
+    if cancel.load(Ordering::Relaxed) {
+        bail!("runtime cache cancelled");
+    }
 
     progress(Progress { percent: 40, message: "Checking JDK…".into() });
     let java_home = toolchain::ensure_jdk(plan.java, |update| {
-        progress(Progress { percent: update.percent.clamp(40, 54), message: update.message });
+        progress(Progress {
+            percent: update.percent.clamp(40, 54),
+            message: update.message,
+        });
     })?;
-    if cancel.load(Ordering::Relaxed) { bail!("runtime cache cancelled"); }
+    if cancel.load(Ordering::Relaxed) {
+        bail!("runtime cache cancelled");
+    }
 
     let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);
     let (capture_tx, capture_rx) = mpsc::sync_channel::<Result<PathBuf>>(1);
@@ -121,15 +189,19 @@ where
                 _ => {}
             },
         );
-        if !announced { let _ = listen_tx.send(Err(anyhow!("registry receiver stopped before listening"))); }
+        if !announced {
+            let _ = listen_tx.send(Err(anyhow!("registry receiver stopped before listening")));
+        }
         let _ = capture_tx.send(result);
     });
 
-    listen_rx.recv_timeout(Duration::from_secs(5)).context("wait for Rust runtime registry receiver")??;
+    listen_rx
+        .recv_timeout(Duration::from_secs(5))
+        .context("wait for Rust runtime registry receiver")??;
 
     progress(Progress { percent: 55, message: "Starting Minecraft…".into() });
     let log_path = workspace.join("runtime-worker.log");
-    let mut child = start_gradle_worker(&workspace, &log_path, &java_home)?;
+    let mut child = start_gradle_worker(family, &workspace, &log_path, &java_home)?;
     progress(Progress { percent: 62, message: "Loading runtime models…".into() });
 
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
@@ -141,7 +213,9 @@ where
         }
 
         while let Ok((blocks, total_blocks)) = capture_progress_rx.try_recv() {
-            if blocks <= last_captured_blocks { continue; }
+            if blocks <= last_captured_blocks {
+                continue;
+            }
             last_captured_blocks = blocks;
             let capture_percent = capture_progress_percent(blocks, total_blocks);
             let message = if total_blocks > 0 {
@@ -166,7 +240,13 @@ where
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 stop_child(&mut child);
-                return Err(runtime_worker_failure(&workspace, &version, &log_path, "runtime registry receiver terminated unexpectedly".into(), 60));
+                return Err(runtime_worker_failure(
+                    &workspace,
+                    &version,
+                    &log_path,
+                    "runtime registry receiver terminated unexpectedly".into(),
+                    60,
+                ));
             }
             Err(mpsc::TryRecvError::Empty) => {}
         }
@@ -200,6 +280,14 @@ where
     }
 }
 
+fn loader_cache_fingerprint(family: BridgeFamily, raw: &str) -> String {
+    if family == BridgeFamily::Fabric {
+        raw.to_string()
+    } else {
+        format!("{}-{raw}", family.label().to_ascii_lowercase())
+    }
+}
+
 fn capture_progress_percent(blocks: usize, total_blocks: usize) -> i32 {
     if total_blocks == 0 {
         return (62 + (blocks / 64) as i32).clamp(63, 94);
@@ -208,32 +296,50 @@ fn capture_progress_percent(blocks: usize, total_blocks: usize) -> i32 {
     (62.0 + fraction * 32.0).round() as i32
 }
 
-fn create_workspace<F>(version: &str, mods_path: &Path, mut progress: F) -> Result<WorkspacePlan>
+fn create_workspace<F>(
+    family: BridgeFamily,
+    version: &str,
+    mods_path: &Path,
+    mut progress: F,
+) -> Result<WorkspacePlan>
 where
     F: FnMut(bridge_compat::CompatProgress),
 {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
     let workspace = runtime::cache_root()
         .join("bridge-build")
         .join("runtime-workers")
-        .join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
+        .join(format!(
+            "{}-{}-{}-{stamp}",
+            family.label().to_ascii_lowercase(),
+            safe(version),
+            std::process::id()
+        ));
 
-    let java = if version == MC_1_21_10 {
+    let fast_bundled_fabric = family == BridgeFamily::Fabric && version == MC_1_21_10;
+    let java = if fast_bundled_fabric {
         create_fast_bundled_workspace(&workspace, version)?;
         21
     } else {
-        let prepared = bridge_compat::prepare_source(version, &workspace, &mut progress)?;
-        bridge_java::tooling_java(
-            prepared.java,
-            prepared.variables.get("loom_version").map(String::as_str),
-        )
+        let prepared = bridge_family::prepare_source(family, version, &workspace, &mut progress)?;
+        if family == BridgeFamily::Fabric {
+            bridge_java::tooling_java(
+                prepared.java,
+                prepared.variables.get("loom_version").map(String::as_str),
+            )
+        } else {
+            prepared.java
+        }
     };
 
     let run_dir = workspace.join("run");
     let run_mods = run_dir.join("mods");
     fs::create_dir_all(&run_mods)?;
 
-    if version == MC_1_21_10 {
+    if fast_bundled_fabric {
         let bridge = runtime::materialize_bundled_bridge()?;
         fs::copy(&bridge, run_mods.join("minesport-bridge-0.2.0.jar"))
             .with_context(|| format!("copy embedded Bridge {}", bridge.display()))?;
@@ -248,7 +354,9 @@ where
 
     if let Some(instance) = mods_path.parent() {
         let config = instance.join("config");
-        if config.is_dir() { copy_directory(&config, &run_dir.join("config"))?; }
+        if config.is_dir() {
+            copy_directory(&config, &run_dir.join("config"))?;
+        }
     }
     Ok(WorkspacePlan { workspace, java })
 }
@@ -272,13 +380,22 @@ fn create_fast_bundled_workspace(workspace: &Path, version: &str) -> Result<()> 
     Ok(())
 }
 
-fn start_gradle_worker(workspace: &Path, log_path: &Path, java_home: &Path) -> Result<Child> {
+fn start_gradle_worker(
+    family: BridgeFamily,
+    workspace: &Path,
+    log_path: &Path,
+    java_home: &Path,
+) -> Result<Child> {
     let stdout = File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
     let stderr = stdout.try_clone()?;
     let java = java_home.join("bin").join(if cfg!(windows) { "java.exe" } else { "java" });
-    if !java.is_file() { bail!("selected runtime JDK has no Java launcher: {}", java.display()); }
+    if !java.is_file() {
+        bail!("selected runtime JDK has no Java launcher: {}", java.display());
+    }
     let wrapper = workspace.join("gradle").join("wrapper").join("gradle-wrapper.jar");
-    if !wrapper.is_file() { bail!("runtime worker has no embedded Gradle wrapper: {}", wrapper.display()); }
+    if !wrapper.is_file() {
+        bail!("runtime worker has no embedded Gradle wrapper: {}", wrapper.display());
+    }
 
     let mut command = Command::new(&java);
     command
@@ -289,18 +406,30 @@ fn start_gradle_worker(workspace: &Path, log_path: &Path, java_home: &Path) -> R
         .arg(&wrapper)
         .arg("org.gradle.wrapper.GradleWrapperMain")
         .args(["--no-daemon", "--console=plain", "--max-workers=2", "--no-watch-fs", "runClient"]);
-    command.current_dir(workspace).stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
+    command
+        .current_dir(workspace)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
     sanitize_java_environment(&mut command, java_home);
     command.env("MINESPORT_BRIDGE_PORT", "25590");
     command.env("MINESPORT_BRIDGE_MODE", "all");
     command.env("MINESPORT_BRIDGE_WORKER", "1");
     command.env("GRADLE_USER_HOME", gradle_user_home());
     hide_console_window(&mut command);
-    command.spawn().with_context(|| format!("start isolated Fabric/Loom runtime worker with {}", java_home.display()))
+    command.spawn().with_context(|| {
+        format!(
+            "start isolated {} runtime worker with {}",
+            family.label(),
+            java_home.display()
+        )
+    })
 }
 
 fn gradle_user_home() -> PathBuf {
-    if let Some(path) = env::var_os("GRADLE_USER_HOME").map(PathBuf::from).filter(|path| path.is_dir()) {
+    if let Some(path) = env::var_os("GRADLE_USER_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+    {
         return path;
     }
     for home_var in ["USERPROFILE", "HOME"] {
@@ -333,21 +462,36 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
     let current = env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![java_home.join("bin")];
     paths.extend(env::split_paths(&current));
-    if let Ok(joined) = env::join_paths(paths) { command.env("PATH", joined); }
+    if let Ok(joined) = env::join_paths(paths) {
+        command.env("PATH", joined);
+    }
 }
 
 fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
     let mut count = 0;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
-        if !entry.file_type()?.is_file() { continue; }
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
         let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()).is_none_or(|value| !value.eq_ignore_ascii_case("jar")) { continue; }
+        if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|value| !value.eq_ignore_ascii_case("jar"))
+        {
+            continue;
+        }
         let filename = entry.file_name().to_string_lossy().to_string();
         let lower = filename.to_ascii_lowercase();
-        if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-") { continue; }
-        if should_skip_runtime_worker_mod(&path, &filename) { continue; }
-        fs::copy(&path, target.join(entry.file_name())).with_context(|| format!("copy worker mod {}", path.display()))?;
+        if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-") {
+            continue;
+        }
+        if should_skip_runtime_worker_mod(&path, &filename) {
+            continue;
+        }
+        fs::copy(&path, target.join(entry.file_name()))
+            .with_context(|| format!("copy worker mod {}", path.display()))?;
         count += 1;
     }
     Ok(count)
@@ -355,8 +499,11 @@ fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
 
 fn should_skip_runtime_worker_mod(jar_path: &Path, filename: &str) -> bool {
     let lower = filename.to_ascii_lowercase();
-    if lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") { return true; }
-    runtime_worker_fabric_mod_id(jar_path).is_some_and(|id| id.eq_ignore_ascii_case("crash_assistant"))
+    if lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") {
+        return true;
+    }
+    runtime_worker_fabric_mod_id(jar_path)
+        .is_some_and(|id| id.eq_ignore_ascii_case("crash_assistant"))
 }
 
 fn runtime_worker_fabric_mod_id(jar_path: &Path) -> Option<String> {
@@ -364,14 +511,27 @@ fn runtime_worker_fabric_mod_id(jar_path: &Path) -> Option<String> {
     let mut archive = zip::ZipArchive::new(file).ok()?;
     let mut entry = archive.by_name("fabric.mod.json").ok()?;
     let mut bytes = Vec::new();
-    entry.by_ref().take(FABRIC_MOD_JSON_LIMIT + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > FABRIC_MOD_JSON_LIMIT { return None; }
+    entry
+        .by_ref()
+        .take(FABRIC_MOD_JSON_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > FABRIC_MOD_JSON_LIMIT {
+        return None;
+    }
 
     #[derive(Deserialize)]
-    struct FabricMetadata { #[serde(default)] id: String }
+    struct FabricMetadata {
+        #[serde(default)]
+        id: String,
+    }
     let metadata: FabricMetadata = serde_json::from_slice(&bytes).ok()?;
     let id = metadata.id.trim();
-    if id.is_empty() { None } else { Some(id.to_string()) }
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
 }
 
 fn copy_directory(source: &Path, target: &Path) -> Result<()> {
@@ -380,15 +540,22 @@ fn copy_directory(source: &Path, target: &Path) -> Result<()> {
         let entry = entry?;
         let kind = entry.file_type()?;
         let destination = target.join(entry.file_name());
-        if kind.is_symlink() { continue; }
-        if kind.is_dir() { copy_directory(&entry.path(), &destination)?; }
-        else if kind.is_file() { fs::copy(entry.path(), destination)?; }
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            copy_directory(&entry.path(), &destination)?;
+        } else if kind.is_file() {
+            fs::copy(entry.path(), destination)?;
+        }
     }
     Ok(())
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
@@ -400,18 +567,31 @@ fn stop_child(child: &mut Child) {
     }
 }
 
-fn runtime_worker_failure(workspace: &Path, version: &str, log_path: &Path, message: String, tail_lines: usize) -> anyhow::Error {
+fn runtime_worker_failure(
+    workspace: &Path,
+    version: &str,
+    log_path: &Path,
+    message: String,
+    tail_lines: usize,
+) -> anyhow::Error {
     let tail = tail_file(log_path, tail_lines);
     let diagnostics = preserve_runtime_worker_diagnostics(workspace, version);
     let mut detail = message;
-    if let Some(path) = diagnostics { detail.push_str(&format!("\nDiagnostics preserved at: {}", path.display())); }
-    if !tail.is_empty() { detail.push_str("\nRuntime worker tail:\n"); detail.push_str(&tail); }
+    if let Some(path) = diagnostics {
+        detail.push_str(&format!("\nDiagnostics preserved at: {}", path.display()));
+    }
+    if !tail.is_empty() {
+        detail.push_str("\nRuntime worker tail:\n");
+        detail.push_str(&tail);
+    }
     anyhow!(detail)
 }
 
 fn preserve_runtime_worker_diagnostics(workspace: &Path, version: &str) -> Option<PathBuf> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis();
-    let destination = diagnostics::folder().join("runtime-workers").join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
+    let destination = diagnostics::folder()
+        .join("runtime-workers")
+        .join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
     fs::create_dir_all(&destination).ok()?;
     let files = [
         (workspace.join("runtime-worker.log"), "runtime-worker.log"),
@@ -419,25 +599,61 @@ fn preserve_runtime_worker_diagnostics(workspace: &Path, version: &str) -> Optio
     ];
     let mut copied = false;
     for (source, name) in files {
-        if !source.is_file() { continue; }
-        if fs::copy(&source, destination.join(name)).is_ok() { copied = true; }
+        if !source.is_file() {
+            continue;
+        }
+        if fs::copy(&source, destination.join(name)).is_ok() {
+            copied = true;
+        }
     }
-    if copied { Some(destination) } else { let _ = fs::remove_dir_all(&destination); None }
+    if copied {
+        Some(destination)
+    } else {
+        let _ = fs::remove_dir_all(&destination);
+        None
+    }
 }
 
 fn tail_file(path: &Path, lines: usize) -> String {
-    let Ok(file) = File::open(path) else { return String::new(); };
+    let Ok(file) = File::open(path) else {
+        return String::new();
+    };
     let values: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
-    values.into_iter().rev().take(lines).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+    values
+        .into_iter()
+        .rev()
+        .take(lines)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn safe(value: &str) -> String {
-    let result: String = value.chars().map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') { ch } else { '_' }).collect();
-    if result.is_empty() { "unknown".into() } else { result }
+    let result: String = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if result.is_empty() {
+        "unknown".into()
+    } else {
+        result
+    }
 }
 
 struct WorkspaceCleanup(PathBuf);
-impl Drop for WorkspaceCleanup { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+impl Drop for WorkspaceCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 const SETTINGS_GRADLE: &str = r#"pluginManagement {
     repositories {
@@ -530,9 +746,21 @@ mod tests {
 
     #[test]
     fn manifest_supported_versions_are_accepted_by_worker_front_door() {
-        assert!(bridge_compat::is_supported("1.19.4"));
-        assert!(bridge_compat::is_supported("1.21.11"));
-        assert!(bridge_compat::is_supported("26.2"));
+        assert!(bridge_family::is_supported(BridgeFamily::Fabric, "1.19.4"));
+        assert!(bridge_family::is_supported(BridgeFamily::Fabric, "1.21.11"));
+        assert!(bridge_family::is_supported(BridgeFamily::Fabric, "26.2"));
+        assert!(bridge_family::is_supported(BridgeFamily::Forge, "1.21.10"));
+        assert!(bridge_family::is_supported(BridgeFamily::NeoForge, "1.21.9"));
+        assert!(bridge_family::is_supported(BridgeFamily::Quilt, "1.21.8"));
+    }
+
+    #[test]
+    fn loader_family_separates_non_fabric_cache_identity() {
+        let raw = "0123456789abcdef";
+        assert_eq!(loader_cache_fingerprint(BridgeFamily::Fabric, raw), raw);
+        assert_eq!(loader_cache_fingerprint(BridgeFamily::Forge, raw), "forge-0123456789abcdef");
+        assert_eq!(loader_cache_fingerprint(BridgeFamily::NeoForge, raw), "neoforge-0123456789abcdef");
+        assert_eq!(loader_cache_fingerprint(BridgeFamily::Quilt, raw), "quilt-0123456789abcdef");
     }
 
     #[test]
@@ -545,14 +773,20 @@ mod tests {
     #[test]
     fn renamed_crash_assistant_is_skipped_by_fabric_mod_id() {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = env::temp_dir().join(format!("minesport-crash-assistant-id-{}-{stamp}", std::process::id()));
+        let root = env::temp_dir().join(format!(
+            "minesport-crash-assistant-id-{}-{stamp}",
+            std::process::id()
+        ));
         fs::create_dir_all(&root).unwrap();
         let jar = root.join("totally-normal-mod.jar");
         let file = File::create(&jar).unwrap();
         let mut writer = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         writer.start_file("fabric.mod.json", options).unwrap();
-        writer.write_all(br#"{"schemaVersion":1,"id":"crash_assistant","version":"1.0.0"}"#).unwrap();
+        writer
+            .write_all(br#"{"schemaVersion":1,"id":"crash_assistant","version":"1.0.0"}"#)
+            .unwrap();
         writer.finish().unwrap();
 
         assert_eq!(runtime_worker_fabric_mod_id(&jar).as_deref(), Some("crash_assistant"));
@@ -562,7 +796,13 @@ mod tests {
 
     #[test]
     fn crash_assistant_filename_fallback_survives_unreadable_jar() {
-        assert!(should_skip_runtime_worker_mod(Path::new("missing.jar"), "CrashAssistant-fabric-26.2.jar"));
-        assert!(should_skip_runtime_worker_mod(Path::new("missing.jar"), "crash-assistant-26.2.jar"));
+        assert!(should_skip_runtime_worker_mod(
+            Path::new("missing.jar"),
+            "CrashAssistant-fabric-26.2.jar"
+        ));
+        assert!(should_skip_runtime_worker_mod(
+            Path::new("missing.jar"),
+            "crash-assistant-26.2.jar"
+        ));
     }
 }
