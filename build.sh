@@ -15,9 +15,10 @@ Usage:
   ./build.sh [options]
 
 Default behavior:
-  Builds and tests the bundled Minecraft 1.21.10 Fabric bridge, Java engine,
-  and the Rust + Slint Minesport desktop binary. The archived Go/Fyne UI is
-  not part of the active build.
+  Builds the Minecraft 1.21.10 Fabric, Forge, NeoForge and Quilt Bridges,
+  builds the Java engine, then tests/builds the Rust + Slint desktop binary
+  with all four loader Bridges embedded. The archived Go/Fyne UI is not part
+  of the active build.
   No installer/package is built unless an installer flag is supplied.
 
 Installer options (Linux):
@@ -72,19 +73,37 @@ else
 fi
 echo
 
-echo "[1/3] Building bundled Minecraft 1.21.10 Fabric bridge..."
-cd "$ROOT/bridge"
-chmod +x gradlew
-./gradlew --no-daemon --stacktrace clean build
-BRIDGE_JAR="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' -print -quit)"
-if [[ -z "$BRIDGE_JAR" ]]; then
-  echo "ERROR: bundled bridge JAR was not produced under bridge/build/libs." >&2
-  exit 1
-fi
-mkdir -p "$ROOT/dist/bundled-bridge"
-cp "$BRIDGE_JAR" "$ROOT/dist/bundled-bridge/minesport-bridge-${BRIDGE_VERSION}.jar"
-cp "$BRIDGE_JAR" "$ROOT/dist/bundled-bridge/minesport-bridge-0.1.0.jar"
-echo "Bundled bridge staged: dist/bundled-bridge/minesport-bridge-${BRIDGE_VERSION}.jar"
+BUNDLED_DIR="$ROOT/dist/bundled-bridge"
+FABRIC_BRIDGE="$BUNDLED_DIR/minesport-bridge-fabric-${BRIDGE_VERSION}.jar"
+FORGE_BRIDGE="$BUNDLED_DIR/minesport-bridge-forge-${BRIDGE_VERSION}.jar"
+NEOFORGE_BRIDGE="$BUNDLED_DIR/minesport-bridge-neoforge-${BRIDGE_VERSION}.jar"
+QUILT_BRIDGE="$BUNDLED_DIR/minesport-bridge-quilt-${BRIDGE_VERSION}.jar"
+mkdir -p "$BUNDLED_DIR"
+
+build_bridge() {
+  local label="$1"
+  local project="$2"
+  local destination="$3"
+  echo "  -> ${label}"
+  cd "$ROOT/$project"
+  chmod +x gradlew
+  ./gradlew --no-daemon --stacktrace clean build
+  local jar
+  jar="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' -print -quit)"
+  if [[ -z "$jar" ]]; then
+    echo "ERROR: ${label} Bridge JAR was not produced under ${project}/build/libs." >&2
+    exit 1
+  fi
+  cp "$jar" "$destination"
+  [[ -s "$destination" ]] || { echo "ERROR: staged ${label} Bridge is empty: $destination" >&2; exit 1; }
+}
+
+echo "[1/3] Building bundled Minecraft 1.21.10 loader Bridges..."
+build_bridge "Fabric" "minesport-bridge-fabric" "$FABRIC_BRIDGE"
+build_bridge "Forge" "bridge-forge" "$FORGE_BRIDGE"
+build_bridge "NeoForge" "bridge-neoforge" "$NEOFORGE_BRIDGE"
+build_bridge "Quilt" "bridge-quilt" "$QUILT_BRIDGE"
+echo "Bundled Bridges staged under dist/bundled-bridge/"
 echo
 
 echo "[2/3] Building Java engine..."
@@ -105,6 +124,11 @@ command -v cargo >/dev/null 2>&1 || { echo "ERROR: Rust/Cargo is required. Insta
 command -v rustc >/dev/null 2>&1 || { echo "ERROR: rustc is unavailable. Repair the Rust toolchain with rustup." >&2; exit 1; }
 cd "$ROOT/desktop"
 export MINESPORT_ENGINE_JAR="$ENGINE_JAR_ABS"
+export MINESPORT_BRIDGE_JAR="$FABRIC_BRIDGE"
+export MINESPORT_BRIDGE_FABRIC_JAR="$FABRIC_BRIDGE"
+export MINESPORT_BRIDGE_FORGE_JAR="$FORGE_BRIDGE"
+export MINESPORT_BRIDGE_NEOFORGE_JAR="$NEOFORGE_BRIDGE"
+export MINESPORT_BRIDGE_QUILT_JAR="$QUILT_BRIDGE"
 echo "  -> Rust toolchain..."
 rustc --version
 cargo --version
