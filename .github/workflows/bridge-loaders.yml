@@ -7,6 +7,8 @@ on:
       - 'bridge-forge/**'
       - 'bridge-neoforge/**'
       - 'bridge-quilt/**'
+      - 'bridge-loader-versions/**'
+      - 'desktop/src/bridge_family.rs'
       - '.github/workflows/bridge-loaders.yml'
   workflow_dispatch:
 
@@ -19,10 +21,13 @@ jobs:
       matrix:
         include:
           - name: Forge
+            slug: forge
             project: bridge-forge
           - name: NeoForge
+            slug: neoforge
             project: bridge-neoforge
           - name: Quilt
+            slug: quilt
             project: bridge-quilt
     steps:
       - uses: actions/checkout@v4
@@ -35,3 +40,18 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon --console=plain build
+      - name: Verify bridge JAR
+        working-directory: ${{ matrix.project }}
+        run: |
+          test -n "$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)"
+          find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print
+      - name: Upload bridge JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: minesport-bridge-${{ matrix.slug }}-1.21.10
+          path: |
+            ${{ matrix.project }}/build/libs/*.jar
+            !${{ matrix.project }}/build/libs/*-sources.jar
+            !${{ matrix.project }}/build/libs/*-javadoc.jar
+          if-no-files-found: error
+          retention-days: 14
