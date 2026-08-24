@@ -306,7 +306,9 @@ if (-not $DesktopOnly) {
             throw "--desktop-only requires $jar. Run a normal build once first."
         }
         Write-Host "  $($bridge.Name): $jar" -ForegroundColor Green
+        $BuildState["bridge-$($bridge.Slug)"] = Get-TreeFingerprint (Join-Path $Root $bridge.Project)
     }
+    Save-BuildState
     Write-Host ''
 }
 
@@ -354,6 +356,8 @@ if (-not $DesktopOnly) {
         throw '--desktop-only requires an existing engine/build/libs/minesport-engine-*.jar. Run a normal build once first.'
     }
     $engineJar = $engineJar.FullName
+    $BuildState['engine'] = Get-TreeFingerprint $engineProject
+    Save-BuildState
     Write-Host "  Engine: $engineJar" -ForegroundColor Green
     Write-Host ''
 }
