@@ -8,7 +8,14 @@ use std::{
 const VENDOR_DIR: &str = "kastrick's_software";
 const APP_DIR: &str = "minesport";
 const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
-const BRIDGE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge.jar"));
+const FABRIC_BRIDGE_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge-fabric.jar"));
+const FORGE_BRIDGE_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge-forge.jar"));
+const NEOFORGE_BRIDGE_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge-neoforge.jar"));
+const QUILT_BRIDGE_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge-quilt.jar"));
 static GENERATED_CACHE_USE: RwLock<()> = RwLock::new(());
 
 pub fn materialize_engine() -> Result<PathBuf> {
@@ -19,11 +26,41 @@ pub fn materialize_engine() -> Result<PathBuf> {
     )
 }
 
+/// Backward-compatible name for callers that historically meant the Fabric
+/// Bridge when they asked for the single bundled Bridge.
 pub fn materialize_bundled_bridge() -> Result<PathBuf> {
+    materialize_bundled_fabric_bridge()
+}
+
+pub fn materialize_bundled_fabric_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
-        "minesport-bridge-0.2.0.jar",
-        ".minesport-bridge-0.2.0.tmp",
-        BRIDGE_BYTES,
+        "minesport-bridge-fabric-0.2.0.jar",
+        ".minesport-bridge-fabric-0.2.0.tmp",
+        FABRIC_BRIDGE_BYTES,
+    )
+}
+
+pub fn materialize_bundled_forge_bridge() -> Result<PathBuf> {
+    materialize_runtime_asset(
+        "minesport-bridge-forge-0.2.0.jar",
+        ".minesport-bridge-forge-0.2.0.tmp",
+        FORGE_BRIDGE_BYTES,
+    )
+}
+
+pub fn materialize_bundled_neoforge_bridge() -> Result<PathBuf> {
+    materialize_runtime_asset(
+        "minesport-bridge-neoforge-0.2.0.jar",
+        ".minesport-bridge-neoforge-0.2.0.tmp",
+        NEOFORGE_BRIDGE_BYTES,
+    )
+}
+
+pub fn materialize_bundled_quilt_bridge() -> Result<PathBuf> {
+    materialize_runtime_asset(
+        "minesport-bridge-quilt-0.2.0.jar",
+        ".minesport-bridge-quilt-0.2.0.tmp",
+        QUILT_BRIDGE_BYTES,
     )
 }
 
@@ -81,8 +118,6 @@ pub fn data_root() -> PathBuf {
         }
     }
 
-    // std has no direct UserConfigDir equivalent; use the conventional config
-    // environment only as a late fallback before the system temp directory.
     if let Some(config) = env_path("XDG_CONFIG_HOME") {
         return config.join(VENDOR_DIR).join(APP_DIR);
     }
@@ -122,8 +157,6 @@ pub fn bridge_data_root() -> PathBuf {
     data_root().join("bridge-data")
 }
 
-/// Hold this lease while any runtime worker, compatibility build, or other
-/// operation depends on generated cache/toolchain files.
 pub(crate) fn acquire_generated_cache_lease() -> Result<RwLockReadGuard<'static, ()>> {
     GENERATED_CACHE_USE
         .read()
@@ -142,9 +175,6 @@ fn acquire_generated_cache_cleanup() -> Result<RwLockWriteGuard<'static, ()>> {
     }
 }
 
-/// Remove only Minesport-owned, regenerable data. The validation mirrors the
-/// retired Go cacheclean package: custom cache overrides are allowed, but broad
-/// roots, the user home, and paths containing durable Minesport data fail shut.
 pub fn remove_generated_cache() -> Result<()> {
     let _exclusive = acquire_generated_cache_cleanup()?;
     let cache = clean_path(&cache_root());
@@ -298,6 +328,9 @@ mod tests {
     #[test]
     fn embedded_runtime_assets_are_present() {
         assert!(!ENGINE_BYTES.is_empty());
-        assert!(!BRIDGE_BYTES.is_empty());
+        assert!(!FABRIC_BRIDGE_BYTES.is_empty());
+        assert!(!FORGE_BRIDGE_BYTES.is_empty());
+        assert!(!NEOFORGE_BRIDGE_BYTES.is_empty());
+        assert!(!QUILT_BRIDGE_BYTES.is_empty());
     }
 }
