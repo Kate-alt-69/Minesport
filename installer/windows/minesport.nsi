@@ -62,24 +62,12 @@ Section "!Minesport core (required)" SEC_CORE
   SetShellVarContext all
   SetRegView 64
 
+  ; Fabric, Forge, NeoForge and Quilt Bridge JARs are embedded in Minesport.exe.
   SetOutPath "$INSTDIR"
   File /oname=minesport.exe "${SourceDir}\dist\source\Minesport.exe"
 
   SetOutPath "$INSTDIR\tools"
   File "${SourceDir}\installer\windows\install-blender.ps1"
-
-  SetOutPath "$INSTDIR\bridge-data"
-  File "${SourceDir}\bridge-versions\manifest.json"
-
-  SetOutPath "$INSTDIR\bridge-data\bundled\1.21.10"
-  File "${SourceDir}\dist\bundled-bridge\minesport-bridge-0.2.0.jar"
-
-  CreateDirectory "$INSTDIR\bridge-data\compiled"
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR\bridge-data\compiled" /grant *S-1-5-32-545:(OI)(CI)M /T /C'
-  Pop $0
-  ${If} $0 != 0
-    DetailPrint "WARNING: Could not grant standard users write access to the compiled bridge cache (icacls exit $0)."
-  ${EndIf}
 
   CreateDirectory "$SMPROGRAMS"
   CreateShortcut "$SMPROGRAMS\Minesport.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
@@ -117,7 +105,7 @@ Section /o "Install Minesport Blender translator" SEC_TRANSLATOR
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install Minesport 0.2.0, the bundled Minecraft 1.21.10 bridge, compatibility manifest, and bridge cache."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install Minesport 0.2.0 with embedded Fabric, Forge, NeoForge and Quilt runtime Bridges."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "Create a Minesport shortcut on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_BLENDER} "Download and install Blender 5.2 LTS from the official Blender Foundation mirror."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_TRANSLATOR} "Install the Minesport 0.2.0 Blender translator into detected Blender 4.3+ profiles."
@@ -131,6 +119,7 @@ Section "Uninstall"
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\tools\install-blender.ps1"
   Delete "$INSTDIR\Uninstall.exe"
+  ; Clean up bridge-data left by pre-embedded Minesport installs.
   RMDir /r "$INSTDIR\bridge-data"
   RMDir "$INSTDIR\tools"
   RMDir "$INSTDIR"
