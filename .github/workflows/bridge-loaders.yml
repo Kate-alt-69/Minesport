@@ -6,12 +6,12 @@ on:
     paths:
       - 'minesport-bridge-fabric/**'
       - 'minesport-bridge-fabric-versions/**'
-      - 'bridge-forge/**'
-      - 'bridge-forge-versions/**'
-      - 'bridge-neoforge/**'
-      - 'bridge-neoforge-versions/**'
-      - 'bridge-quilt/**'
-      - 'bridge-quilt-versions/**'
+      - 'minesport-bridge-forge/**'
+      - 'minesport-bridge-forge-versions/**'
+      - 'minesport-bridge-neoforge/**'
+      - 'minesport-bridge-neoforge-versions/**'
+      - 'minesport-bridge-quilt/**'
+      - 'minesport-bridge-quilt-versions/**'
       - 'desktop/src/bin/bridge-prepare.rs'
       - 'desktop/src/bridge_compat.rs'
       - 'desktop/src/bridge_family.rs'
@@ -35,19 +35,20 @@ jobs:
             project: minesport-bridge-fabric
           - name: Forge
             slug: forge
-            project: bridge-forge
+            project: minesport-bridge-forge
           - name: NeoForge
             slug: neoforge
-            project: bridge-neoforge
+            project: minesport-bridge-neoforge
           - name: Quilt
             slug: quilt
-            project: bridge-quilt
+            project: minesport-bridge-quilt
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
       - name: Build canonical bridge
         working-directory: ${{ matrix.project }}
         run: |
@@ -59,7 +60,7 @@ jobs:
           test -n "$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)"
           find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print
       - name: Upload bridge JAR
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: minesport-bridge-${{ matrix.slug }}-1.21.10
           path: |
@@ -91,15 +92,15 @@ jobs:
             slug: quilt
             jar: minesport-bridge-quilt-1.21.5.jar
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92.0
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install Rust/Slint build dependencies
         run: |
           sudo apt-get update
@@ -116,7 +117,7 @@ jobs:
             --output dist/loader-floor
           test -s 'dist/loader-floor/${{ matrix.jar }}'
       - name: Upload 1.21.5 Bridge
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: minesport-bridge-${{ matrix.slug }}-1.21.5
           path: dist/loader-floor/${{ matrix.jar }}
