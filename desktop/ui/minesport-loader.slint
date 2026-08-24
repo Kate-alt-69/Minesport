@@ -16,6 +16,9 @@ export component MinesportLoader inherits Rectangle {
     in property <float> progress: 0.0;
     in property <bool> determinate: false;
     in property <bool> compact: false;
+    // Long-running background jobs can disable the 60-FPS orbit while keeping
+    // the same progress surface. Progress/property updates still repaint.
+    in property <bool> animate-working: true;
     out property <bool> finishing: false;
     callback finished();
 
@@ -56,7 +59,7 @@ export component MinesportLoader inherits Rectangle {
 
     orbit-timer := Timer {
         interval: 16ms;
-        running: root.active;
+        running: root.active && root.animate-working;
         triggered() => {
             root.cycle = mod(root.cycle + 0.0089, 1.0);
         }
