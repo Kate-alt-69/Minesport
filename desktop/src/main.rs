@@ -45,6 +45,15 @@ const _: fn(&preview::PreviewPickMap) -> [f32; 3] = preview::PreviewPickMap::loo
 const _: fn([f32; 3], i32) -> Option<viewer_selection::BoxSelection> =
     viewer_selection::resize_point_b;
 
+// Loader-family runtime wiring is landing incrementally in the Slint app.
+// Keep every embedded loader materializer type-checked in normal builds until
+// the UI/runtime path consumes all four directly.
+const _: [fn() -> anyhow::Result<std::path::PathBuf>; 3] = [
+    runtime::materialize_bundled_forge_bridge,
+    runtime::materialize_bundled_neoforge_bridge,
+    runtime::materialize_bundled_quilt_bridge,
+];
+
 slint::include_modules!();
 
 fn main() -> anyhow::Result<()> {
