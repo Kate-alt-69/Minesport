@@ -341,8 +341,9 @@ where
 
     if fast_bundled_fabric {
         let bridge = runtime::materialize_bundled_bridge()?;
-        fs::copy(&bridge, run_mods.join("minesport-bridge-fabric-0.2.0.jar"))
-            .with_context(|| format!("copy embedded Bridge {}", bridge.display()))?;
+        let target = run_mods.join("minesport-bridge-fabric-0.2.0.jar");
+        link_or_copy(&bridge, &target)
+            .with_context(|| format!("stage embedded Bridge {}", bridge.display()))?;
     }
 
     let count = copy_worker_mods(mods_path, &run_mods)?;
@@ -401,11 +402,12 @@ fn start_gradle_worker(
     command
         .arg("-Xmx512m")
         .arg("-XX:MaxMetaspaceSize=384m")
+        .arg("-XX:ActiveProcessorCount=2")
         .arg("-Dfile.encoding=UTF-8")
         .arg("-cp")
         .arg(&wrapper)
         .arg("org.gradle.wrapper.GradleWrapperMain")
-        .args(["--no-daemon", "--console=plain", "--max-workers=2", "--no-watch-fs", "runClient"]);
+        .args(["--no-daemon", "--console=plain", "--max-workers=1", "--no-watch-fs", "runClient"]);
     command
         .current_dir(workspace)
         .stdout(Stdio::from(stdout))
@@ -414,6 +416,9 @@ fn start_gradle_worker(
     command.env("MINESPORT_BRIDGE_PORT", "25590");
     command.env("MINESPORT_BRIDGE_MODE", "all");
     command.env("MINESPORT_BRIDGE_WORKER", "1");
+    // Inherited by JavaExec/runClient children as well as the wrapper JVM. It
+    // reduces JVM/GC/common-pool thread fan-out without changing game/model data.
+    command.env("JAVA_TOOL_OPTIONS", "-XX:ActiveProcessorCount=2");
     command.env("GRADLE_USER_HOME", gradle_user_home());
     hide_console_window(&mut command);
     command.spawn().with_context(|| {
@@ -451,6 +456,7 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
             || name.eq_ignore_ascii_case("GRADLE_JAVA_HOME")
             || name.eq_ignore_ascii_case("JAVA_OPTS")
             || name.eq_ignore_ascii_case("GRADLE_OPTS")
+            || name.eq_ignore_ascii_case("JAVA_TOOL_OPTIONS")
             || name.eq_ignore_ascii_case("_JAVA_OPTIONS")
             || name.eq_ignore_ascii_case("JDK_JAVA_OPTIONS")
         {
@@ -490,11 +496,25 @@ fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
         if should_skip_runtime_worker_mod(&path, &filename) {
             continue;
         }
-        fs::copy(&path, target.join(entry.file_name()))
-            .with_context(|| format!("copy worker mod {}", path.display()))?;
+        let destination = target.join(entry.file_name());
+        link_or_copy(&path, &destination)
+            .with_context(|| format!("stage worker mod {}", path.display()))?;
         count += 1;
     }
     Ok(count)
+}
+
+fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let _ = fs::remove_file(target);
+    if fs::hard_link(source, target).is_ok() {
+        return Ok(());
+    }
+    fs::copy(source, target)
+        .with_context(|| format!("copy {} to {}", source.display(), target.display()))?;
+    Ok(())
 }
 
 fn should_skip_runtime_worker_mod(jar_path: &Path, filename: &str) -> bool {
@@ -689,15 +709,16 @@ dependencies {
 
 fn gradle_properties(version: &str) -> String {
     format!(
-        "minecraft_version={version}\nloader_version={LOADER_1_21_10}\nfabric_version={FABRIC_API_1_21_10}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=2\norg.gradle.vfs.watch=false\n"
+        "minecraft_version={version}\nloader_version={LOADER_1_21_10}\nfabric_version={FABRIC_API_1_21_10}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=1\norg.gradle.vfs.watch=false\n"
     )
 }
 
 #[cfg(windows)]
 fn hide_console_window(command: &mut Command) {
     use std::os::windows::process::CommandExt;
+    const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
+    command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
 }
 #[cfg(not(windows))]
 fn hide_console_window(_command: &mut Command) {}
@@ -726,7 +747,7 @@ mod tests {
         let properties = gradle_properties(MC_1_21_10);
         assert!(!properties.contains("org.gradle.jvmargs=-Xmx1536m"));
         assert!(properties.contains("org.gradle.daemon=false"));
-        assert!(properties.contains("org.gradle.workers.max=2"));
+        assert!(properties.contains("org.gradle.workers.max=1"));
         assert!(properties.contains("org.gradle.vfs.watch=false"));
     }
 
