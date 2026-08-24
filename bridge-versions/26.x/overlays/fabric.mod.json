@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "minesport_bridge",
+  "id": "minesport_bridge_fabric",
   "version": "${version}",
-  "name": "Minesport Bridge",
-  "description": "Dynamic runtime geometry/texture bridge for Minesport 26.x exports.",
+  "name": "Minesport Bridge (Fabric)",
+  "description": "Dynamic Fabric runtime geometry/texture bridge for Minesport 26.x exports.",
   "authors": [
     "Kastrick"
   ],
