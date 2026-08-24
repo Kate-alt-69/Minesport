@@ -16,10 +16,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fabric-bridge-bundled:
-    name: Bundled Bridge · 1.21.9–1.21.10 · Java 21
+  loader-bridges-bundled:
+    name: Bundled loader Bridges · Minecraft 1.21.10 · Java 21
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
@@ -29,28 +29,41 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v6
-      - name: Prove 1.21.9 source compatibility
-        working-directory: bridge
+      - name: Prove Fabric 1.21.9 source compatibility
+        working-directory: minesport-bridge-fabric
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon --stacktrace clean build \
             -Pminecraft_version=1.21.9 \
             -Ploader_version=0.18.5 \
             '-Pfabric_version=0.134.1+1.21.9'
-      - name: Build canonical bundled 1.21.10 Bridge
-        working-directory: bridge
-        run: ./gradlew --no-daemon --stacktrace clean build
-      - name: Stage canonical bundled Bridge
+      - name: Build canonical 1.21.10 loader Bridges
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist/bundled-bridge
-          jar="$(find bridge/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' -print -quit)"
-          test -n "$jar"
-          cp "$jar" dist/bundled-bridge/minesport-bridge-0.2.0.jar
-          cp "$jar" dist/bundled-bridge/minesport-bridge-0.1.0.jar
+          build_bridge() {
+            local label="$1"
+            local project="$2"
+            local slug="$3"
+            echo "::group::${label} Bridge"
+            chmod +x "$project/gradlew"
+            (cd "$project" && ./gradlew --no-daemon --stacktrace clean build)
+            jar="$(find "$project/build/libs" -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' -print -quit)"
+            test -n "$jar"
+            cp "$jar" "dist/bundled-bridge/minesport-bridge-${slug}-0.2.0.jar"
+            test -s "dist/bundled-bridge/minesport-bridge-${slug}-0.2.0.jar"
+            echo "::endgroup::"
+          }
+          build_bridge Fabric minesport-bridge-fabric fabric
+          build_bridge Forge bridge-forge forge
+          build_bridge NeoForge bridge-neoforge neoforge
+          build_bridge Quilt bridge-quilt quilt
+          ls -lh dist/bundled-bridge
       - uses: actions/upload-artifact@v7
         with:
-          name: fabric-bridge-1.21.10
-          path: dist/bundled-bridge/
+          name: loader-bridges-1.21.10
+          path: dist/bundled-bridge/*.jar
           if-no-files-found: error
           retention-days: 7
 
@@ -81,7 +94,7 @@ jobs:
 
   rust-core:
     name: Rust core + Slint contract
-    needs: [fabric-bridge-bundled, java-engine]
+    needs: [loader-bridges-bundled, java-engine]
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -94,7 +107,7 @@ jobs:
           path: engine/build/libs
       - uses: actions/download-artifact@v7
         with:
-          name: fabric-bridge-1.21.10
+          name: loader-bridges-1.21.10
           path: dist/bundled-bridge
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -111,8 +124,8 @@ jobs:
         run: cargo check --release --manifest-path desktop/Cargo.toml --all-targets
 
   fabric-bridge-recipes:
-    name: Rust recipe · ${{ matrix.minecraft }} · Java ${{ matrix.java }}
-    needs: [fabric-bridge-bundled, java-engine, rust-core]
+    name: Fabric Rust recipe · ${{ matrix.minecraft }} · Java ${{ matrix.java }}
+    needs: [rust-core]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -141,14 +154,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v7
-        with:
-          name: minesport-engine-ci
-          path: engine/build/libs
-      - uses: actions/download-artifact@v7
-        with:
-          name: fabric-bridge-1.21.10
-          path: dist/bundled-bridge
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -163,15 +168,18 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
-      - name: Generate and compile compatibility Bridge with Rust
+      - name: Generate and compile compatibility Fabric Bridge with Rust
+        env:
+          MINESPORT_HEADLESS_BRIDGE_PREPARE: '1'
         run: |
           cargo run --manifest-path desktop/Cargo.toml --bin bridge-prepare -- \
+            --loader fabric \
             --version '${{ matrix.minecraft }}' \
             --output dist/recipe-bridges
-          test -s "dist/recipe-bridges/minesport-bridge-${{ matrix.minecraft }}.jar"
+          test -s "dist/recipe-bridges/minesport-bridge-fabric-${{ matrix.minecraft }}.jar"
       - uses: actions/upload-artifact@v7
         with:
-          name: fabric-bridge-recipe-${{ matrix.minecraft }}
+          name: minesport-bridge-fabric-${{ matrix.minecraft }}
           path: dist/recipe-bridges/*.jar
           if-no-files-found: error
           retention-days: 7
@@ -194,7 +202,7 @@ jobs:
 
   desktop:
     name: Rust + Slint desktop · ${{ matrix.name }}
-    needs: [fabric-bridge-bundled, java-engine, rust-core]
+    needs: [loader-bridges-bundled, java-engine, rust-core]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 50
     strategy:
@@ -214,7 +222,7 @@ jobs:
           path: engine/build/libs
       - uses: actions/download-artifact@v7
         with:
-          name: fabric-bridge-1.21.10
+          name: loader-bridges-1.21.10
           path: dist/bundled-bridge
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -290,7 +298,7 @@ jobs:
 
   windows-installer:
     name: Windows installers · Rust/Slint · NSIS EXE + WiX 7 MSI
-    needs: [desktop, fabric-bridge-bundled]
+    needs: [desktop]
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -304,10 +312,6 @@ jobs:
         with:
           name: minesport-windows-standalone
           path: dist/source
-      - uses: actions/download-artifact@v7
-        with:
-          name: fabric-bridge-1.21.10
-          path: dist/bundled-bridge
       - name: Smoke test Rust desktop artifact
         shell: pwsh
         run: |
@@ -357,7 +361,7 @@ jobs:
 
   linux-installer:
     name: Linux packages · Rust/Slint · DEB + AppImage
-    needs: [desktop, fabric-bridge-bundled]
+    needs: [desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -368,10 +372,6 @@ jobs:
         with:
           name: minesport-desktop-Linux-X64
           path: desktop/dist
-      - uses: actions/download-artifact@v7
-        with:
-          name: fabric-bridge-1.21.10
-          path: dist/bundled-bridge
       - name: Install packaging tools
         run: |
           sudo apt-get update
@@ -412,7 +412,7 @@ jobs:
     name: Compile cleanly
     if: always()
     needs:
-      - fabric-bridge-bundled
+      - loader-bridges-bundled
       - java-engine
       - rust-core
       - fabric-bridge-recipes
@@ -423,7 +423,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      BUNDLED_BRIDGE_RESULT: ${{ needs.fabric-bridge-bundled.result }}
+      BUNDLED_BRIDGES_RESULT: ${{ needs.loader-bridges-bundled.result }}
       ENGINE_RESULT: ${{ needs.java-engine.result }}
       RUST_CORE_RESULT: ${{ needs.rust-core.result }}
       RECIPE_BRIDGE_RESULT: ${{ needs.fabric-bridge-recipes.result }}
@@ -441,17 +441,17 @@ jobs:
             echo
             echo "| Component | Result |"
             echo "|---|---|"
-            echo "| Bundled Bridge · 1.21.9–1.21.10 | $BUNDLED_BRIDGE_RESULT |"
+            echo "| Bundled Fabric + Forge + NeoForge + Quilt Bridges · 1.21.10 | $BUNDLED_BRIDGES_RESULT |"
             echo "| Java engine | $ENGINE_RESULT |"
             echo "| Rust core + Slint contract | $RUST_CORE_RESULT |"
-            echo "| Rust compatibility Bridge matrix | $RECIPE_BRIDGE_RESULT |"
+            echo "| Fabric compatibility Bridge matrix | $RECIPE_BRIDGE_RESULT |"
             echo "| Blender translator | $TRANSLATOR_RESULT |"
             echo "| Rust + Slint desktop | $DESKTOP_RESULT |"
             echo "| Windows installers | $WIN_INSTALLER_RESULT |"
             echo "| Linux packages | $LINUX_INSTALLER_RESULT |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$BUNDLED_BRIDGE_RESULT" = success ] && \
+          if [ "$BUNDLED_BRIDGES_RESULT" = success ] && \
              [ "$ENGINE_RESULT" = success ] && \
              [ "$RUST_CORE_RESULT" = success ] && \
              [ "$RECIPE_BRIDGE_RESULT" = success ] && \
