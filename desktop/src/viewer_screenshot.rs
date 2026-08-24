@@ -36,7 +36,7 @@ pub fn save_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<PathBuf> {
         rgba,
         width,
         height,
-        ColorType::Rgba8.into(),
+        ColorType::Rgba8,
         ImageFormat::Png,
     )
     .with_context(|| format!("save 3D screenshot {}", path.display()))?;
