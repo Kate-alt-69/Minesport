@@ -103,6 +103,8 @@ jobs:
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
       - name: Generate and compile 1.21.5 Bridge with Rust patcher
+        env:
+          MINESPORT_HEADLESS_BRIDGE_PREPARE: '1'
         run: |
           cargo run --manifest-path desktop/Cargo.toml --bin bridge-prepare -- \
             --loader '${{ matrix.slug }}' \
