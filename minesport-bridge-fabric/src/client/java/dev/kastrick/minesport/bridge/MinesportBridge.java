@@ -20,7 +20,7 @@ import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
 
 public class MinesportBridge implements ClientModInitializer {
 
-    private static final int EXTRACTION_BATCH_SIZE = 128;
+    private static final int EXTRACTION_BATCH_SIZE = 256;
 
     @Override
     public void onInitializeClient() {
