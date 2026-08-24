@@ -24,7 +24,7 @@ import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
 @Mod(MinesportBridge.MODID)
 public final class MinesportBridge {
     public static final String MODID = "minesport_bridge";
-    private static final int EXTRACTION_BATCH_SIZE = 128;
+    private static final int EXTRACTION_BATCH_SIZE = 256;
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
 
     public MinesportBridge(FMLJavaModLoadingContext context) {
