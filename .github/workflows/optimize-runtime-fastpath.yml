@@ -1,0 +1,283 @@
+name: Optimize Runtime Fast Path
+
+on:
+  push:
+    paths:
+      - '.optimize-runtime-fastpath-trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Apply loader-neutral 1.21.10 runtime fast path
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('desktop/src/runtime_worker.rs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old, new, label):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              text = text.replace(old, new, 1)
+
+          old = '''    let fast_bundled_fabric = family == BridgeFamily::Fabric && version == MC_1_21_10;
+    let java = if fast_bundled_fabric {
+        create_fast_bundled_workspace(&workspace, version)?;
+        21
+    } else {
+        let prepared = bridge_family::prepare_source(family, version, &workspace, &mut progress)?;
+        if family == BridgeFamily::Fabric {
+            bridge_java::tooling_java(
+                prepared.java,
+                prepared.variables.get("loom_version").map(String::as_str),
+            )
+        } else {
+            prepared.java
+        }
+    };
+'''
+          new = '''    let fast_bundled = version == MC_1_21_10;
+    let java = if fast_bundled && family == BridgeFamily::Fabric {
+        create_fast_bundled_workspace(&workspace, version)?;
+        21
+    } else {
+        let prepared = bridge_family::prepare_source(family, version, &workspace, &mut progress)?;
+        let java = if family == BridgeFamily::Fabric {
+            bridge_java::tooling_java(
+                prepared.java,
+                prepared.variables.get("loom_version").map(String::as_str),
+            )
+        } else {
+            prepared.java
+        };
+
+        if fast_bundled {
+            let source_root = workspace.join("src");
+            if source_root.is_dir() {
+                fs::remove_dir_all(&source_root)
+                    .with_context(|| format!("remove runtime Bridge source {}", source_root.display()))?;
+            }
+            let runtime_build = match family {
+                BridgeFamily::Forge => FORGE_RUNTIME_BUILD_GRADLE,
+                BridgeFamily::NeoForge => NEOFORGE_RUNTIME_BUILD_GRADLE,
+                BridgeFamily::Quilt => QUILT_RUNTIME_BUILD_GRADLE,
+                BridgeFamily::Fabric => unreachable!("Fabric uses its dedicated bundled workspace"),
+            };
+            write_file(&workspace.join("build.gradle"), runtime_build.as_bytes())?;
+        }
+        java
+    };
+    tune_runtime_gradle_properties(&workspace)?;
+'''
+          replace_once(old, new, 'generalize bundled workspace')
+
+          old = '''    if fast_bundled_fabric {
+        let bridge = runtime::materialize_bundled_bridge()?;
+        let target = run_mods.join("minesport-bridge-fabric-0.2.0.jar");
+        link_or_copy(&bridge, &target)
+            .with_context(|| format!("stage embedded Bridge {}", bridge.display()))?;
+    }
+'''
+          new = '''    if fast_bundled {
+        let (bridge, filename) = match family {
+            BridgeFamily::Fabric => (
+                runtime::materialize_bundled_fabric_bridge()?,
+                "minesport-bridge-fabric-0.2.0.jar",
+            ),
+            BridgeFamily::Forge => (
+                runtime::materialize_bundled_forge_bridge()?,
+                "minesport-bridge-forge-0.2.0.jar",
+            ),
+            BridgeFamily::NeoForge => (
+                runtime::materialize_bundled_neoforge_bridge()?,
+                "minesport-bridge-neoforge-0.2.0.jar",
+            ),
+            BridgeFamily::Quilt => (
+                runtime::materialize_bundled_quilt_bridge()?,
+                "minesport-bridge-quilt-0.2.0.jar",
+            ),
+        };
+        let target = run_mods.join(filename);
+        link_or_copy(&bridge, &target)
+            .with_context(|| format!("stage embedded {} Bridge {}", family.label(), bridge.display()))?;
+    }
+'''
+          replace_once(old, new, 'stage embedded family bridge')
+
+          marker = '''fn start_gradle_worker(
+'''
+          helper = r'''fn tune_runtime_gradle_properties(workspace: &Path) -> Result<()> {
+    let path = workspace.join("gradle.properties");
+    let existing = fs::read_to_string(&path).unwrap_or_default();
+    let tuned = low_resource_gradle_properties(&existing);
+    write_file(&path, tuned.as_bytes())
+}
+
+fn low_resource_gradle_properties(existing: &str) -> String {
+    const MANAGED: &[&str] = &[
+        "org.gradle.jvmargs",
+        "org.gradle.daemon",
+        "org.gradle.parallel",
+        "org.gradle.workers.max",
+        "org.gradle.vfs.watch",
+    ];
+    let mut output = String::new();
+    for line in existing.lines() {
+        let trimmed = line.trim_start();
+        let managed = MANAGED.iter().any(|key| {
+            trimmed.strip_prefix(key).is_some_and(|rest| rest.trim_start().starts_with('='))
+        });
+        if managed {
+            continue;
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
+    output.push_str("org.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=384m -XX:ActiveProcessorCount=2\n");
+    output.push_str("org.gradle.daemon=false\n");
+    output.push_str("org.gradle.parallel=false\n");
+    output.push_str("org.gradle.workers.max=1\n");
+    output.push_str("org.gradle.vfs.watch=false\n");
+    output
+}
+
+'''
+          replace_once(marker, helper + marker, 'insert runtime property tuner')
+
+          marker = '''fn gradle_properties(version: &str) -> String {
+'''
+          templates = r'''const FORGE_RUNTIME_BUILD_GRADLE: &str = r#"plugins {
+    id 'java'
+    id 'net.minecraftforge.gradle' version '[7.0.3,8)'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+minecraft {
+    mappings channel: 'official', version: project.minecraft_version
+    runs {
+        configureEach {
+            workingDir = layout.projectDirectory.dir('run')
+            systemProperty 'eventbus.api.strictRuntimeChecks', 'true'
+        }
+        register('client')
+    }
+}
+
+repositories {
+    minecraft.mavenizer(it)
+    maven fg.forgeMaven
+    maven fg.minecraftLibsMaven
+    mavenCentral()
+}
+
+dependencies {
+    implementation minecraft.dependency("net.minecraftforge:forge:${project.minecraft_version}-${project.forge_version}")
+}
+"#;
+
+const NEOFORGE_RUNTIME_BUILD_GRADLE: &str = r#"plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.144'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+    runs {
+        client {
+            client()
+            gameDirectory = project.file('run')
+        }
+    }
+}
+"#;
+
+const QUILT_RUNTIME_BUILD_GRADLE: &str = r#"plugins {
+    id 'org.quiltmc.loom' version '1.11.1'
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+repositories {
+    maven { url 'https://maven.quiltmc.org/repository/release' }
+    maven { url 'https://maven.fabricmc.net/' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "org.quiltmc:quilt-loader:${project.quilt_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+"#;
+
+'''
+          replace_once(marker, templates + marker, 'insert source-less loader templates')
+
+          old = '''    #[test]
+    fn runtime_gradle_properties_do_not_reserve_a_huge_build_heap() {
+        let properties = gradle_properties(MC_1_21_10);
+        assert!(!properties.contains("org.gradle.jvmargs=-Xmx1536m"));
+        assert!(properties.contains("org.gradle.daemon=false"));
+        assert!(properties.contains("org.gradle.workers.max=1"));
+        assert!(properties.contains("org.gradle.vfs.watch=false"));
+    }
+'''
+          new = '''    #[test]
+    fn runtime_gradle_properties_do_not_reserve_a_huge_build_heap() {
+        let properties = low_resource_gradle_properties(
+            "minecraft_version=1.21.10\\norg.gradle.jvmargs=-Xmx2G\\norg.gradle.workers.max=2\\n",
+        );
+        assert!(properties.contains("minecraft_version=1.21.10"));
+        assert!(!properties.contains("-Xmx2G"));
+        assert!(properties.contains("org.gradle.jvmargs=-Xmx1024m"));
+        assert!(properties.contains("org.gradle.daemon=false"));
+        assert!(properties.contains("org.gradle.workers.max=1"));
+        assert!(properties.contains("org.gradle.vfs.watch=false"));
+    }
+
+    #[test]
+    fn canonical_non_fabric_runtime_projects_do_not_register_source_mods() {
+        assert!(!FORGE_RUNTIME_BUILD_GRADLE.contains("sourceSet"));
+        assert!(!NEOFORGE_RUNTIME_BUILD_GRADLE.contains("sourceSet"));
+        assert!(!QUILT_RUNTIME_BUILD_GRADLE.contains("sourceSet"));
+        assert!(FORGE_RUNTIME_BUILD_GRADLE.contains("register('client')"));
+        assert!(NEOFORGE_RUNTIME_BUILD_GRADLE.contains("client()"));
+        assert!(QUILT_RUNTIME_BUILD_GRADLE.contains("quilt-loader"));
+    }
+'''
+          replace_once(old, new, 'upgrade runtime property tests')
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Format Rust
+        run: cargo fmt --manifest-path desktop/Cargo.toml --all
+
+      - name: Commit optimization and remove one-shot files
+        shell: bash
+        run: |
+          rm -f .optimize-runtime-fastpath-trigger
+          rm -f .github/workflows/optimize-runtime-fastpath.yml
+          git config user.name 'Minesport migration bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add desktop/src/runtime_worker.rs .optimize-runtime-fastpath-trigger .github/workflows/optimize-runtime-fastpath.yml
+          git commit -m 'Use embedded loader Bridges in 1.21.10 runtime workers'
+          git push origin HEAD:main
