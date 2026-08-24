@@ -48,7 +48,7 @@ jobs:
             local slug="$3"
             echo "::group::${label} Bridge"
             chmod +x "$project/gradlew"
-            (cd "$project" && ./gradlew --no-daemon --stacktrace clean build)
+            (cd "$project" && ./gradlew --no-daemon --stacktrace build)
             jar="$(find "$project/build/libs" -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' -print -quit)"
             test -n "$jar"
             cp "$jar" "dist/bundled-bridge/minesport-bridge-${slug}-0.2.0.jar"
@@ -56,9 +56,9 @@ jobs:
             echo "::endgroup::"
           }
           build_bridge Fabric minesport-bridge-fabric fabric
-          build_bridge Forge bridge-forge forge
-          build_bridge NeoForge bridge-neoforge neoforge
-          build_bridge Quilt bridge-quilt quilt
+          build_bridge Forge minesport-bridge-forge forge
+          build_bridge NeoForge minesport-bridge-neoforge neoforge
+          build_bridge Quilt minesport-bridge-quilt quilt
           ls -lh dist/bundled-bridge
       - uses: actions/upload-artifact@v7
         with:
@@ -269,6 +269,7 @@ jobs:
         run: |
           $files = @(
             (Join-Path $env:GITHUB_WORKSPACE 'build.ps1'),
+            (Join-Path $env:GITHUB_WORKSPACE 'check.ps1'),
             (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\install-blender.ps1')
           )
           foreach ($file in $files) {
