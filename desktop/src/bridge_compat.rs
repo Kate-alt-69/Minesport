@@ -12,7 +12,27 @@ use std::{
     time::Duration,
 };
 
-static BRIDGE_SOURCE: Dir<'_> = include_dir!("$OUT_DIR/bridge-source");
+// Do not recursively embed OUT_DIR/bridge-source here. A previous Gradle run can
+// leave a live .gradle directory in that mutable staging workspace, and on
+// Windows include_dir! then tries to open Gradle's exclusively locked *.lock
+// files during rustc compilation. Embed only the canonical files declared by
+// the compatibility manifest instead.
+static BRIDGE_SOURCE_FILES: &[(&str, &[u8])] = &[
+    ("build.gradle", include_bytes!("../../minesport-bridge-fabric/build.gradle")),
+    ("settings.gradle", include_bytes!("../../minesport-bridge-fabric/settings.gradle")),
+    ("gradle.properties", include_bytes!("../../minesport-bridge-fabric/gradle.properties")),
+    ("gradlew", include_bytes!("../../minesport-bridge-fabric/gradlew")),
+    ("gradlew.bat", include_bytes!("../../minesport-bridge-fabric/gradlew.bat")),
+    ("gradle/wrapper/gradle-wrapper.jar", include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.jar")),
+    ("gradle/wrapper/gradle-wrapper.properties", include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.properties")),
+    ("src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java", include_bytes!("../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java")),
+    ("src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", include_bytes!("../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java")),
+    ("src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java")),
+    ("src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java")),
+    ("src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java")),
+    ("src/main/resources/fabric.mod.json", include_bytes!("../../minesport-bridge-fabric/src/main/resources/fabric.mod.json")),
+];
+
 static BRIDGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-fabric-versions");
 const MANIFEST_JSON: &str = include_str!("../../minesport-bridge-fabric-versions/manifest.json");
 const MAX_NETWORK_TEXT: u64 = 8 * 1024 * 1024;
@@ -187,9 +207,10 @@ where
 
     report(&mut progress, 5, "Preparing Bridge", "Materializing embedded canonical Bridge source");
     for (index, relative) in manifest.base.files.iter().enumerate() {
-        let embedded = BRIDGE_SOURCE.get_file(relative).ok_or_else(|| anyhow!("embedded canonical Bridge file is missing: {relative}"))?;
+        let embedded = embedded_bridge_source_bytes(relative)
+            .ok_or_else(|| anyhow!("embedded canonical Bridge file is missing: {relative}"))?;
         let target = safe_join(workspace, Path::new(relative))?;
-        write_file(&target, embedded.contents())?;
+        write_file(&target, embedded)?;
         if relative == "gradlew" {
             make_executable(&target)?;
         }
@@ -273,6 +294,12 @@ where
         profile_id,
         variables,
     })
+}
+
+fn embedded_bridge_source_bytes(relative: &str) -> Option<&'static [u8]> {
+    BRIDGE_SOURCE_FILES
+        .iter()
+        .find_map(|(path, bytes)| (*path == relative).then_some(*bytes))
 }
 
 fn profile_for<'a>(manifest: &'a Manifest, version: &str) -> Result<&'a Profile> {
@@ -440,6 +467,7 @@ fn replace_tree(root: &Path, extensions: &[String], from: &str, to: &str) -> Res
     }
     Ok(())
 }
+
 fn has_extension(path: &Path, extensions: &[String]) -> bool {
     if extensions.is_empty() { return true; }
     let ext = path.extension().and_then(|value| value.to_str()).map(|value| format!(".{value}")).unwrap_or_default();
@@ -678,6 +706,17 @@ mod tests {
         assert!(is_supported("1.21.11"));
         assert!(is_supported("26.2"));
         assert!(!is_supported("1.5"));
+    }
+
+    #[test]
+    fn every_manifest_base_file_is_embedded_explicitly() {
+        let manifest = manifest().unwrap();
+        for relative in &manifest.base.files {
+            assert!(
+                embedded_bridge_source_bytes(relative).is_some(),
+                "missing canonical Bridge source: {relative}"
+            );
+        }
     }
 
     #[test]
