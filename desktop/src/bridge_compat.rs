@@ -13,8 +13,8 @@ use std::{
 };
 
 static BRIDGE_SOURCE: Dir<'_> = include_dir!("$OUT_DIR/bridge-source");
-static BRIDGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../bridge-versions");
-const MANIFEST_JSON: &str = include_str!("../../bridge-versions/manifest.json");
+static BRIDGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-fabric-versions");
+const MANIFEST_JSON: &str = include_str!("../../minesport-bridge-fabric-versions/manifest.json");
 const MAX_NETWORK_TEXT: u64 = 8 * 1024 * 1024;
 const DOWNLOAD_ATTEMPTS: usize = 3;
 const GITHUB_CONTENTS_LIMIT: u64 = 64 * 1024 * 1024;
@@ -353,7 +353,10 @@ fn apply_operation(workspace: &Path, operation: &PatchOperation, variables: &Has
 }
 
 fn embedded_version_bytes(repo_path: &str) -> Result<&'static [u8]> {
-    let relative = repo_path.trim_start_matches('/').strip_prefix("bridge-versions/").unwrap_or(repo_path);
+    let relative = repo_path
+        .trim_start_matches('/')
+        .strip_prefix("minesport-bridge-fabric-versions/")
+        .unwrap_or(repo_path);
     BRIDGE_VERSIONS
         .get_file(relative)
         .map(|file| file.contents())
@@ -437,7 +440,6 @@ fn replace_tree(root: &Path, extensions: &[String], from: &str, to: &str) -> Res
     }
     Ok(())
 }
-
 fn has_extension(path: &Path, extensions: &[String]) -> bool {
     if extensions.is_empty() { return true; }
     let ext = path.extension().and_then(|value| value.to_str()).map(|value| format!(".{value}")).unwrap_or_default();
@@ -762,8 +764,8 @@ mod tests {
 
     #[test]
     fn raw_github_fallback_parses_repository_coordinates() {
-        let parsed = parse_raw_github_url("https://raw.githubusercontent.com/Kate-alt-69/Minesport/main/bridge/file.java").unwrap();
-        assert_eq!(parsed, ("Kate-alt-69", "Minesport", "main", "bridge/file.java"));
+        let parsed = parse_raw_github_url("https://raw.githubusercontent.com/Kate-alt-69/Minesport/main/minesport-bridge-fabric/file.java").unwrap();
+        assert_eq!(parsed, ("Kate-alt-69", "Minesport", "main", "minesport-bridge-fabric/file.java"));
         assert_eq!(percent_encode_segment("a b"), "a%20b");
     }
 
