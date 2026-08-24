@@ -18,6 +18,7 @@ pub enum RuntimeCacheEvent {
 struct State {
     running: bool,
     version: String,
+    loader: String,
     mods_path: PathBuf,
     fingerprint: String,
     ready_path: PathBuf,
@@ -36,17 +37,37 @@ impl RuntimeCacheManager {
     where
         F: Fn(RuntimeCacheEvent) + Send + 'static,
     {
+        self.start_for_loader(version, "fabric".into(), mods_path, force, listener)
+    }
+
+    pub fn start_for_loader<F>(
+        &self,
+        version: String,
+        loader: String,
+        mods_path: PathBuf,
+        force: bool,
+        listener: F,
+    ) -> Result<bool>
+    where
+        F: Fn(RuntimeCacheEvent) + Send + 'static,
+    {
+        let loader = normalize_loader(&loader);
         let logger = diagnostics::Logger::new("RUNTIME").child("REGISTRY");
         let mut state = self.state.lock().map_err(|_| anyhow!("runtime cache state is poisoned"))?;
         if state.running {
-            if state.version != version || !same_path(&state.mods_path, &mods_path) {
+            if state.version != version
+                || !state.loader.eq_ignore_ascii_case(&loader)
+                || !same_path(&state.mods_path, &mods_path)
+            {
                 logger.warn(
                     "RuntimeRegistryJoinRejectedDifferentInstance",
                     "another runtime registry worker is already running for a different Minecraft instance",
                     &[
                         ("requested_version", version),
+                        ("requested_loader", loader),
                         ("requested_mods", mods_path.display().to_string()),
                         ("running_version", state.version.clone()),
+                        ("running_loader", state.loader.clone()),
                         ("running_mods", state.mods_path.display().to_string()),
                     ],
                 );
@@ -64,6 +85,7 @@ impl RuntimeCacheManager {
                     ("operation_id", operation_id),
                     ("trace_id", trace_id),
                     ("version", version),
+                    ("loader", loader),
                     ("mods_path", mods_path.display().to_string()),
                 ],
             );
@@ -74,11 +96,13 @@ impl RuntimeCacheManager {
         let operation = logger
             .operation("RuntimeRegistryPrepareFullModelCache")
             .field("version", &version)
+            .field("loader", &loader)
             .field("mods_path", mods_path.display())
             .field("force", force);
         let cancel = Arc::new(AtomicBool::new(false));
         state.running = true;
         state.version = version.clone();
+        state.loader = loader.clone();
         state.mods_path = mods_path.clone();
         state.cancel = Some(cancel.clone());
         state.listeners.clear();
@@ -92,7 +116,8 @@ impl RuntimeCacheManager {
 
         let manager = self.clone();
         thread::spawn(move || {
-            let result = runtime_worker::prepare_full_registry_cancellable(
+            let result = runtime_worker::prepare_full_registry_cancellable_for_loader(
+                &loader,
                 &version,
                 &mods_path,
                 force,
@@ -136,8 +161,16 @@ impl RuntimeCacheManager {
     }
 
     pub fn is_running_for(&self, version: &str, mods_path: &Path) -> bool {
+        self.is_running_for_loader(version, "fabric", mods_path)
+    }
+
+    pub fn is_running_for_loader(&self, version: &str, loader: &str, mods_path: &Path) -> bool {
+        let loader = normalize_loader(loader);
         self.state.lock().map(|state| {
-            state.running && state.version == version && same_path(&state.mods_path, mods_path)
+            state.running
+                && state.version == version
+                && state.loader.eq_ignore_ascii_case(&loader)
+                && same_path(&state.mods_path, mods_path)
         }).unwrap_or(false)
     }
 
@@ -235,6 +268,10 @@ impl RuntimeCacheManager {
     }
 }
 
+fn normalize_loader(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
 fn first_line(value: &str) -> &str {
     value.lines().next().unwrap_or(value)
 }
@@ -275,11 +312,27 @@ mod tests {
         {
             let mut state = manager.state.lock().unwrap();
             state.version = "1.21.10".into();
+            state.loader = "forge".into();
             state.mods_path = PathBuf::from("mods");
             state.fingerprint = "old-exact-fingerprint".into();
             state.ready_path = PathBuf::from("runtime-registry/old/registry.data");
         }
         assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
+    }
+
+    #[test]
+    fn loader_identity_is_part_of_running_job_key() {
+        let manager = RuntimeCacheManager::default();
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.running = true;
+            state.version = "1.21.10".into();
+            state.loader = "forge".into();
+            state.mods_path = PathBuf::from("mods");
+        }
+        assert!(manager.is_running_for_loader("1.21.10", "Forge", Path::new("mods")));
+        assert!(!manager.is_running_for_loader("1.21.10", "fabric", Path::new("mods")));
+        assert!(!manager.is_running_for("1.21.10", Path::new("mods")));
     }
 
     #[test]
