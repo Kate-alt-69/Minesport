@@ -16,20 +16,21 @@
       "match": "^1\\.21\\.9$",
       "patch": "1.21.9/patch.json",
       "java": 21,
-      "variables": {
-        "minecraft_version": "1.21.9",
-        "forge_version": "59.0.5"
-      }
+      "variables": {"minecraft_version": "1.21.9", "forge_version": "59.0.5"}
     },
     {
       "id": "1.21.8",
       "match": "^1\\.21\\.8$",
       "patch": "1.21.8/patch.json",
       "java": 21,
-      "variables": {
-        "minecraft_version": "1.21.8",
-        "forge_version": "58.1.22"
-      }
+      "variables": {"minecraft_version": "1.21.8", "forge_version": "58.1.22"}
+    },
+    {
+      "id": "1.21.5",
+      "match": "^1\\.21\\.5$",
+      "patch": "1.21.5/patch.json",
+      "java": 21,
+      "variables": {"minecraft_version": "1.21.5", "forge_version": "55.1.13"}
     }
   ]
 }

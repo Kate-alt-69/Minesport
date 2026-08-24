@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "description": "Adapt the canonical Quilt 1.21.10 Bridge to Minecraft 1.21.7.",
+  "operations": [
+    {"op":"set_property","file":"gradle.properties","key":"minecraft_version","value":"${minecraft_version}"},
+    {"op":"set_property","file":"gradle.properties","key":"quilt_loader_version","value":"${quilt_loader_version}"},
+    {"op":"set_property","file":"gradle.properties","key":"fabric_version","value":"${fabric_version}"},
+    {"op":"replace","file":"src/main/resources/fabric.mod.json","from":"\"minecraft\": \">=1.21.9 <=1.21.10\"","to":"\"minecraft\": \">=1.21.7 <1.21.8\""}
+  ]
+}
