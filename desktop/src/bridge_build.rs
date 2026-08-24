@@ -77,11 +77,6 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
 
 fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
     let libs = workspace.join("build").join("libs");
-    let preferred = libs.join("minesport-bridge-0.2.0.jar");
-    if preferred.is_file() {
-        return Ok(preferred);
-    }
-
     let mut candidates = Vec::new();
     for entry in fs::read_dir(&libs)
         .with_context(|| format!("read Bridge build output {}", libs.display()))?
