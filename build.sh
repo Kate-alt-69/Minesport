@@ -100,9 +100,9 @@ build_bridge() {
 
 echo "[1/3] Building bundled Minecraft 1.21.10 loader Bridges..."
 build_bridge "Fabric" "minesport-bridge-fabric" "$FABRIC_BRIDGE"
-build_bridge "Forge" "bridge-forge" "$FORGE_BRIDGE"
-build_bridge "NeoForge" "bridge-neoforge" "$NEOFORGE_BRIDGE"
-build_bridge "Quilt" "bridge-quilt" "$QUILT_BRIDGE"
+build_bridge "Forge" "minesport-bridge-forge" "$FORGE_BRIDGE"
+build_bridge "NeoForge" "minesport-bridge-neoforge" "$NEOFORGE_BRIDGE"
+build_bridge "Quilt" "minesport-bridge-quilt" "$QUILT_BRIDGE"
 echo "Bundled Bridges staged under dist/bundled-bridge/"
 echo
 
