@@ -388,6 +388,7 @@ export component MainWindow inherits Window {
     in-out property <int> preview-block-count: 0;
     in-out property <string> preview-focus-label: "LMB point A · RMB point B · LMB again confirms";
     in-out property <int> preview-pick-button: 0;
+    private property <bool> preview-resize-held: false;
 
     in-out property <string> output-path: "";
     in-out property <string> export-name: "Minesport_Export";
@@ -444,6 +445,8 @@ export component MainWindow inherits Window {
     callback preview-pan(float, float);
     callback preview-dolly(float);
     callback preview-fit();
+    callback preview-clear();
+    callback preview-resize(int);
     callback rebuild-runtime-cache();
     callback cancel-runtime-cache();
     callback remove-cache();
@@ -470,6 +473,20 @@ export component MainWindow inherits Window {
             if (root.blender-prompt-visible || root.settings-visible) {
                 return reject;
             }
+            if (root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
+                if (event.text == "c" || event.text == "C") {
+                    root.preview-clear();
+                    return accept;
+                }
+                if (event.text == "e" || event.text == "E") {
+                    root.preview-resize-held = true;
+                    return accept;
+                }
+                if (event.text == "f" || event.text == "F") {
+                    root.preview-fit();
+                    return accept;
+                }
+            }
             if (event.text == Key.F6) {
                 if (root.viewport-mode == 0 && root.map-available) {
                     map-view.fit();
@@ -479,6 +496,13 @@ export component MainWindow inherits Window {
                     root.preview-fit();
                     return accept;
                 }
+            }
+            return reject;
+        }
+        capture-key-released(event) => {
+            if (event.text == "e" || event.text == "E") {
+                root.preview-resize-held = false;
+                return accept;
             }
             return reject;
         }
@@ -695,7 +719,7 @@ export component MainWindow inherits Window {
                                 padding-left: 12px;
                                 padding-right: 10px;
                                 spacing: 8px;
-                                Text { text: root.viewport-mode == 0 ? "LMB select · MMB pan · scroll zoom · F6 fit" : "LMB A · RMB B · LMB confirm · MMB look · Shift+MMB pan · scroll dolly · F6 fit"; color: #adb5b0; font-size: 11px; vertical-alignment: center; }
+                                Text { text: root.viewport-mode == 0 ? "LMB select · MMB pan · scroll zoom · F6 fit" : "LMB A · RMB B · LMB confirm · MMB look · Shift+MMB pan · scroll dolly · E+scroll resize · C clear · F/F6 fit"; color: #adb5b0; font-size: 11px; vertical-alignment: center; }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                                 Button { text: "2D"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
                                 Button { text: "3D"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-path != "No world selected"; clicked => { root.viewport-mode = 1; root.open-3d(); } }
@@ -804,7 +828,11 @@ export component MainWindow inherits Window {
                                     }
                                     scroll-event(event) => {
                                         if (!root.preview-available || root.preview-loading || event.delta-y == 0px) { return reject; }
-                                        root.preview-dolly(event.delta-y > 0px ? 1.0 : -1.0);
+                                        if (root.preview-resize-held) {
+                                            root.preview-resize(event.delta-y > 0px ? 1 : -1);
+                                        } else {
+                                            root.preview-dolly(event.delta-y > 0px ? 1.0 : -1.0);
+                                        }
                                         return accept;
                                     }
                                 }
