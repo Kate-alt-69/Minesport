@@ -6,26 +6,34 @@ use crate::{
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use std::{
+    collections::BTreeMap,
     env,
     fs::{self, File},
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const GRADLEW_SH: &[u8] = include_bytes!("../../minesport-bridge-fabric/gradlew");
 const GRADLEW_BAT: &[u8] = include_bytes!("../../minesport-bridge-fabric/gradlew.bat");
-const GRADLE_WRAPPER_JAR: &[u8] = include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.jar");
-const GRADLE_WRAPPER_PROPERTIES: &[u8] = include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.properties");
+const GRADLE_WRAPPER_JAR: &[u8] =
+    include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.jar");
+const GRADLE_WRAPPER_PROPERTIES: &[u8] =
+    include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.properties");
 
 const MC_1_21_10: &str = "1.21.10";
 const LOADER_1_21_10: &str = "0.18.5";
 const FABRIC_API_1_21_10: &str = "0.138.4+1.21.10";
 const LOOM_1_21_10: &str = "1.11.7";
 const FABRIC_MOD_JSON_LIMIT: u64 = 1 << 20;
+const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone)]
 pub struct CacheResult {
@@ -45,7 +53,27 @@ struct WorkspacePlan {
     java: u32,
 }
 
-pub fn prepare_full_registry<F>(version: &str, mods_path: &Path, force: bool, progress: F) -> Result<CacheResult>
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectLaunchManifest {
+    schema: u32,
+    main_class: String,
+    classpath: Vec<String>,
+    #[serde(default)]
+    jvm_args: Vec<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    working_dir: String,
+    #[serde(default)]
+    environment_overrides: BTreeMap<String, String>,
+}
+
+pub fn prepare_full_registry<F>(
+    version: &str,
+    mods_path: &Path,
+    force: bool,
+    progress: F,
+) -> Result<CacheResult>
 where
     F: FnMut(Progress) + Send,
 {
@@ -83,12 +111,7 @@ where
     F: FnMut(Progress) + Send,
 {
     prepare_full_registry_cancellable_for_loader(
-        "fabric",
-        version,
-        mods_path,
-        force,
-        cancel,
-        progress,
+        "fabric", version, mods_path, force, cancel, progress,
     )
 }
 
@@ -120,10 +143,16 @@ where
         bail!("runtime cache cancelled");
     }
 
-    progress(Progress { percent: 0, message: "Starting runtime cache…".into() });
+    progress(Progress {
+        percent: 0,
+        message: "Starting runtime cache…".into(),
+    });
     let _cache_lease = runtime::acquire_generated_cache_lease()?;
 
-    progress(Progress { percent: 1, message: "Checking mods…".into() });
+    progress(Progress {
+        percent: 1,
+        message: "Checking mods…".into(),
+    });
     let raw_fingerprint = registry::mods_fingerprint(mods_path)?;
     let fingerprint = loader_cache_fingerprint(family, &raw_fingerprint);
     if cancel.load(Ordering::Relaxed) {
@@ -133,11 +162,21 @@ where
     let cache_root = runtime::cache_root();
     let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);
     if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
-        progress(Progress { percent: 100, message: "Runtime ready".into() });
-        return Ok(CacheResult { fingerprint, registry_path: existing, reused: true });
+        progress(Progress {
+            percent: 100,
+            message: "Runtime ready".into(),
+        });
+        return Ok(CacheResult {
+            fingerprint,
+            registry_path: existing,
+            reused: true,
+        });
     }
 
-    progress(Progress { percent: 4, message: "Preparing worker…".into() });
+    progress(Progress {
+        percent: 4,
+        message: "Preparing worker…".into(),
+    });
     let plan = create_workspace(family, &version, mods_path, |update| {
         progress(Progress {
             percent: update.percent.clamp(4, 38),
@@ -154,13 +193,29 @@ where
         bail!("runtime cache cancelled");
     }
 
-    progress(Progress { percent: 40, message: "Checking JDK…".into() });
+    progress(Progress {
+        percent: 40,
+        message: "Checking JDK…".into(),
+    });
     let java_home = toolchain::ensure_jdk(plan.java, |update| {
         progress(Progress {
             percent: update.percent.clamp(40, 54),
             message: update.message,
         });
     })?;
+    if cancel.load(Ordering::Relaxed) {
+        bail!("runtime cache cancelled");
+    }
+
+    let direct_launch = if family == BridgeFamily::Fabric && version == MC_1_21_10 {
+        progress(Progress {
+            percent: 54,
+            message: "Preparing Minecraft launch…".into(),
+        });
+        Some(ensure_direct_launch_profile(&version, &java_home)?)
+    } else {
+        None
+    };
     if cancel.load(Ordering::Relaxed) {
         bail!("runtime cache cancelled");
     }
@@ -183,7 +238,10 @@ where
                     announced = true;
                     let _ = listen_tx.send(Ok(()));
                 }
-                registry::CaptureNotice::Progress { blocks, total_blocks } => {
+                registry::CaptureNotice::Progress {
+                    blocks,
+                    total_blocks,
+                } => {
                     let _ = capture_progress_tx.send((blocks, total_blocks));
                 }
                 _ => {}
@@ -199,10 +257,20 @@ where
         .recv_timeout(Duration::from_secs(5))
         .context("wait for Rust runtime registry receiver")??;
 
-    progress(Progress { percent: 55, message: "Starting Minecraft…".into() });
+    progress(Progress {
+        percent: 55,
+        message: "Starting Minecraft…".into(),
+    });
     let log_path = workspace.join("runtime-worker.log");
-    let mut child = start_gradle_worker(family, &workspace, &log_path, &java_home)?;
-    progress(Progress { percent: 62, message: "Loading runtime models…".into() });
+    let mut child = if let Some(manifest) = direct_launch.as_ref() {
+        start_direct_worker(family, &workspace, &log_path, &java_home, manifest)?
+    } else {
+        start_gradle_worker(family, &workspace, &log_path, &java_home)?
+    };
+    progress(Progress {
+        percent: 62,
+        message: "Loading runtime models…".into(),
+    });
 
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
     let mut last_captured_blocks = 0usize;
@@ -223,20 +291,39 @@ where
             } else {
                 format!("Loading runtime models · {blocks}")
             };
-            progress(Progress { percent: capture_percent, message });
+            progress(Progress {
+                percent: capture_percent,
+                message,
+            });
         }
 
         match capture_rx.try_recv() {
             Ok(Ok(path)) => {
-                progress(Progress { percent: 96, message: "Saving runtime cache…".into() });
+                progress(Progress {
+                    percent: 96,
+                    message: "Saving runtime cache…".into(),
+                });
                 stop_child(&mut child);
-                progress(Progress { percent: 100, message: "Runtime ready".into() });
+                progress(Progress {
+                    percent: 100,
+                    message: "Runtime ready".into(),
+                });
                 drop(cleanup);
-                return Ok(CacheResult { fingerprint, registry_path: path, reused: false });
+                return Ok(CacheResult {
+                    fingerprint,
+                    registry_path: path,
+                    reused: false,
+                });
             }
             Ok(Err(error)) => {
                 stop_child(&mut child);
-                return Err(runtime_worker_failure(&workspace, &version, &log_path, format!("{error:#}"), 60));
+                return Err(runtime_worker_failure(
+                    &workspace,
+                    &version,
+                    &log_path,
+                    format!("{error:#}"),
+                    60,
+                ));
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 stop_child(&mut child);
@@ -254,18 +341,33 @@ where
         if let Some(status) = child.try_wait().context("poll isolated Minecraft worker")? {
             match capture_rx.recv_timeout(Duration::from_secs(2)) {
                 Ok(Ok(path)) => {
-                    progress(Progress { percent: 100, message: "Runtime ready".into() });
-                    return Ok(CacheResult { fingerprint, registry_path: path, reused: false });
+                    progress(Progress {
+                        percent: 100,
+                        message: "Runtime ready".into(),
+                    });
+                    return Ok(CacheResult {
+                        fingerprint,
+                        registry_path: path,
+                        reused: false,
+                    });
                 }
                 Ok(Err(error)) => {
-                    return Err(runtime_worker_failure(&workspace, &version, &log_path, format!("{error:#}"), 80));
+                    return Err(runtime_worker_failure(
+                        &workspace,
+                        &version,
+                        &log_path,
+                        format!("{error:#}"),
+                        80,
+                    ));
                 }
                 Err(_) => {
                     return Err(runtime_worker_failure(
                         &workspace,
                         &version,
                         &log_path,
-                        format!("runtime Minecraft worker exited with {status} before the full registry was received"),
+                        format!(
+                            "runtime Minecraft worker exited with {status} before the full registry was received"
+                        ),
                         80,
                     ));
                 }
@@ -368,10 +470,19 @@ fn create_fast_bundled_workspace(workspace: &Path, version: &str) -> Result<()> 
     write_file(&workspace.join("gradlew"), GRADLEW_SH)?;
     write_file(&workspace.join("gradlew.bat"), GRADLEW_BAT)?;
     write_file(&wrapper_dir.join("gradle-wrapper.jar"), GRADLE_WRAPPER_JAR)?;
-    write_file(&wrapper_dir.join("gradle-wrapper.properties"), GRADLE_WRAPPER_PROPERTIES)?;
-    write_file(&workspace.join("settings.gradle"), SETTINGS_GRADLE.as_bytes())?;
+    write_file(
+        &wrapper_dir.join("gradle-wrapper.properties"),
+        GRADLE_WRAPPER_PROPERTIES,
+    )?;
+    write_file(
+        &workspace.join("settings.gradle"),
+        SETTINGS_GRADLE.as_bytes(),
+    )?;
     write_file(&workspace.join("build.gradle"), BUILD_GRADLE.as_bytes())?;
-    write_file(&workspace.join("gradle.properties"), gradle_properties(version).as_bytes())?;
+    write_file(
+        &workspace.join("gradle.properties"),
+        gradle_properties(version).as_bytes(),
+    )?;
 
     #[cfg(unix)]
     {
@@ -381,21 +492,50 @@ fn create_fast_bundled_workspace(workspace: &Path, version: &str) -> Result<()> 
     Ok(())
 }
 
-fn start_gradle_worker(
-    family: BridgeFamily,
-    workspace: &Path,
-    log_path: &Path,
-    java_home: &Path,
-) -> Result<Child> {
-    let stdout = File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
-    let stderr = stdout.try_clone()?;
-    let java = java_home.join("bin").join(if cfg!(windows) { "java.exe" } else { "java" });
-    if !java.is_file() {
-        bail!("selected runtime JDK has no Java launcher: {}", java.display());
+fn direct_launch_profile_dir(version: &str) -> PathBuf {
+    runtime::cache_root()
+        .join("bridge-build")
+        .join("launch-profiles")
+        .join(format!(
+            "fabric-{}-loader-{}-api-{}-loom-{}-v{}",
+            safe(version),
+            safe(LOADER_1_21_10),
+            safe(FABRIC_API_1_21_10),
+            safe(LOOM_1_21_10),
+            DIRECT_LAUNCH_PROFILE_SCHEMA
+        ))
+}
+
+fn ensure_direct_launch_profile(version: &str, java_home: &Path) -> Result<DirectLaunchManifest> {
+    let profile = direct_launch_profile_dir(version);
+    let manifest_path = profile.join("minesport-launch.json");
+    if let Ok(manifest) = load_direct_launch_manifest(&manifest_path) {
+        return Ok(manifest);
     }
-    let wrapper = workspace.join("gradle").join("wrapper").join("gradle-wrapper.jar");
+
+    create_fast_bundled_workspace(&profile, version)?;
+    let log_path = profile.join("resolve-runtime.log");
+    let stdout =
+        File::create(&log_path).with_context(|| format!("create {}", log_path.display()))?;
+    let stderr = stdout.try_clone()?;
+    let java = java_home
+        .join("bin")
+        .join(if cfg!(windows) { "java.exe" } else { "java" });
+    if !java.is_file() {
+        bail!(
+            "selected runtime JDK has no Java launcher: {}",
+            java.display()
+        );
+    }
+    let wrapper = profile
+        .join("gradle")
+        .join("wrapper")
+        .join("gradle-wrapper.jar");
     if !wrapper.is_file() {
-        bail!("runtime worker has no embedded Gradle wrapper: {}", wrapper.display());
+        bail!(
+            "runtime launch profile has no embedded Gradle wrapper: {}",
+            wrapper.display()
+        );
     }
 
     let mut command = Command::new(&java);
@@ -407,7 +547,198 @@ fn start_gradle_worker(
         .arg("-cp")
         .arg(&wrapper)
         .arg("org.gradle.wrapper.GradleWrapperMain")
-        .args(["--no-daemon", "--console=plain", "--max-workers=1", "--no-watch-fs", "runClient"]);
+        .args([
+            "--no-daemon",
+            "--console=plain",
+            "--max-workers=1",
+            "--no-watch-fs",
+            "minesportResolveRuntime",
+        ])
+        .current_dir(&profile)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    sanitize_java_environment(&mut command, java_home);
+    command.env("GRADLE_USER_HOME", gradle_user_home());
+    command.env("JAVA_TOOL_OPTIONS", "-XX:ActiveProcessorCount=2");
+    hide_console_window(&mut command);
+
+    let status = command.status().with_context(|| {
+        format!(
+            "resolve cached Fabric runtime launch profile with {}",
+            java_home.display()
+        )
+    })?;
+    if !status.success() {
+        let tail = tail_file(&log_path, 80);
+        if tail.is_empty() {
+            bail!("runtime launch profile resolver exited with {status}");
+        }
+        bail!("runtime launch profile resolver exited with {status}\n{tail}");
+    }
+
+    load_direct_launch_manifest(&manifest_path).with_context(|| {
+        format!(
+            "load resolved runtime launch profile {}",
+            manifest_path.display()
+        )
+    })
+}
+
+fn load_direct_launch_manifest(path: &Path) -> Result<DirectLaunchManifest> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let manifest: DirectLaunchManifest =
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
+    if manifest.schema != DIRECT_LAUNCH_PROFILE_SCHEMA {
+        bail!(
+            "runtime launch profile schema {} is not supported",
+            manifest.schema
+        );
+    }
+    if manifest.main_class.trim().is_empty() {
+        bail!("runtime launch profile has no main class");
+    }
+    if manifest.classpath.is_empty() {
+        bail!("runtime launch profile has an empty classpath");
+    }
+    if let Some(missing) = manifest
+        .classpath
+        .iter()
+        .find(|entry| entry.ends_with(".jar") && !Path::new(entry.as_str()).is_file())
+    {
+        bail!("runtime launch profile references missing JAR {missing}");
+    }
+    Ok(manifest)
+}
+
+fn start_direct_worker(
+    family: BridgeFamily,
+    workspace: &Path,
+    log_path: &Path,
+    java_home: &Path,
+    manifest: &DirectLaunchManifest,
+) -> Result<Child> {
+    let stdout =
+        File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
+    let stderr = stdout.try_clone()?;
+    let java = java_home
+        .join("bin")
+        .join(if cfg!(windows) { "java.exe" } else { "java" });
+    if !java.is_file() {
+        bail!(
+            "selected runtime JDK has no Java launcher: {}",
+            java.display()
+        );
+    }
+
+    let classpath = env::join_paths(manifest.classpath.iter().map(PathBuf::from))
+        .context("join cached runtime classpath")?;
+    let run_dir = workspace.join("run");
+    let runtime_args = direct_runtime_args(manifest, &run_dir);
+
+    let mut command = Command::new(&java);
+    for arg in &manifest.jvm_args {
+        if !managed_runtime_jvm_arg(arg) {
+            command.arg(arg);
+        }
+    }
+    command
+        .arg("-Xmx512m")
+        .arg("-XX:MaxMetaspaceSize=384m")
+        .arg("-XX:ActiveProcessorCount=2")
+        .arg("-Dfile.encoding=UTF-8")
+        .arg("-cp")
+        .arg(classpath)
+        .arg(&manifest.main_class)
+        .args(runtime_args)
+        .current_dir(&run_dir)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    sanitize_java_environment(&mut command, java_home);
+    for (key, value) in &manifest.environment_overrides {
+        command.env(key, value);
+    }
+    command.env("MINESPORT_BRIDGE_PORT", "25590");
+    command.env("MINESPORT_BRIDGE_MODE", "all");
+    command.env("MINESPORT_BRIDGE_WORKER", "1");
+    hide_console_window(&mut command);
+    command.spawn().with_context(|| {
+        format!(
+            "start isolated {} runtime worker directly with {}",
+            family.label(),
+            java_home.display()
+        )
+    })
+}
+
+fn managed_runtime_jvm_arg(arg: &str) -> bool {
+    arg.starts_with("-Xmx")
+        || arg.starts_with("-Xms")
+        || arg.starts_with("-XX:MaxMetaspaceSize=")
+        || arg.starts_with("-XX:ActiveProcessorCount=")
+        || arg.starts_with("-Dfile.encoding=")
+}
+
+fn direct_runtime_args(manifest: &DirectLaunchManifest, run_dir: &Path) -> Vec<String> {
+    let from = manifest.working_dir.as_str();
+    let to = run_dir.to_string_lossy();
+    manifest
+        .args
+        .iter()
+        .map(|arg| {
+            if from.is_empty() {
+                arg.clone()
+            } else {
+                arg.replace(from, to.as_ref())
+            }
+        })
+        .collect()
+}
+
+fn start_gradle_worker(
+    family: BridgeFamily,
+    workspace: &Path,
+    log_path: &Path,
+    java_home: &Path,
+) -> Result<Child> {
+    let stdout =
+        File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
+    let stderr = stdout.try_clone()?;
+    let java = java_home
+        .join("bin")
+        .join(if cfg!(windows) { "java.exe" } else { "java" });
+    if !java.is_file() {
+        bail!(
+            "selected runtime JDK has no Java launcher: {}",
+            java.display()
+        );
+    }
+    let wrapper = workspace
+        .join("gradle")
+        .join("wrapper")
+        .join("gradle-wrapper.jar");
+    if !wrapper.is_file() {
+        bail!(
+            "runtime worker has no embedded Gradle wrapper: {}",
+            wrapper.display()
+        );
+    }
+
+    let mut command = Command::new(&java);
+    command
+        .arg("-Xmx512m")
+        .arg("-XX:MaxMetaspaceSize=384m")
+        .arg("-XX:ActiveProcessorCount=2")
+        .arg("-Dfile.encoding=UTF-8")
+        .arg("-cp")
+        .arg(&wrapper)
+        .arg("org.gradle.wrapper.GradleWrapperMain")
+        .args([
+            "--no-daemon",
+            "--console=plain",
+            "--max-workers=1",
+            "--no-watch-fs",
+            "runClient",
+        ]);
     command
         .current_dir(workspace)
         .stdout(Stdio::from(stdout))
@@ -490,7 +821,8 @@ fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
         }
         let filename = entry.file_name().to_string_lossy().to_string();
         let lower = filename.to_ascii_lowercase();
-        if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-") {
+        if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-")
+        {
             continue;
         }
         if should_skip_runtime_worker_mod(&path, &filename) {
@@ -608,14 +940,22 @@ fn runtime_worker_failure(
 }
 
 fn preserve_runtime_worker_diagnostics(workspace: &Path, version: &str) -> Option<PathBuf> {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis();
-    let destination = diagnostics::folder()
-        .join("runtime-workers")
-        .join(format!("{}-{}-{stamp}", safe(version), std::process::id()));
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    let destination = diagnostics::folder().join("runtime-workers").join(format!(
+        "{}-{}-{stamp}",
+        safe(version),
+        std::process::id()
+    ));
     fs::create_dir_all(&destination).ok()?;
     let files = [
         (workspace.join("runtime-worker.log"), "runtime-worker.log"),
-        (workspace.join("run").join("logs").join("latest.log"), "minecraft-latest.log"),
+        (
+            workspace.join("run").join("logs").join("latest.log"),
+            "minecraft-latest.log",
+        ),
     ];
     let mut copied = false;
     for (source, name) in files {
@@ -684,7 +1024,9 @@ const SETTINGS_GRADLE: &str = r#"pluginManagement {
 rootProject.name = 'minesport-runtime-worker'
 "#;
 
-const BUILD_GRADLE: &str = r#"plugins {
+const BUILD_GRADLE: &str = r#"import groovy.json.JsonOutput
+
+plugins {
     id 'fabric-loom' version '1.11.7'
     id 'java'
 }
@@ -704,6 +1046,30 @@ dependencies {
     mappings loom.officialMojangMappings()
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+tasks.register('minesportResolveRuntime') {
+    dependsOn {
+        def runTask = tasks.named('runClient').get()
+        runTask.taskDependencies.getDependencies(runTask)
+    }
+    doLast {
+        def runTask = tasks.named('runClient').get()
+        def inherited = System.getenv()
+        def environmentOverrides = runTask.environment
+            .findAll { key, value -> inherited[key] != value?.toString() }
+            .collectEntries { key, value -> [(key.toString()): value?.toString()] }
+        def payload = [
+            schema: 1,
+            mainClass: runTask.mainClass.get(),
+            classpath: runTask.classpath.files.collect { it.absolutePath },
+            jvmArgs: runTask.allJvmArgs.collect { it.toString() },
+            args: (runTask.args ?: []).collect { it.toString() },
+            workingDir: runTask.workingDir.absolutePath,
+            environmentOverrides: environmentOverrides,
+        ]
+        file('minesport-launch.json').text = JsonOutput.toJson(payload)
+    }
 }
 "#;
 
@@ -760,6 +1126,35 @@ mod tests {
     }
 
     #[test]
+    fn direct_launch_keeps_loom_flags_but_owns_resource_caps() {
+        assert!(managed_runtime_jvm_arg("-Xmx2G"));
+        assert!(managed_runtime_jvm_arg("-XX:ActiveProcessorCount=8"));
+        assert!(!managed_runtime_jvm_arg("-Dfabric.dli.env=client"));
+    }
+
+    #[test]
+    fn direct_launch_retargets_only_the_game_run_directory() {
+        let manifest = DirectLaunchManifest {
+            schema: DIRECT_LAUNCH_PROFILE_SCHEMA,
+            main_class: "example.Main".into(),
+            classpath: vec!["example.jar".into()],
+            jvm_args: vec![],
+            args: vec![
+                "--gameDir".into(),
+                "/profile/run".into(),
+                "--assetsDir".into(),
+                "/cache/assets".into(),
+            ],
+            working_dir: "/profile/run".into(),
+            environment_overrides: BTreeMap::new(),
+        };
+        assert_eq!(
+            direct_runtime_args(&manifest, Path::new("/worker/run")),
+            vec!["--gameDir", "/worker/run", "--assetsDir", "/cache/assets",]
+        );
+    }
+
+    #[test]
     fn fake_oracle_javapath_parent_is_not_a_jdk() {
         let fake = Path::new(r"C:\Program Files\Common Files\Oracle\Java");
         assert!(!toolchain::valid_jdk_home(fake, 21));
@@ -771,7 +1166,10 @@ mod tests {
         assert!(bridge_family::is_supported(BridgeFamily::Fabric, "1.21.11"));
         assert!(bridge_family::is_supported(BridgeFamily::Fabric, "26.2"));
         assert!(bridge_family::is_supported(BridgeFamily::Forge, "1.21.10"));
-        assert!(bridge_family::is_supported(BridgeFamily::NeoForge, "1.21.9"));
+        assert!(bridge_family::is_supported(
+            BridgeFamily::NeoForge,
+            "1.21.9"
+        ));
         assert!(bridge_family::is_supported(BridgeFamily::Quilt, "1.21.8"));
     }
 
@@ -779,9 +1177,18 @@ mod tests {
     fn loader_family_separates_non_fabric_cache_identity() {
         let raw = "0123456789abcdef";
         assert_eq!(loader_cache_fingerprint(BridgeFamily::Fabric, raw), raw);
-        assert_eq!(loader_cache_fingerprint(BridgeFamily::Forge, raw), "forge-0123456789abcdef");
-        assert_eq!(loader_cache_fingerprint(BridgeFamily::NeoForge, raw), "neoforge-0123456789abcdef");
-        assert_eq!(loader_cache_fingerprint(BridgeFamily::Quilt, raw), "quilt-0123456789abcdef");
+        assert_eq!(
+            loader_cache_fingerprint(BridgeFamily::Forge, raw),
+            "forge-0123456789abcdef"
+        );
+        assert_eq!(
+            loader_cache_fingerprint(BridgeFamily::NeoForge, raw),
+            "neoforge-0123456789abcdef"
+        );
+        assert_eq!(
+            loader_cache_fingerprint(BridgeFamily::Quilt, raw),
+            "quilt-0123456789abcdef"
+        );
     }
 
     #[test]
@@ -793,7 +1200,10 @@ mod tests {
 
     #[test]
     fn renamed_crash_assistant_is_skipped_by_fabric_mod_id() {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = env::temp_dir().join(format!(
             "minesport-crash-assistant-id-{}-{stamp}",
             std::process::id()
@@ -810,8 +1220,14 @@ mod tests {
             .unwrap();
         writer.finish().unwrap();
 
-        assert_eq!(runtime_worker_fabric_mod_id(&jar).as_deref(), Some("crash_assistant"));
-        assert!(should_skip_runtime_worker_mod(&jar, "totally-normal-mod.jar"));
+        assert_eq!(
+            runtime_worker_fabric_mod_id(&jar).as_deref(),
+            Some("crash_assistant")
+        );
+        assert!(should_skip_runtime_worker_mod(
+            &jar,
+            "totally-normal-mod.jar"
+        ));
         let _ = fs::remove_dir_all(root);
     }
 
