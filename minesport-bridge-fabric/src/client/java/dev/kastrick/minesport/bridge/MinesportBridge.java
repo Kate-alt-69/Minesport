@@ -77,6 +77,7 @@ public class MinesportBridge implements ClientModInitializer {
             }
 
             boolean polymerPresent = isPolymerPresent();
+            PolymerApi polymerApi = polymerPresent ? PolymerApi.resolve() : null;
             sender.send("hello", new Hello(
                 net.minecraft.SharedConstants.getCurrentVersion().id(),
                 net.fabricmc.loader.api.FabricLoader.getInstance()
@@ -100,7 +101,7 @@ public class MinesportBridge implements ClientModInitializer {
                     ResourceLocation id = BuiltInRegistries.BLOCK.getKey(block);
                     if (id == null) continue;
                     String blockId = id.toString();
-                    String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
+                    String vanillaMapping = polymerApi != null ? polymerApi.tryGetMapping(block) : null;
                     String loaderType = vanillaMapping != null
                         ? "polymer"
                         : (id.getNamespace().equals("minecraft") ? "vanilla" : "fabric");
@@ -167,33 +168,52 @@ public class MinesportBridge implements ClientModInitializer {
         return net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("polymer");
     }
 
-    private String tryGetPolymerMapping(Block block) {
-        try {
-            Class<?> polymerBlock = Class.forName("eu.pb4.polymer.core.api.block.PolymerBlock");
-            if (!polymerBlock.isInstance(block)) return null;
-            var getPolymerState = polymerBlock.getMethod("getPolymerBlockState",
-                net.minecraft.world.level.block.state.BlockState.class,
-                net.minecraft.server.level.ServerPlayer.class);
-            var vanillaState = (net.minecraft.world.level.block.state.BlockState)
-                getPolymerState.invoke(block, block.defaultBlockState(), null);
-            if (vanillaState == null) return null;
-            ResourceLocation vid = BuiltInRegistries.BLOCK.getKey(vanillaState.getBlock());
-            StringBuilder sb = new StringBuilder(vid.toString());
-            if (!vanillaState.getValues().isEmpty()) {
-                sb.append("[");
-                var it = vanillaState.getValues().entrySet().iterator();
-                while (it.hasNext()) {
-                    var e = it.next();
-                    sb.append(e.getKey().getName()).append("=").append(e.getValue());
-                    if (it.hasNext()) sb.append(",");
-                }
-                sb.append("]");
+    private static final class PolymerApi {
+        private final Class<?> blockType;
+        private final Method getPolymerState;
+
+        private PolymerApi(Class<?> blockType, Method getPolymerState) {
+            this.blockType = blockType;
+            this.getPolymerState = getPolymerState;
+        }
+
+        private static PolymerApi resolve() {
+            try {
+                Class<?> blockType = Class.forName("eu.pb4.polymer.core.api.block.PolymerBlock");
+                Method getPolymerState = blockType.getMethod(
+                    "getPolymerBlockState",
+                    net.minecraft.world.level.block.state.BlockState.class,
+                    net.minecraft.server.level.ServerPlayer.class
+                );
+                return new PolymerApi(blockType, getPolymerState);
+            } catch (ReflectiveOperationException ignored) {
+                return null;
             }
-            return sb.toString();
-        } catch (ClassNotFoundException e) {
-            return null;
-        } catch (Exception e) {
-            return null;
+        }
+
+        private String tryGetMapping(Block block) {
+            if (!blockType.isInstance(block)) return null;
+            try {
+                var vanillaState = (net.minecraft.world.level.block.state.BlockState)
+                    getPolymerState.invoke(block, block.defaultBlockState(), null);
+                if (vanillaState == null) return null;
+                ResourceLocation vid = BuiltInRegistries.BLOCK.getKey(vanillaState.getBlock());
+                if (vid == null) return null;
+                StringBuilder sb = new StringBuilder(vid.toString());
+                if (!vanillaState.getValues().isEmpty()) {
+                    sb.append("[");
+                    var it = vanillaState.getValues().entrySet().iterator();
+                    while (it.hasNext()) {
+                        var e = it.next();
+                        sb.append(e.getKey().getName()).append("=").append(e.getValue());
+                        if (it.hasNext()) sb.append(",");
+                    }
+                    sb.append("]");
+                }
+                return sb.toString();
+            } catch (ReflectiveOperationException | ClassCastException ignored) {
+                return null;
+            }
         }
     }
 
