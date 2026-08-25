@@ -1,0 +1,74 @@
+name: One Shot Loader Export Lifecycle
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/loader_export_lifecycle_patch.py'
+      - '.github/workflows/one-shot-loader-export-lifecycle.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+
+      - name: Apply lifecycle patch
+        run: python .github/loader_export_lifecycle_patch.py
+
+      - name: Test Java engine
+        working-directory: engine
+        run: bash ./gradlew --no-daemon test --stacktrace
+
+      - name: Install Slint build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
+
+      - name: Check Rust and Slint desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: cargo check --all-targets
+
+      - name: Verify intended diff
+        shell: bash
+        run: |
+          git checkout -- engine/gradlew
+          git diff --check
+          python - <<'PY'
+          import subprocess
+          expected = {
+              'desktop/src/app.rs',
+              'desktop/ui/minesport-loader.slint',
+              'desktop/ui/workbench-v3.slint',
+              'engine/src/main/java/dev/kastrick/minesport/IpcMode.java',
+              'engine/src/main/java/dev/kastrick/minesport/export/LitematicExporter.java',
+              'engine/src/main/java/dev/kastrick/minesport/nbt/NbtWriter.java',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          if actual != expected:
+              raise SystemExit(f'Unexpected changed files: {sorted(actual)}')
+          PY
+
+      - name: Publish tested implementation
+        shell: bash
+        run: |
+          rm -f .github/loader_export_lifecycle_patch.py
+          rm -f .github/workflows/one-shot-loader-export-lifecycle.yml
+          rm -f .github/workflows/one-shot-litematic-fresh.yml
+          rm -f .github/litematic_ticks_patch.py
+          rm -f .github/litematic_ticks_fix.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix Litematica lifecycle and loader completion'
+          git push origin HEAD:main
