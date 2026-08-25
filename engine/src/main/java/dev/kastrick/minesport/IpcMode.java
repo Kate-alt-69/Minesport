@@ -83,7 +83,11 @@ public class IpcMode {
 
         if (outputPath.isEmpty()) {
             String home = System.getProperty("user.home");
-            String extension = format.equals("gltf") ? ".gltf" : ".obj";
+            String extension = switch (format) {
+                case "gltf" -> ".gltf";
+                case "litematic" -> ".litematic";
+                default -> ".obj";
+            };
             outputPath = home
                 + File.separator + "Minesport_Exports"
                 + File.separator + worldFolder.getName() + "_export" + extension;
@@ -166,6 +170,37 @@ public class IpcMode {
                 );
             }
             progress(40, "Region scan complete");
+
+            if (format.equals("litematic")) {
+                String mcVersion = readMcVersion(tempDir);
+                int dataVersion = readMinecraftDataVersion(tempDir);
+                if (dataVersion <= 0) {
+                    log("[WARN] World has no Minecraft DataVersion; using the Litematica compatibility fallback");
+                }
+                progress(55, "Packing Litematica block states");
+                String schematicName = outFile.getName().replaceFirst("(?i)\\.litematic$", "");
+                LitematicExporter.ExportStats schematicStats = LitematicExporter.export(
+                    allBlocks,
+                    minX, minY, minZ,
+                    maxX, maxY, maxZ,
+                    schematicName,
+                    "Minesport",
+                    "Exported by Minesport from Minecraft " + mcVersion,
+                    dataVersion,
+                    outFile
+                );
+                progress(100, "Done");
+                log(
+                    "Litematica export: " + schematicStats.blockCount() + " blocks, "
+                    + schematicStats.paletteSize() + " palette states, "
+                    + schematicStats.volume() + " volume"
+                );
+                done(
+                    outFile.getAbsolutePath(),
+                    new ObjExporter.ExportStats(schematicStats.blockCount(), 0, 0)
+                );
+                return;
+            }
 
             log("Resolving multipart connections...");
             MultipartResolver.resolve(allBlocks);
@@ -322,6 +357,23 @@ public class IpcMode {
         } finally {
             if (tempDir != null) WorldCopier.cleanupTemp(tempDir);
         }
+    }
+
+    private static int readMinecraftDataVersion(File tempDir) {
+        try {
+            var levelDat = new File(tempDir, "level.dat");
+            var root = dev.kastrick.minesport.nbt.NbtReader.readGzip(levelDat);
+            if (root.has("Data")) {
+                var data = root.getCompound("Data");
+                if (data.has("DataVersion")) {
+                    return data.getInt("DataVersion", 0);
+                }
+                if (data.has("Version")) {
+                    return data.getCompound("Version").getInt("Id", 0);
+                }
+            }
+        } catch (Exception ignored) {}
+        return 0;
     }
 
     private static String readMcVersion(File tempDir) {

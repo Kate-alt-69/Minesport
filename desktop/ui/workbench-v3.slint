@@ -616,9 +616,12 @@ export component MainWindow inherits Window {
                                 }
                                 Button { text: "Use world bounds"; enabled: root.map-available; clicked => { root.min-x = root.map-min-x; root.max-x = root.map-max-x - 1; root.min-z = root.map-min-z; root.max-z = root.map-max-z - 1; } }
                                 HintText { text: "Selection stays editable while maps and exports run in the background."; }
-                                SectionTitle { label: "RUNTIME REGISTRY"; }
-                                Text { text: root.runtime-cache-status; color: root.runtime-cache-busy ? #dfc27d : #9bb9a0; font-size: 12px; wrap: word-wrap; }
-                                if root.runtime-cache-busy: Button { text: "Cancel preparation"; clicked => { root.cancel-runtime-cache(); } }
+                                if root.export-format-index < 2: VerticalLayout {
+                                    spacing: 8px;
+                                    SectionTitle { label: "RUNTIME REGISTRY"; }
+                                    Text { text: root.runtime-cache-status; color: root.runtime-cache-busy ? #dfc27d : #9bb9a0; font-size: 12px; wrap: word-wrap; }
+                                    if root.runtime-cache-busy: Button { text: "Cancel preparation"; clicked => { root.cancel-runtime-cache(); } }
+                                }
                             }
                         }
 
@@ -642,19 +645,25 @@ export component MainWindow inherits Window {
                                 SectionTitle { label: "EXPORT"; }
                                 Text { text: "Name"; color: #aab2ad; font-size: 12px; }
                                 LineEdit { text <=> root.export-name; accepted(_) => { root.settings-changed(); } }
-                                Text { text: "Format"; color: #aab2ad; font-size: 12px; }
-                                ComboBox { model: ["glTF 2.0", "OBJ + MTL"]; current-index <=> root.export-format-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
-                                Text { text: "Objects"; color: #aab2ad; font-size: 12px; }
-                                ComboBox { model: ["Grouped", "Individual blocks", "Merged"]; current-index <=> root.export-mode-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
-                                CheckBox { text: "Optimize mesh output"; checked <=> root.optimize; toggled => { root.settings-changed(); root.export-preset-index = 0; } }
+                                Text { text: "Export as"; color: #aab2ad; font-size: 12px; }
+                                ComboBox { model: ["glTF (.gltf)", "OBJ (.obj)", "Litematica (.litematic)"]; current-index <=> root.export-format-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
+                                if root.export-format-index < 2: VerticalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Objects"; color: #aab2ad; font-size: 12px; }
+                                    ComboBox { model: ["Grouped", "Individual blocks", "Merged"]; current-index <=> root.export-mode-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
+                                    CheckBox { text: "Optimize mesh output"; checked <=> root.optimize; toggled => { root.settings-changed(); root.export-preset-index = 0; } }
+                                }
                                 SectionTitle { label: "OUTPUT"; }
                                 Text { text: root.output-path == "" ? "~/Minesport_Exports" : root.output-path; color: #a7b0aa; font-size: 12px; wrap: word-wrap; }
                                 Button { text: "Choose output folder…"; clicked => { root.pick-output(); } }
-                                SectionTitle { label: "OPTIMIZATION"; }
-                                Text { text: "Optimization: face culling " + (root.face-culling ? "ON" : "OFF") + " · FLATTER " + (root.flatter-enabled ? "ON" : "OFF") + " · hidden culling " + (root.hidden-culling ? "ON" : "OFF"); color: #b6beb9; font-size: 12px; wrap: word-wrap; }
-                                Button { text: "Apply safe optimization"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.export-preset-index = 0; root.settings-changed(); } }
+                                if root.export-format-index < 2: VerticalLayout {
+                                    spacing: 10px;
+                                    SectionTitle { label: "OPTIMIZATION"; }
+                                    Text { text: "Optimization: face culling " + (root.face-culling ? "ON" : "OFF") + " · FLATTER " + (root.flatter-enabled ? "ON" : "OFF") + " · hidden culling " + (root.hidden-culling ? "ON" : "OFF"); color: #b6beb9; font-size: 12px; wrap: word-wrap; }
+                                    Button { text: "Apply safe optimization"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.export-preset-index = 0; root.settings-changed(); } }
+                                }
                                 Button { text: root.task-active ? "Working…" : "Export world"; primary: true; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.export-requested(); } }
-                                HintText { text: "Export automatically prepares a matching Fabric runtime-model cache when needed. Progress appears only while work is active."; }
+                                HintText { text: root.export-format-index == 2 ? "Litematica exports Minecraft block states directly. 3D geometry, runtime model resolution and Blender translation are skipped." : "3D export automatically prepares a matching runtime-model cache when needed. Progress appears only while work is active."; }
                             }
                         }
 
@@ -663,8 +672,9 @@ export component MainWindow inherits Window {
                                 padding: 14px;
                                 spacing: 10px;
                                 SectionTitle { label: "WORLD INSPECTOR · BLENDER"; }
-                                if !root.blender-export: HintText { text: "Blender integration is disabled in Settings."; }
-                                if root.blender-export: VerticalLayout {
+                                if root.export-format-index == 2: HintText { text: "Litematica is a Minecraft structure export. Blender integration and geometry settings are not used."; }
+                                if root.export-format-index < 2 && !root.blender-export: HintText { text: "Blender integration is disabled in Settings."; }
+                                if root.export-format-index < 2 && root.blender-export: VerticalLayout {
                                     spacing: 9px;
                                     Text { text: "Animation"; color: #aab2ad; font-size: 12px; }
                                     ComboBox { model: ["Animate export", "Animate static"]; current-index <=> root.blender-animation-index; selected(_) => { root.settings-changed(); } }
@@ -989,20 +999,29 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 18px;
                             spacing: 11px;
-                            SectionTitle { label: "GEOMETRY"; }
+                            if root.export-format-index == 2: HintText { text: "Litematica exports block states directly; 3D geometry and runtime-model settings are not used."; }
+                            if root.export-format-index < 2: VerticalLayout {
+                                spacing: 11px;
+                                SectionTitle { label: "GEOMETRY"; }
                             CheckBox { text: "Face culling"; checked <=> root.face-culling; toggled => { root.settings-changed(); } }
                             HintText { text: "Remove a face only when neighboring geometry and its resolved texture prove that the face is fully hidden."; }
                             CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; toggled => { root.settings-changed(); } }
                             ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; selected(_) => { root.settings-changed(); } }
                             HintText { text: "Controls the spatial FLATTER cell. Smaller cells rebuild more locally; larger cells create fewer objects and broader greedy surfaces."; }
                             CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; toggled => { root.settings-changed(); } }
-                            CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; toggled => { root.settings-changed(); } }
+                                CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; toggled => { root.settings-changed(); } }
+                            }
                             SectionTitle { label: "PIPELINE"; }
-                            CheckBox { text: "Blender integration"; checked <=> root.blender-export; toggled => { root.settings-changed(); } }
+                            if root.export-format-index < 2: CheckBox { text: "Blender integration"; checked <=> root.blender-export; toggled => { root.settings-changed(); } }
                             CheckBox { text: "Debug engine console"; checked <=> root.debug-mode; toggled => { root.settings-changed(); } }
-                            Text { text: root.runtime-cache-status; color: #aab2ad; font-size: 12px; wrap: word-wrap; }
-                            Button { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.runtime-cache-busy; clicked => { root.rebuild-runtime-cache(); } }
-                            SectionTitle { label: "ASSETS"; }
+                            if root.export-format-index < 2: VerticalLayout {
+                                spacing: 8px;
+                                Text { text: root.runtime-cache-status; color: #aab2ad; font-size: 12px; wrap: word-wrap; }
+                                Button { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.runtime-cache-busy; clicked => { root.rebuild-runtime-cache(); } }
+                            }
+                            if root.export-format-index < 2: VerticalLayout {
+                                spacing: 11px;
+                                SectionTitle { label: "ASSETS"; }
                             Text { text: root.resource-pack-summary; color: #a7b0aa; font-size: 12px; wrap: word-wrap; }
                             AssetEditor {
                                 title: "Resource packs · highest priority first";
@@ -1027,6 +1046,7 @@ export component MainWindow inherits Window {
                                 add-folder => { root.add-data-pack(); }
                                 move-selected(delta) => { root.move-data-pack(delta); }
                                 remove-selected => { root.remove-data-pack(); }
+                                }
                             }
                             SectionTitle { label: "ADVANCED EXPORT TOOLS"; }
                             Button { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.run-preflight(); } }

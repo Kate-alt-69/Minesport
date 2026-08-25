@@ -66,6 +66,7 @@ struct AppState {
     selected_loader: Option<String>,
     preview_pick_map: Option<preview::PreviewPickMap>,
     exact_selection: Option<selection::ExactSelection>,
+    export_format_index: i32,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -101,6 +102,7 @@ pub fn run() -> Result<()> {
     let state: SharedState = Arc::new(Mutex::new(AppState {
         resource_packs: saved.resource_packs.clone(),
         data_packs: saved.data_packs.clone(),
+        export_format_index: saved.export_format_index,
         ..AppState::default()
     }));
     let cache = RuntimeCacheManager::default();
@@ -114,7 +116,7 @@ pub fn run() -> Result<()> {
     wire_viewer(&ui, engine.clone(), state.clone());
     wire_cache_actions(&ui, engine.clone(), state.clone(), cache.clone());
     wire_asset_pickers(&ui, state.clone());
-    wire_settings_persistence(&ui, state.clone());
+    wire_settings_persistence(&ui, state.clone(), cache.clone());
     sync_debug_console(&ui, state.clone());
     wire_docs(&ui);
     wire_blender(&ui, state.clone());
@@ -216,10 +218,22 @@ fn collect_settings(ui: &MainWindow, state: &SharedState) -> DesktopSettings {
     }
 }
 
-fn wire_settings_persistence(ui: &MainWindow, state: SharedState) {
+fn wire_settings_persistence(
+    ui: &MainWindow,
+    state: SharedState,
+    cache: RuntimeCacheManager,
+) {
     let weak = ui.as_weak();
     ui.on_settings_changed(move || {
         let Some(ui) = weak.upgrade() else { return; };
+        let format_index = ui.get_export_format_index();
+        if let Ok(mut guard) = state.lock() {
+            guard.export_format_index = format_index;
+        }
+        if format_index == 2 {
+            cache.cancel();
+            ui.set_runtime_cache_status("NOT REQUIRED FOR LITEMATICA".into());
+        }
         sync_debug_console(&ui, state.clone());
         persist_settings_snapshot(&ui, &state);
     });
@@ -431,7 +445,7 @@ fn activate_world(
             cache.cancel();
         }
         viewer_selection::reset();
-        if let Ok(mut guard) = state.lock() {
+        let geometry_export = if let Ok(mut guard) = state.lock() {
             guard.pending_export = None;
             guard.selected_world = Some(path.clone());
             guard.selected_mods_path = Some(mods_path.clone());
@@ -439,7 +453,10 @@ fn activate_world(
             guard.selected_loader = Some(loader.clone());
             guard.preview_pick_map = None;
             guard.exact_selection = None;
-        }
+            guard.export_format_index < 2
+        } else {
+            true
+        };
 
         let cached_map = match heightmap_cache::load(&path) {
             Ok(Some((metadata, png))) => match decode_png(&png) {
@@ -465,7 +482,9 @@ fn activate_world(
             ui.set_world_name(name.into());
             ui.set_minecraft_version(version_for_ui.clone().into());
             ui.set_loader_type(loader_for_ui.clone().into());
-            ui.set_runtime_cache_status("STARTING".into());
+            ui.set_runtime_cache_status(
+                if geometry_export { "STARTING" } else { "NOT REQUIRED FOR LITEMATICA" }.into()
+            );
             ui.set_preview_available(false);
             ui.set_preview_loading(false);
             ui.set_preview_focus_label("LMB point A · RMB point B · LMB again confirms".into());
@@ -495,7 +514,11 @@ fn activate_world(
             }
         }
 
-        if runtime_registry_supported(&loader, &version, &mods_path) {
+        if !geometry_export {
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_runtime_cache_status("NOT REQUIRED FOR LITEMATICA".into());
+            });
+        } else if runtime_registry_supported(&loader, &version, &mods_path) {
             let _ = start_runtime_cache_job(
                 weak.clone(), cache, engine, state, version, loader, mods_path, false, false,
             );
@@ -526,7 +549,11 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             return;
         }
 
-        let format = if ui.get_export_format_index() == 1 { "obj" } else { "gltf" };
+        let format = match ui.get_export_format_index() {
+            1 => "obj",
+            2 => "litematic",
+            _ => "gltf",
+        };
         let name = sanitize_export_name(&ui.get_export_name().to_string());
         let requested_output = output_dir.join(format!("{name}.{format}"));
         let output = resolve_export_collision(&requested_output);
@@ -556,7 +583,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
                 "optimize": bool_text(ui.get_optimize()),
                 "faceCulling": bool_text(ui.get_face_culling()),
                 "hiddenBlockCulling": bool_text(ui.get_hidden_culling()),
-                "blenderExport": bool_text(ui.get_blender_export()),
+                "blenderExport": bool_text(ui.get_blender_export() && format != "litematic"),
                 "blenderAnimationMode": if ui.get_blender_animation_index() == 1 { "animate_static" } else { "animate_export" },
                 "flatterOptimization": bool_text(ui.get_flatter_enabled()),
                 "flatterCellSize": cell_size.to_string(),
@@ -569,6 +596,12 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             ui.set_task_title("EXPORT FAILED".into());
             ui.set_task_detail(error.to_string().into());
             append_diagnostic(&ui, &format!("Could not prepare exact preview selection: {error:#}"));
+            return;
+        }
+
+        if format == "litematic" {
+            append_diagnostic(&ui, "Litematica export uses decoded block states directly; runtime geometry registry skipped.");
+            send_export_now(&ui, &engine, request, &output);
             return;
         }
 
