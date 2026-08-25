@@ -10,6 +10,7 @@ import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
 
+import java.lang.reflect.Method;
 import java.util.*;
 
 import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
@@ -23,9 +24,10 @@ public class MinesportBridge implements ClientModInitializer {
         System.out.println("[MinesportBridge] Initializing 1.19 runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
             System.out.println("[MinesportBridge] Client resources ready — starting registry/model dump");
-            Thread t = new Thread(() -> runDump(client), "MinesportBridge-Dump");
-            t.setDaemon(false);
-            t.start();
+            // CLIENT_STARTED already runs on Minecraft's client thread. Running
+            // the dump here avoids bouncing every single block back through
+            // client.execute(...) and waiting on a CompletableFuture.
+            runDump(client);
         });
     }
 
@@ -51,6 +53,7 @@ public class MinesportBridge implements ClientModInitializer {
             }
 
             boolean polymerPresent = isPolymerPresent();
+            PolymerApi polymerApi = polymerPresent ? PolymerApi.resolve() : null;
             sender.send("hello", new Hello(
                 net.minecraft.SharedConstants.getCurrentVersion().getId(),
                 net.fabricmc.loader.api.FabricLoader.getInstance()
@@ -61,13 +64,15 @@ public class MinesportBridge implements ClientModInitializer {
                 polymerPresent,
                 getLoadedMods()
             ));
+            sender.flush();
 
             System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " registered block types...");
+            int sent = 0;
             for (Block block : allBlocks) {
                 ResourceLocation id = Registry.BLOCK.getKey(block);
                 if (id == null) continue;
                 String blockId = id.toString();
-                String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
+                String vanillaMapping = polymerApi != null ? polymerApi.tryGetMapping(block) : null;
                 String loaderType = vanillaMapping != null
                     ? "polymer"
                     : (id.getNamespace().equals("minecraft") ? "vanilla" : "fabric");
@@ -81,11 +86,15 @@ public class MinesportBridge implements ClientModInitializer {
                 if (!lightStates.isEmpty()) {
                     sender.send(TYPE_BLOCK_LIGHT, new BlockLightEntry(blockId, lightStates));
                 }
+
+                sent++;
+                if ((sent & 127) == 0) sender.flush();
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
+            sender.flush();
             System.out.println("[MinesportBridge] Registry/model dump complete. Exiting worker.");
-            Thread.sleep(500);
+            Thread.sleep(250);
 
         } catch (Exception e) {
             System.err.println("[MinesportBridge] Fatal: " + e.getMessage());
@@ -97,15 +106,7 @@ public class MinesportBridge implements ClientModInitializer {
 
     private List<BlockVariant> extractSafe(Minecraft client, Block block) {
         try {
-            var future = new java.util.concurrent.CompletableFuture<List<BlockVariant>>();
-            client.execute(() -> {
-                try {
-                    future.complete(BlockGeometryExtractor.extractBlock(block, client));
-                } catch (Exception e) {
-                    future.complete(List.of());
-                }
-            });
-            return future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            return BlockGeometryExtractor.extractBlock(block, client);
         } catch (Exception e) {
             return List.of();
         }
@@ -135,34 +136,52 @@ public class MinesportBridge implements ClientModInitializer {
         return net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("polymer");
     }
 
-    private String tryGetPolymerMapping(Block block) {
-        try {
-            Class<?> polymerBlock = Class.forName("eu.pb4.polymer.core.api.block.PolymerBlock");
-            if (!polymerBlock.isInstance(block)) return null;
-            var getPolymerState = polymerBlock.getMethod("getPolymerBlockState",
-                net.minecraft.world.level.block.state.BlockState.class,
-                net.minecraft.server.level.ServerPlayer.class);
-            var vanillaState = (net.minecraft.world.level.block.state.BlockState)
-                getPolymerState.invoke(block, block.defaultBlockState(), null);
-            if (vanillaState == null) return null;
-            ResourceLocation vid = Registry.BLOCK.getKey(vanillaState.getBlock());
-            if (vid == null) return null;
-            StringBuilder sb = new StringBuilder(vid.toString());
-            if (!vanillaState.getValues().isEmpty()) {
-                sb.append("[");
-                var it = vanillaState.getValues().entrySet().iterator();
-                while (it.hasNext()) {
-                    var e = it.next();
-                    sb.append(e.getKey().getName()).append("=").append(e.getValue());
-                    if (it.hasNext()) sb.append(",");
-                }
-                sb.append("]");
+    private static final class PolymerApi {
+        private final Class<?> blockType;
+        private final Method getPolymerState;
+
+        private PolymerApi(Class<?> blockType, Method getPolymerState) {
+            this.blockType = blockType;
+            this.getPolymerState = getPolymerState;
+        }
+
+        private static PolymerApi resolve() {
+            try {
+                Class<?> blockType = Class.forName("eu.pb4.polymer.core.api.block.PolymerBlock");
+                Method getPolymerState = blockType.getMethod(
+                    "getPolymerBlockState",
+                    net.minecraft.world.level.block.state.BlockState.class,
+                    net.minecraft.server.level.ServerPlayer.class
+                );
+                return new PolymerApi(blockType, getPolymerState);
+            } catch (ReflectiveOperationException ignored) {
+                return null;
             }
-            return sb.toString();
-        } catch (ClassNotFoundException e) {
-            return null;
-        } catch (Exception e) {
-            return null;
+        }
+
+        private String tryGetMapping(Block block) {
+            if (!blockType.isInstance(block)) return null;
+            try {
+                var vanillaState = (net.minecraft.world.level.block.state.BlockState)
+                    getPolymerState.invoke(block, block.defaultBlockState(), null);
+                if (vanillaState == null) return null;
+                ResourceLocation vid = Registry.BLOCK.getKey(vanillaState.getBlock());
+                if (vid == null) return null;
+                StringBuilder sb = new StringBuilder(vid.toString());
+                if (!vanillaState.getValues().isEmpty()) {
+                    sb.append("[");
+                    var it = vanillaState.getValues().entrySet().iterator();
+                    while (it.hasNext()) {
+                        var e = it.next();
+                        sb.append(e.getKey().getName()).append("=").append(e.getValue());
+                        if (it.hasNext()) sb.append(",");
+                    }
+                    sb.append("]");
+                }
+                return sb.toString();
+            } catch (ReflectiveOperationException | ClassCastException ignored) {
+                return null;
+            }
         }
     }
 
