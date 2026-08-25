@@ -35,7 +35,7 @@ jobs:
           text = path.read_text()
           width_count = text.count('self.width * 0.')
           height_count = text.count('self.height * 0.')
-          if width_count != 6 or height_count != 6:
+          if width_count != 12 or height_count != 12:
               raise SystemExit(f'Unexpected Creeper cutout binding count: width={width_count}, height={height_count}')
           text = text.replace('self.width * 0.', 'core.width * 0.')
           text = text.replace('self.height * 0.', 'core.height * 0.')
