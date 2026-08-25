@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     env,
+    ffi::OsString,
     fs::{self, File},
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -34,6 +35,7 @@ const FABRIC_API_1_21_10: &str = "0.138.4+1.21.10";
 const LOOM_1_21_10: &str = "1.11.7";
 const FABRIC_MOD_JSON_LIMIT: u64 = 1 << 20;
 const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 1;
+const CAPTURE_STALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Debug, Clone)]
 pub struct CacheResult {
@@ -262,8 +264,18 @@ where
         message: "Starting Minecraft…".into(),
     });
     let log_path = workspace.join("runtime-worker.log");
+    let app_cds_archive = direct_launch.as_ref().and_then(|manifest| {
+        prepare_direct_launch_app_cds_archive(&version, &fingerprint, manifest)
+    });
     let mut child = if let Some(manifest) = direct_launch.as_ref() {
-        start_direct_worker(family, &workspace, &log_path, &java_home, manifest)?
+        start_direct_worker(
+            family,
+            &workspace,
+            &log_path,
+            &java_home,
+            manifest,
+            app_cds_archive.as_deref(),
+        )?
     } else {
         start_gradle_worker(family, &workspace, &log_path, &java_home)?
     };
@@ -274,6 +286,7 @@ where
 
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
     let mut last_captured_blocks = 0usize;
+    let mut last_capture_progress = None::<Instant>;
     loop {
         if cancel.load(Ordering::Relaxed) {
             stop_child(&mut child);
@@ -285,6 +298,7 @@ where
                 continue;
             }
             last_captured_blocks = blocks;
+            last_capture_progress = Some(Instant::now());
             let capture_percent = capture_progress_percent(blocks, total_blocks);
             let message = if total_blocks > 0 {
                 format!("Loading runtime models · {blocks}/{total_blocks}")
@@ -303,7 +317,7 @@ where
                     percent: 96,
                     message: "Saving runtime cache…".into(),
                 });
-                stop_child(&mut child);
+                finish_child_after_capture(&mut child, app_cds_archive.is_some());
                 progress(Progress {
                     percent: 100,
                     message: "Runtime ready".into(),
@@ -374,7 +388,18 @@ where
             }
         }
 
-        if Instant::now() >= deadline {
+        let now = Instant::now();
+        if capture_has_stalled(last_capture_progress, now) {
+            stop_child(&mut child);
+            return Err(runtime_worker_failure(
+                &workspace,
+                &version,
+                &log_path,
+                format!("runtime capture stalled after {last_captured_blocks} blocks"),
+                80,
+            ));
+        }
+        if now >= deadline {
             stop_child(&mut child);
             bail!("runtime cache timed out after 10 minutes");
         }
@@ -388,6 +413,10 @@ fn loader_cache_fingerprint(family: BridgeFamily, raw: &str) -> String {
     } else {
         format!("{}-{raw}", family.label().to_ascii_lowercase())
     }
+}
+
+fn capture_has_stalled(last_progress: Option<Instant>, now: Instant) -> bool {
+    last_progress.is_some_and(|last| now.duration_since(last) >= CAPTURE_STALL_TIMEOUT)
 }
 
 fn capture_progress_percent(blocks: usize, total_blocks: usize) -> i32 {
@@ -616,6 +645,7 @@ fn start_direct_worker(
     log_path: &Path,
     java_home: &Path,
     manifest: &DirectLaunchManifest,
+    app_cds_archive: Option<&Path>,
 ) -> Result<Child> {
     let stdout =
         File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
@@ -640,6 +670,14 @@ fn start_direct_worker(
         if !managed_runtime_jvm_arg(arg) {
             command.arg(arg);
         }
+    }
+    if let Some(archive) = app_cds_archive {
+        let mut archive_arg = OsString::from("-XX:SharedArchiveFile=");
+        archive_arg.push(archive.as_os_str());
+        command
+            .arg("-Xshare:auto")
+            .arg("-XX:+AutoCreateSharedArchive")
+            .arg(archive_arg);
     }
     command
         .arg("-Xmx512m")
@@ -676,6 +714,16 @@ fn managed_runtime_jvm_arg(arg: &str) -> bool {
         || arg.starts_with("-XX:MaxMetaspaceSize=")
         || arg.starts_with("-XX:ActiveProcessorCount=")
         || arg.starts_with("-Dfile.encoding=")
+        || arg.starts_with("-Xshare:")
+        || arg.starts_with("-XX:SharedArchiveFile=")
+        || arg.starts_with("-XX:ArchiveClassesAtExit=")
+        || matches!(
+            arg,
+            "-XX:+AutoCreateSharedArchive"
+                | "-XX:-AutoCreateSharedArchive"
+                | "-XX:+RecordDynamicDumpInfo"
+                | "-XX:-RecordDynamicDumpInfo"
+        )
 }
 
 fn direct_runtime_args(manifest: &DirectLaunchManifest, run_dir: &Path) -> Vec<String> {
@@ -692,6 +740,62 @@ fn direct_runtime_args(manifest: &DirectLaunchManifest, run_dir: &Path) -> Vec<S
             }
         })
         .collect()
+}
+
+fn direct_launch_app_cds_eligible(manifest: &DirectLaunchManifest) -> bool {
+    if manifest
+        .jvm_args
+        .iter()
+        .any(|arg| app_cds_incompatible_jvm_arg(arg))
+    {
+        return false;
+    }
+    manifest
+        .classpath
+        .iter()
+        .all(|entry| app_cds_classpath_entry_compatible(Path::new(entry)))
+}
+
+fn app_cds_incompatible_jvm_arg(arg: &str) -> bool {
+    matches!(
+        arg,
+        "--upgrade-module-path" | "--patch-module" | "--limit-modules" | "--module-path" | "-p"
+    ) || arg.starts_with("--upgrade-module-path=")
+        || arg.starts_with("--patch-module=")
+        || arg.starts_with("--limit-modules=")
+        || arg.starts_with("--module-path=")
+        || arg.starts_with("-Xbootclasspath/a:")
+}
+
+fn app_cds_classpath_entry_compatible(path: &Path) -> bool {
+    if path.is_file() {
+        return true;
+    }
+    if !path.is_dir() {
+        return false;
+    }
+    fs::read_dir(path)
+        .ok()
+        .is_some_and(|mut entries| entries.next().is_none())
+}
+
+fn direct_launch_app_cds_archive_path(version: &str, fingerprint: &str) -> PathBuf {
+    direct_launch_profile_dir(version)
+        .join("cds")
+        .join(format!("{}.jsa", safe(fingerprint)))
+}
+
+fn prepare_direct_launch_app_cds_archive(
+    version: &str,
+    fingerprint: &str,
+    manifest: &DirectLaunchManifest,
+) -> Option<PathBuf> {
+    if !direct_launch_app_cds_eligible(manifest) {
+        return None;
+    }
+    let archive = direct_launch_app_cds_archive_path(version, fingerprint);
+    fs::create_dir_all(archive.parent()?).ok()?;
+    Some(archive)
 }
 
 fn start_gradle_worker(
@@ -912,6 +1016,24 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn finish_child_after_capture(child: &mut Child, allow_graceful_exit: bool) {
+    if allow_graceful_exit {
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => {}
+                Err(_) => break,
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+    stop_child(child);
+}
+
 fn stop_child(child: &mut Child) {
     if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
@@ -1118,6 +1240,17 @@ mod tests {
     }
 
     #[test]
+    fn capture_watchdog_only_arms_after_real_progress() {
+        let now = Instant::now();
+        assert!(!capture_has_stalled(None, now));
+        assert!(!capture_has_stalled(
+            Some(now - CAPTURE_STALL_TIMEOUT + Duration::from_millis(1)),
+            now,
+        ));
+        assert!(capture_has_stalled(Some(now - CAPTURE_STALL_TIMEOUT), now));
+    }
+
+    #[test]
     fn exact_capture_progress_maps_to_runtime_segment() {
         assert_eq!(capture_progress_percent(0, 1000), 62);
         assert_eq!(capture_progress_percent(500, 1000), 78);
@@ -1129,6 +1262,9 @@ mod tests {
     fn direct_launch_keeps_loom_flags_but_owns_resource_caps() {
         assert!(managed_runtime_jvm_arg("-Xmx2G"));
         assert!(managed_runtime_jvm_arg("-XX:ActiveProcessorCount=8"));
+        assert!(managed_runtime_jvm_arg("-Xshare:off"));
+        assert!(managed_runtime_jvm_arg("-XX:+AutoCreateSharedArchive"));
+        assert!(managed_runtime_jvm_arg("-XX:SharedArchiveFile=old.jsa"));
         assert!(!managed_runtime_jvm_arg("-Dfabric.dli.env=client"));
     }
 
