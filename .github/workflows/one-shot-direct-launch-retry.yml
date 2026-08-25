@@ -47,6 +47,8 @@ jobs:
         run: cargo fmt --manifest-path desktop/Cargo.toml --all
 
       - name: Run focused Rust tests
+        env:
+          MINESPORT_FAST_CHECK: '1'
         run: cargo test --manifest-path desktop/Cargo.toml runtime_worker::tests
 
       - name: Commit optimized runtime launch
