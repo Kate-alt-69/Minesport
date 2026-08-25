@@ -1,0 +1,64 @@
+name: One Shot Litematica Ticks
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/litematic_ticks_patch.py'
+      - '.github/workflows/one-shot-litematic-ticks.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+      - name: Apply tick support on clean base
+        shell: bash
+        run: |
+          cp .github/litematic_ticks_patch.py /tmp/litematic_ticks_patch.py
+          git reset --hard 7a1dd0bd05a8e378b7cf1d54cef89c0026fb5c81
+          python /tmp/litematic_ticks_patch.py
+          python - <<'PY'
+          import subprocess
+          expected = {
+              'engine/src/main/java/dev/kastrick/minesport/IpcMode.java',
+              'engine/src/main/java/dev/kastrick/minesport/export/LitematicExporter.java',
+              'engine/src/main/java/dev/kastrick/minesport/region/RegionReader.java',
+              'engine/src/main/java/dev/kastrick/minesport/region/ScheduledTickData.java',
+              'engine/src/test/java/dev/kastrick/minesport/export/LitematicTickExporterTest.java',
+              'engine/src/test/java/dev/kastrick/minesport/region/RegionReaderScheduledTickTest.java',
+          }
+          tracked = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          untracked = set(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], text=True).splitlines())
+          actual = tracked | untracked
+          if actual != expected:
+              raise SystemExit(f'Unexpected tick patch files: {sorted(actual)}')
+          PY
+      - name: Test Java engine
+        working-directory: engine
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon test
+      - name: Publish one clean tick commit
+        shell: bash
+        run: |
+          git config user.name Kate
+          git config user.email dhwanksh2000@gmail.com
+          git add -- \
+            engine/src/main/java/dev/kastrick/minesport/IpcMode.java \
+            engine/src/main/java/dev/kastrick/minesport/export/LitematicExporter.java \
+            engine/src/main/java/dev/kastrick/minesport/region/RegionReader.java \
+            engine/src/main/java/dev/kastrick/minesport/region/ScheduledTickData.java \
+            engine/src/test/java/dev/kastrick/minesport/export/LitematicTickExporterTest.java \
+            engine/src/test/java/dev/kastrick/minesport/region/RegionReaderScheduledTickTest.java
+          git commit -m 'Preserve scheduled ticks in Litematica exports'
+          git push --force origin HEAD:main
