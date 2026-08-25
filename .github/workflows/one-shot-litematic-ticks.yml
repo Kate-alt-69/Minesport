@@ -132,10 +132,32 @@ jobs:
           PY
 
       - name: Test Java engine
-        working-directory: engine
+        shell: bash
         run: |
+          cd engine
           chmod +x gradlew
-          ./gradlew --no-daemon test
+          set +e
+          ./gradlew --no-daemon test --stacktrace 2>&1 | tee ../.github/litematica-gradle.log
+          status=${PIPESTATUS[0]}
+          set -e
+          cd ..
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '=== Gradle output ==='
+              cat .github/litematica-gradle.log
+              echo
+              echo '=== JUnit XML ==='
+              find engine/build/test-results/test -name '*.xml' -type f -print -exec cat {} \; 2>/dev/null || true
+            } > .github/litematica-test-failure.txt
+            rm -f .github/litematica-gradle.log
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add .github/litematica-test-failure.txt
+            git commit -m 'Capture Litematica tick test failure'
+            git push origin HEAD:main
+            exit "$status"
+          fi
+          rm -f .github/litematica-gradle.log
 
       - name: Preserve Java test report
         if: always()
@@ -177,7 +199,7 @@ jobs:
       - name: Publish tested integration without force push
         shell: bash
         run: |
-          rm -f .github/litematic_ticks_patch.py .github/litematic_ticks_fix.py .github/workflows/one-shot-litematic-ticks.yml
+          rm -f .github/litematic_ticks_patch.py .github/litematic_ticks_fix.py .github/litematic-test-failure.txt .github/workflows/one-shot-litematic-ticks.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
