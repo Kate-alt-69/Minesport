@@ -118,20 +118,36 @@ public class IpcMode {
 
             log("Found " + mcaFiles.length + " region file(s)");
             var allBlocks = new ArrayList<BlockData>();
+            var allBlockEntities = new ArrayList<BlockEntityData>();
             for (int fileIndex = 0; fileIndex < mcaFiles.length; fileIndex++) {
                 File mca = mcaFiles[fileIndex];
                 log("Reading: " + mca.getName());
-                List<BlockData> regionBlocks = RegionReader.readRegion(
-                    mca,
-                    minX, minY, minZ,
-                    maxX, maxY, maxZ,
-                    null
-                );
-                allBlocks.addAll(regionBlocks);
+                if (format.equals("litematic")) {
+                    RegionReader.RegionContents contents = RegionReader.readRegionContents(
+                        mca,
+                        minX, minY, minZ,
+                        maxX, maxY, maxZ,
+                        null
+                    );
+                    allBlocks.addAll(contents.blocks());
+                    allBlockEntities.addAll(contents.blockEntities());
+                } else {
+                    allBlocks.addAll(RegionReader.readRegion(
+                        mca,
+                        minX, minY, minZ,
+                        maxX, maxY, maxZ,
+                        null
+                    ));
+                }
                 int percent = 10 + (int)((fileIndex + 1.0) / mcaFiles.length * 30);
                 progress(percent, "Read " + mca.getName());
             }
-            log("Total blocks: " + allBlocks.size());
+            log(
+                "Total blocks: " + allBlocks.size()
+                + (format.equals("litematic")
+                    ? " · block entities: " + allBlockEntities.size()
+                    : "")
+            );
 
             Integer centerX = getOptionalInt(request, "centerX");
             Integer centerY = getOptionalInt(request, "centerY");
@@ -152,6 +168,13 @@ public class IpcMode {
                     Math.max(radiusY, 1),
                     Math.max(radiusZ, 1)
                 ));
+                allBlockEntities.removeIf(entity -> !insideEllipsoid(
+                    entity.x(), entity.y(), entity.z(),
+                    centerX, centerY, centerZ,
+                    Math.max(radiusX, 1),
+                    Math.max(radiusY, 1),
+                    Math.max(radiusZ, 1)
+                ));
                 log(
                     "Bubble selection: " + allBlocks.size() + " / " + before
                     + " blocks kept (center " + centerX + "," + centerY + "," + centerZ
@@ -164,6 +187,9 @@ public class IpcMode {
                 Set<Long> exact = loadCustomSelection(new File(customSelectionFile));
                 int before = allBlocks.size();
                 allBlocks.removeIf(block -> !exact.contains(SpatialKey.of(block.x, block.y, block.z)));
+                allBlockEntities.removeIf(entity ->
+                    !exact.contains(SpatialKey.of(entity.x(), entity.y(), entity.z()))
+                );
                 log(
                     "Custom selection: " + allBlocks.size() + " / " + before
                     + " blocks kept (" + exact.size() + " coordinate(s) requested)"
@@ -181,6 +207,7 @@ public class IpcMode {
                 String schematicName = outFile.getName().replaceFirst("(?i)\\.litematic$", "");
                 LitematicExporter.ExportStats schematicStats = LitematicExporter.export(
                     allBlocks,
+                    allBlockEntities,
                     minX, minY, minZ,
                     maxX, maxY, maxZ,
                     schematicName,
@@ -192,6 +219,7 @@ public class IpcMode {
                 progress(100, "Done");
                 log(
                     "Litematica export: " + schematicStats.blockCount() + " blocks, "
+                    + schematicStats.blockEntityCount() + " block entities, "
                     + schematicStats.paletteSize() + " palette states, "
                     + schematicStats.volume() + " volume"
                 );
@@ -490,9 +518,21 @@ public class IpcMode {
         int centerX, int centerY, int centerZ,
         int radiusX, int radiusY, int radiusZ
     ) {
-        double dx = (block.x + 0.5 - centerX) / (double)radiusX;
-        double dy = (block.y + 0.5 - centerY) / (double)radiusY;
-        double dz = (block.z + 0.5 - centerZ) / (double)radiusZ;
+        return insideEllipsoid(
+            block.x, block.y, block.z,
+            centerX, centerY, centerZ,
+            radiusX, radiusY, radiusZ
+        );
+    }
+
+    private static boolean insideEllipsoid(
+        int x, int y, int z,
+        int centerX, int centerY, int centerZ,
+        int radiusX, int radiusY, int radiusZ
+    ) {
+        double dx = (x + 0.5 - centerX) / (double)radiusX;
+        double dy = (y + 0.5 - centerY) / (double)radiusY;
+        double dz = (z + 0.5 - centerZ) / (double)radiusZ;
         return dx * dx + dy * dy + dz * dz <= 1.0;
     }
 

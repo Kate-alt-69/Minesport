@@ -90,6 +90,11 @@ public class NbtCompound {
         return tags.keySet();
     }
 
+    /** Read-only raw view used when losslessly re-emitting parsed NBT. */
+    public Map<String, Object> asMapView() {
+        return Collections.unmodifiableMap(tags);
+    }
+
     @Override
     public String toString() {
         return "NbtCompound" + tags;

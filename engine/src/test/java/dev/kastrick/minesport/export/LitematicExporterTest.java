@@ -3,6 +3,7 @@ package dev.kastrick.minesport.export;
 import dev.kastrick.minesport.nbt.NbtCompound;
 import dev.kastrick.minesport.nbt.NbtReader;
 import dev.kastrick.minesport.region.BlockData;
+import dev.kastrick.minesport.region.BlockEntityData;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -65,6 +66,64 @@ class LitematicExporterTest {
             NbtCompound stairs = (NbtCompound) region.getList("BlockStatePalette").get(5);
             assertEquals("minecraft:oak_stairs", stairs.getString("Name"));
             assertEquals("east", stairs.getCompound("Properties").getString("facing"));
+        } finally {
+            Files.deleteIfExists(output.toPath());
+        }
+    }
+
+    @Test
+    void preservesBlockEntityNbtWithRegionLocalCoordinates() throws Exception {
+        var blocks = List.of(new BlockData(101, 64, -29, "minecraft:chest", Map.of("facing", "north")));
+
+        var item = new LinkedHashMap<String, Object>();
+        item.put("Slot", (byte) 0);
+        item.put("id", "minecraft:diamond");
+        item.put("Count", (byte) 3);
+
+        var chestTag = new LinkedHashMap<String, Object>();
+        chestTag.put("id", "minecraft:chest");
+        chestTag.put("x", 101);
+        chestTag.put("y", 64);
+        chestTag.put("z", -29);
+        chestTag.put("CustomName", "{\"text\":\"Minesport\"}");
+        chestTag.put("Items", List.of(new NbtCompound(item)));
+
+        var blockEntities = List.of(new BlockEntityData(
+            101, 64, -29, new NbtCompound(chestTag)
+        ));
+
+        var output = Files.createTempFile("minesport-block-entity-", ".litematic").toFile();
+        try {
+            var stats = LitematicExporter.export(
+                blocks,
+                blockEntities,
+                100, 60, -30,
+                102, 66, -28,
+                "Block Entity Test",
+                "Minesport",
+                "unit test",
+                4189,
+                output
+            );
+
+            assertEquals(1, stats.blockEntityCount());
+
+            NbtCompound root = NbtReader.readGzip(output);
+            NbtCompound metadata = root.getCompound("Metadata");
+            assertEquals(1, metadata.getInt("BlockEntityCount"));
+
+            NbtCompound region = root.getCompound("Regions").getCompound("Block Entity Test");
+            assertEquals(1, region.getList("TileEntities").size());
+            NbtCompound chest = (NbtCompound) region.getList("TileEntities").getFirst();
+            assertEquals("minecraft:chest", chest.getString("id"));
+            assertEquals(1, chest.getInt("x"));
+            assertEquals(4, chest.getInt("y"));
+            assertEquals(1, chest.getInt("z"));
+            assertEquals("{\"text\":\"Minesport\"}", chest.getString("CustomName"));
+
+            NbtCompound exportedItem = (NbtCompound) chest.getList("Items").getFirst();
+            assertEquals("minecraft:diamond", exportedItem.getString("id"));
+            assertEquals(3, exportedItem.getByte("Count"));
         } finally {
             Files.deleteIfExists(output.toPath());
         }

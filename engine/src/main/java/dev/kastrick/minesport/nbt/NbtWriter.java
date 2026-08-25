@@ -10,7 +10,7 @@ import java.util.zip.GZIPOutputStream;
  *
  * Values are represented with normal Java types:
  * Byte/Short/Integer/Long/Float/Double, byte[]/int[]/long[], String,
- * List<?> and Map<String, ?>.
+ * List<?>, Map<String, ?> and parsed NbtCompound values.
  */
 public final class NbtWriter {
     private NbtWriter() {}
@@ -66,8 +66,14 @@ public final class NbtWriter {
             case NbtReader.TAG_STRING -> writeString(out, (String) value);
             case NbtReader.TAG_LIST -> writeList(out, (List<?>) value);
             case NbtReader.TAG_COMPOUND -> {
-                @SuppressWarnings("unchecked")
-                Map<String, ?> compound = (Map<String, ?>) value;
+                Map<String, ?> compound;
+                if (value instanceof NbtCompound parsed) {
+                    compound = parsed.asMapView();
+                } else {
+                    @SuppressWarnings("unchecked")
+                    Map<String, ?> mapped = (Map<String, ?>) value;
+                    compound = mapped;
+                }
                 writeCompound(out, compound);
             }
             case NbtReader.TAG_INT_ARRAY -> {
@@ -123,6 +129,7 @@ public final class NbtWriter {
         if (value instanceof byte[]) return NbtReader.TAG_BYTE_ARRAY;
         if (value instanceof String) return NbtReader.TAG_STRING;
         if (value instanceof List<?>) return NbtReader.TAG_LIST;
+        if (value instanceof NbtCompound) return NbtReader.TAG_COMPOUND;
         if (value instanceof Map<?, ?> map) {
             for (Object key : map.keySet()) {
                 if (!(key instanceof String)) {

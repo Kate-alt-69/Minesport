@@ -8,7 +8,7 @@ import java.util.*;
 import java.util.zip.*;
 
 /**
- * Reads Minecraft Anvil .mca region files and extracts blocks as BlockData.
+ * Reads Minecraft Anvil .mca region files.
  *
  * Region framing is stable across a huge span of Minecraft versions. Chunk NBT
  * differences are delegated to ChunkBlockDecoder so this reader can handle
@@ -18,11 +18,47 @@ public class RegionReader {
 
     private static final int SECTOR_SIZE = 4096;
 
+    public record RegionContents(
+        List<BlockData> blocks,
+        List<BlockEntityData> blockEntities
+    ) {}
+
     public static List<BlockData> readRegion(
             File regionFile,
             int minX, int minY, int minZ,
             int maxX, int maxY, int maxZ,
             ProgressCallback progress
+    ) throws IOException {
+        return readRegionInternal(
+            regionFile,
+            minX, minY, minZ,
+            maxX, maxY, maxZ,
+            progress,
+            false
+        ).blocks();
+    }
+
+    public static RegionContents readRegionContents(
+            File regionFile,
+            int minX, int minY, int minZ,
+            int maxX, int maxY, int maxZ,
+            ProgressCallback progress
+    ) throws IOException {
+        return readRegionInternal(
+            regionFile,
+            minX, minY, minZ,
+            maxX, maxY, maxZ,
+            progress,
+            true
+        );
+    }
+
+    private static RegionContents readRegionInternal(
+            File regionFile,
+            int minX, int minY, int minZ,
+            int maxX, int maxY, int maxZ,
+            ProgressCallback progress,
+            boolean includeBlockEntities
     ) throws IOException {
 
         int regionX = 0, regionZ = 0;
@@ -36,9 +72,12 @@ public class RegionReader {
         } catch (NumberFormatException ignored) {}
 
         var blocks = new ArrayList<BlockData>();
+        var blockEntities = new ArrayList<BlockEntityData>();
 
         try (var raf = new RandomAccessFile(regionFile, "r")) {
-            if (raf.length() < SECTOR_SIZE * 2L) return blocks;
+            if (raf.length() < SECTOR_SIZE * 2L) {
+                return new RegionContents(blocks, blockEntities);
+            }
 
             byte[] header = new byte[SECTOR_SIZE];
             raf.readFully(header);
@@ -101,6 +140,14 @@ public class RegionReader {
                         maxX, maxY, maxZ,
                         blocks
                     );
+                    if (includeBlockEntities) {
+                        extractBlockEntities(
+                            chunkNbt,
+                            minX, minY, minZ,
+                            maxX, maxY, maxZ,
+                            blockEntities
+                        );
+                    }
 
                 } catch (EOFException e) {
                     // Truncated chunk — skip without aborting the export.
@@ -119,7 +166,54 @@ public class RegionReader {
             }
         }
 
-        return blocks;
+        return new RegionContents(blocks, blockEntities);
+    }
+
+    static void extractBlockEntities(
+        NbtCompound chunk,
+        int minX, int minY, int minZ,
+        int maxX, int maxY, int maxZ,
+        List<BlockEntityData> out
+    ) {
+        if (chunk == null || out == null) return;
+
+        NbtCompound level = chunk;
+        if (chunk.has("Level")) {
+            try {
+                level = chunk.getCompound("Level");
+            } catch (Exception ignored) {}
+        }
+
+        List<Object> entries = null;
+        try {
+            if (chunk.has("block_entities")) {
+                entries = chunk.getList("block_entities");
+            } else if (level.has("TileEntities")) {
+                entries = level.getList("TileEntities");
+            } else if (chunk.has("TileEntities")) {
+                entries = chunk.getList("TileEntities");
+            }
+        } catch (Exception ignored) {
+            return;
+        }
+        if (entries == null) return;
+
+        for (Object entry : entries) {
+            if (!(entry instanceof NbtCompound entity)) continue;
+            try {
+                int x = entity.getInt("x");
+                int y = entity.getInt("y");
+                int z = entity.getInt("z");
+                if (
+                    x < minX || x > maxX ||
+                    y < minY || y > maxY ||
+                    z < minZ || z > maxZ
+                ) continue;
+                out.add(new BlockEntityData(x, y, z, entity));
+            } catch (Exception ignored) {
+                // Malformed block entity: preserve the surrounding chunk.
+            }
+        }
     }
 
     private static byte[] decompress(byte[] data, int type) {
