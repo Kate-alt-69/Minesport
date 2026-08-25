@@ -86,16 +86,27 @@ public final class BridgeStateRegistry {
             }
         }
 
+        Map<String, RuntimeRegistryIndex.BlockMetadata> metadataByBlock = new LinkedHashMap<>();
+        try {
+            metadataByBlock.putAll(index.readMetadataBatch(requestedBlockIds));
+        } catch (Exception batchException) {
+            // Preserve the old per-record failure isolation if a damaged cache
+            // makes the optimized batch path fail partway through.
+            warn(log, "Runtime state metadata batch could not be read: " + batchException.getMessage());
+            for (String blockId : requestedBlockIds) {
+                try {
+                    RuntimeRegistryIndex.BlockMetadata source = index.readMetadata(blockId);
+                    if (source != null) metadataByBlock.put(blockId, source);
+                } catch (Exception exception) {
+                    warn(log, "Runtime state metadata for " + blockId + " could not be read: " + exception.getMessage());
+                }
+            }
+        }
+
         Map<String, List<LightState>> lightRegistry = new LinkedHashMap<>();
         Set<String> runtimeModelBlocks = new HashSet<>();
         for (String blockId : requestedBlockIds) {
-            RuntimeRegistryIndex.BlockMetadata source;
-            try {
-                source = index.readMetadata(blockId);
-            } catch (Exception exception) {
-                warn(log, "Runtime state metadata for " + blockId + " could not be read: " + exception.getMessage());
-                continue;
-            }
+            RuntimeRegistryIndex.BlockMetadata source = metadataByBlock.get(blockId);
             if (source == null) continue;
             if (source.hasVariants()) {
                 runtimeModelBlocks.add(blockId);

@@ -195,18 +195,35 @@ public final class RuntimeRegistryIndex {
         if (location == null) return null;
 
         try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
-            input.seek(location.offset());
-            verifyStoredId(input, blockId);
-            skipString(input); // vanilla mapping
-            skipString(input); // loader type
-
-            int variantCount = readCount(input, MAX_VARIANTS, "variants");
-            for (int variantIndex = 0; variantIndex < variantCount; variantIndex++) {
-                skipStringMap(input);
-                skipQuadList(input);
-            }
-            return new BlockMetadata(variantCount > 0, readLights(input));
+            return readMetadataAt(input, location);
         }
+    }
+
+    /**
+     * Read metadata for many block IDs with one file handle. Locations are
+     * visited in on-disk order so world enrichment avoids repeated open/close
+     * overhead and minimizes backward seeks while still skipping all quad data.
+     */
+    public Map<String, BlockMetadata> readMetadataBatch(Iterable<String> blockIds) throws IOException {
+        if (blockIds == null) return Map.of();
+
+        Map<String, BlockLocation> requested = new LinkedHashMap<>();
+        for (String blockId : blockIds) {
+            if (blockId == null || blockId.isBlank() || requested.containsKey(blockId)) continue;
+            BlockLocation location = find(blockId);
+            if (location != null) requested.put(blockId, location);
+        }
+        if (requested.isEmpty()) return Map.of();
+
+        List<BlockLocation> locations = new ArrayList<>(requested.values());
+        locations.sort(Comparator.comparingLong(BlockLocation::offset));
+        Map<String, BlockMetadata> result = new LinkedHashMap<>(locations.size());
+        try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
+            for (BlockLocation location : locations) {
+                result.put(location.blockId(), readMetadataAt(input, location));
+            }
+        }
+        return Map.copyOf(result);
     }
 
     /** First 64 bits of SHA-256. The caller must still verify the canonical key. */
@@ -229,6 +246,20 @@ public final class RuntimeRegistryIndex {
             if (candidate.blockId().equals(blockId)) return candidate;
         }
         return null;
+    }
+
+    private static BlockMetadata readMetadataAt(RandomAccessFile input, BlockLocation location) throws IOException {
+        input.seek(location.offset());
+        verifyStoredId(input, location.blockId());
+        skipString(input); // vanilla mapping
+        skipString(input); // loader type
+
+        int variantCount = readCount(input, MAX_VARIANTS, "variants");
+        for (int variantIndex = 0; variantIndex < variantCount; variantIndex++) {
+            skipStringMap(input);
+            skipQuadList(input);
+        }
+        return new BlockMetadata(variantCount > 0, readLights(input));
     }
 
     private static Header readHeader(RandomAccessFile input) throws IOException {
