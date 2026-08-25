@@ -2,6 +2,9 @@ package dev.kastrick.minesport.bridge.socket;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockEntry;
+import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockLightEntry;
+import dev.kastrick.minesport.bridge.model.BridgeProtocol.Hello;
 
 import java.io.*;
 import java.net.Socket;
@@ -43,12 +46,71 @@ public class BridgeSender implements Closeable {
 
     /** Send any object as one JSON line with a "type" discriminator. */
     public void send(String type, Object payload) throws IOException {
+        // The runtime dump is overwhelmingly these three record types. Stream
+        // their fields directly instead of materializing an equally large Gson
+        // JsonObject tree for every block packet. The generic path remains for
+        // optional/legacy protocol messages.
+        if (payload instanceof BlockEntry block) {
+            sendBlock(type, block);
+            return;
+        }
+        if (payload instanceof BlockLightEntry light) {
+            sendBlockLight(type, light);
+            return;
+        }
+        if (payload instanceof Hello hello) {
+            sendHello(type, hello);
+            return;
+        }
+
         JsonObject object = GSON.toJsonTree(payload).getAsJsonObject();
         object.addProperty("type", type);
-        // Stream the JSON tree straight into the socket buffer. Calling
-        // GSON.toJson(object) first duplicates large baked-model packets as a
-        // second giant String and creates avoidable allocation/GC pressure.
         GSON.toJson(object, writer);
+        writer.newLine();
+    }
+
+    private void sendHello(String type, Hello hello) throws IOException {
+        writer.write("{\"type\":");
+        GSON.toJson(type, writer);
+        writer.write(",\"mcVersion\":");
+        GSON.toJson(hello.mcVersion(), writer);
+        writer.write(",\"loaderVersion\":");
+        GSON.toJson(hello.loaderVersion(), writer);
+        writer.write(",\"totalBlocks\":");
+        writer.write(Integer.toString(hello.totalBlocks()));
+        writer.write(",\"polymerPresent\":");
+        writer.write(Boolean.toString(hello.polymerPresent()));
+        writer.write(",\"loadedMods\":");
+        GSON.toJson(hello.loadedMods(), writer);
+        writer.write('}');
+        writer.newLine();
+    }
+
+    private void sendBlock(String type, BlockEntry block) throws IOException {
+        writer.write("{\"type\":");
+        GSON.toJson(type, writer);
+        writer.write(",\"blockId\":");
+        GSON.toJson(block.blockId(), writer);
+        if (block.vanillaMapping() != null) {
+            writer.write(",\"vanillaMapping\":");
+            GSON.toJson(block.vanillaMapping(), writer);
+        }
+        writer.write(",\"loaderType\":");
+        GSON.toJson(block.loaderType(), writer);
+        writer.write(",\"variants\":");
+        GSON.toJson(block.variants(), writer);
+        writer.write('}');
+        writer.newLine();
+    }
+
+    private void sendBlockLight(String type, BlockLightEntry light) throws IOException {
+        writer.write("{\"type\":");
+        GSON.toJson(type, writer);
+        writer.write(",\"blockId\":");
+        GSON.toJson(light.blockId(), writer);
+        writer.write(",\"states\":");
+        GSON.toJson(light.states(), writer);
+        writer.write('}');
         writer.newLine();
     }
 
