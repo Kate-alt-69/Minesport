@@ -425,6 +425,8 @@ export component MainWindow inherits Window {
     in-out property <string> task-detail: "Ready";
     in-out property <float> task-progress: 0.0;
     in-out property <bool> task-active: false;
+    in-out property <bool> task-completing: false;
+    in-out property <string> task-completion-detail: "";
     in-out property <string> diagnostics: "Minesport Rust/Slint desktop initialized.";
 
     in-out property <bool> docs-visible: false;
@@ -888,12 +890,22 @@ export component MainWindow inherits Window {
                                 width: min(500px, parent.width - 64px);
                                 height: 120px;
                                 active: root.task-active && root.task-title == "EXPORT";
+                                complete-requested: root.task-completing;
                                 visible: (root.task-active && root.task-title == "EXPORT") || self.finishing;
-                                title: root.task-active && root.task-title == "EXPORT" ? "Exporting world…" : "Export complete";
+                                title: root.task-completing ? "Finishing export…" : "Exporting world…";
                                 detail: root.task-detail;
                                 progress: root.task-progress;
-                                determinate: true;
+                                determinate: root.task-progress > 0.02;
                                 compact: false;
+                                finished => {
+                                    if (root.task-completing) {
+                                        root.task-completing = false;
+                                        root.task-active = false;
+                                        root.task-progress = 1.0;
+                                        root.task-title = "EXPORT COMPLETE";
+                                        root.task-detail = root.task-completion-detail;
+                                    }
+                                }
                             }
 
                             if root.docs-visible: Rectangle {
@@ -957,7 +969,8 @@ export component MainWindow inherits Window {
             x: parent.width - self.width - 18px;
             y: parent.height - self.height - 18px;
             active: root.task-active && root.task-title != "EXPORT";
-            visible: (root.task-active && root.task-title != "EXPORT") || self.finishing;
+            complete-requested: false;
+            visible: root.task-active && root.task-title != "EXPORT";
             title: root.task-title;
             detail: root.task-detail;
             progress: root.task-progress;

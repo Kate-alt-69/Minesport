@@ -103,6 +103,28 @@ public final class LitematicExporter {
         int minecraftDataVersion,
         File output
     ) throws IOException {
+        return export(
+            blocks, blockEntities, entities,
+            firstX, firstY, firstZ,
+            secondX, secondY, secondZ,
+            name, author, description,
+            minecraftDataVersion, output, null
+        );
+    }
+
+    public static ExportStats export(
+        List<BlockData> blocks,
+        List<BlockEntityData> blockEntities,
+        List<EntityData> entities,
+        int firstX, int firstY, int firstZ,
+        int secondX, int secondY, int secondZ,
+        String name,
+        String author,
+        String description,
+        int minecraftDataVersion,
+        File output,
+        NbtWriter.ProgressCallback writeProgress
+    ) throws IOException {
         int minX = Math.min(firstX, secondX);
         int minY = Math.min(firstY, secondY);
         int minZ = Math.min(firstZ, secondZ);
@@ -240,7 +262,7 @@ public final class LitematicExporter {
         root.put("Metadata", metadata);
         root.put("Regions", regions);
 
-        NbtWriter.writeGzip(output, root);
+        NbtWriter.writeGzip(output, root, writeProgress);
         return new ExportStats(
             nonAir,
             palette.size(),

@@ -670,6 +670,8 @@ fn next_export_path(path: &Path) -> PathBuf {
 }
 
 fn send_export_now(ui: &MainWindow, engine: &JavaEngine, request: Value, output: &Path) {
+    ui.set_task_completing(false);
+    ui.set_task_completion_detail("".into());
     ui.set_task_active(true);
     ui.set_task_progress(0.01);
     ui.set_task_title("EXPORT".into());
@@ -1168,6 +1170,8 @@ fn dispatch_pending_export(
             append_diagnostic(&ui, "Runtime registry attached to queued export.");
             match send_result {
                 Ok(()) => {
+                    ui.set_task_completing(false);
+                    ui.set_task_completion_detail("".into());
                     ui.set_task_active(true);
                     ui.set_task_progress(0.02);
                     ui.set_task_title("EXPORT".into());
@@ -1698,17 +1702,28 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         }
         "progress" => {
             ui.set_task_active(true);
-            ui.set_task_progress((response.percent.clamp(0, 100) as f32) / 100.0);
+            let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
+            ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
             ui.set_task_detail(response.message.into());
         }
         "done" => {
-            ui.set_task_active(false);
-            ui.set_task_progress(1.0);
-            ui.set_task_title("EXPORT COMPLETE".into());
-            ui.set_task_detail(format!("{} · {} blocks · {} faces · {} vertices", response.output, response.block_count, response.quad_count, response.vertex_count).into());
+            let detail = format!(
+                "{} · {} blocks · {} faces · {} vertices",
+                response.output,
+                response.block_count,
+                response.quad_count,
+                response.vertex_count
+            );
+            ui.set_task_active(true);
+            ui.set_task_progress(0.99);
+            ui.set_task_title("EXPORT".into());
+            ui.set_task_detail("Backend complete · finishing animation".into());
+            ui.set_task_completion_detail(detail.into());
+            ui.set_task_completing(true);
             append_diagnostic(&ui, &format!("IPC <- done · {}", response.output));
         }
         "error" => {
+            ui.set_task_completing(false);
             ui.set_task_active(false);
             if ui.get_map_loading() { ui.set_map_loading(false); }
             if ui.get_preview_loading() { ui.set_preview_loading(false); }

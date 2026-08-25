@@ -1,206 +1,197 @@
 import { ProgressIndicator } from "std-widgets.slint";
 
-// Reusable Minesport loading surface.
+// Minesport branded activity loader.
 //
 // Working loop:
-//   9 constant-size dots orbit -> collapse -> one large center mass -> the
-//   center mass shrinks while ejecting the same 9 normal-size dots -> orbit.
+//   center dough -> 9 dots peel off one-by-one -> spaced rollercoaster orbit ->
+//   leading dot dives into the core and the remaining dots follow the same path
+//   one-by-one -> the rebuilt core tries/fails to pop -> repeat.
+//
 // Completion:
-//   dots collapse -> center mass -> an 8x8 monochrome pixel creeper-face mark
-//   assembles from the center -> hold -> fade. Callers own placement and may
-//   keep their host alive until `finished()` fires.
+//   backend completion is ARMED, never hard-cuts the current loop. The dots
+//   finish crashing into the core, progress stays at 99%, then the core finally
+//   succeeds: it balloons into a Creeper face and only then fires finished().
+//   The Creeper face never appears during ordinary loading.
 export component MinesportLoader inherits Rectangle {
     in property <bool> active: false;
+    in property <bool> complete-requested: false;
     in property <string> title: "Working…";
     in property <string> detail: "";
     in property <float> progress: 0.0;
     in property <bool> determinate: false;
     in property <bool> compact: false;
-    // Long-running background jobs can disable the 60-FPS orbit while keeping
-    // the same progress surface. Progress/property updates still repaint.
     in property <bool> animate-working: true;
     out property <bool> finishing: false;
     callback finished();
 
-    private property <float> cycle: 0.0;
+    private property <float> cycle: 0.82;
+    private property <float> success: 0.0;
     private property <bool> was-active: root.active;
-    private property <int> finish-step: 0;
+    private property <bool> completion-armed: false;
 
     min-width: root.compact ? 240px : 340px;
     preferred-width: root.compact ? 330px : 460px;
     min-height: root.compact ? 76px : 106px;
     preferred-height: root.compact ? 82px : 120px;
     visible: root.active || root.finishing;
-    opacity: root.finish-step >= 4 ? 0.0 : 1.0;
     background: #141817f2;
     border-width: 1px;
     border-color: #3b453f;
     border-radius: 9px;
 
-    animate opacity {
-        duration: 190ms;
-        easing: ease-out;
-    }
-
     changed active => {
-        if (root.active) {
+        if (root.active && !root.was-active) {
             root.was-active = true;
             root.finishing = false;
-            root.finish-step = 0;
-            root.cycle = 0.0;
-            finish-timer.running = false;
-        } else if (root.was-active) {
+            root.completion-armed = false;
+            root.success = 0.0;
+            root.cycle = 0.82;
+        } else if (!root.active && root.was-active && !root.finishing) {
             root.was-active = false;
-            root.finishing = true;
-            root.finish-step = 1;
-            finish-timer.running = true;
+            root.completion-armed = false;
+        }
+    }
+
+    changed complete-requested => {
+        if (root.complete-requested && root.active) {
+            root.completion-armed = true;
         }
     }
 
     orbit-timer := Timer {
         interval: 16ms;
-        running: root.active && root.animate-working;
+        running: root.active && root.animate-working && !root.finishing;
         triggered() => {
-            root.cycle = mod(root.cycle + 0.0054, 1.0);
+            if (root.completion-armed && root.cycle >= 0.80) {
+                root.finishing = true;
+                root.success = 0.0;
+                return;
+            }
+            root.cycle = mod(root.cycle + 0.0048, 1.0);
         }
     }
 
-    finish-timer := Timer {
-        interval: 190ms;
-        running: false;
+    success-timer := Timer {
+        interval: 16ms;
+        running: root.finishing;
         triggered() => {
-            if (!root.finishing) {
+            root.success = min(1.0, root.success + 0.020);
+            if (root.success >= 1.0) {
                 self.running = false;
-            } else if (root.finish-step < 5) {
-                root.finish-step += 1;
-            } else {
                 root.finishing = false;
-                root.finish-step = 0;
-                self.running = false;
+                root.completion-armed = false;
                 root.finished();
             }
         }
     }
 
+    function clamp01(t: float) -> float {
+        return max(0.0, min(1.0, t));
+    }
+
     function smooth(t: float) -> float {
-        let c = max(0.0, min(1.0, t));
+        let c = root.clamp01(t);
         return c * c * (3.0 - 2.0 * c);
     }
 
-    function spawn-progress(index: int) -> float {
-        if (root.finishing || root.cycle >= 0.22) { return 1.0; }
+    function peel-progress(index: int) -> float {
+        if (root.cycle >= 0.28) { return 1.0; }
         let start = index * 0.018;
-        let finish = start + 0.08;
-        return root.smooth((root.cycle - start) / (finish - start));
+        return root.smooth((root.cycle - start) / 0.105);
     }
 
-    function collapse-progress(index: int) -> float {
-        if (root.finishing) { return 1.0; }
-        if (root.cycle < 0.60) { return 0.0; }
-        if (root.cycle >= 0.76) { return 1.0; }
-        let start = 0.60 + index * 0.010;
-        let finish = start + 0.08;
-        return root.smooth((root.cycle - start) / (finish - start));
+    function crash-progress(index: int) -> float {
+        if (root.cycle < 0.56) { return 0.0; }
+        if (root.cycle >= 0.82) { return 1.0; }
+        let start = 0.56 + index * 0.018;
+        return root.smooth((root.cycle - start) / 0.105);
     }
 
-    function dot-radius(index: int) -> length {
-        if (root.finishing) { return 0px; }
-        return 21px * (1.0 - root.collapse-progress(index));
+    function dot-visible(index: int) -> float {
+        if (root.finishing) { return 0.0; }
+        return root.peel-progress(index) * (1.0 - root.crash-progress(index));
     }
 
-    function dot-opacity(index: int) -> float {
-        if (root.finishing) { return root.finish-step <= 1 ? 1.0 : 0.0; }
-        if (root.cycle >= 0.78) { return 0.0; }
-        return root.spawn-progress(index) * (1.0 - root.collapse-progress(index));
-    }
-
-    function dot-size(index: int) -> length {
-        return 6px * (0.62 + 0.38 * root.spawn-progress(index));
-    }
-
-    function center-mass-size() -> length {
-        if (root.finishing && root.finish-step == 1) { return 30px; }
-        if (!root.active || root.cycle < 0.64 || root.cycle >= 0.83) { return 0px; }
-        if (root.cycle < 0.76) {
-            return 4px + 16px * root.smooth((root.cycle - 0.64) / 0.12);
+    function orbit-progress(index: int) -> float {
+        let crash = root.crash-progress(index);
+        if (crash > 0.0) {
+            return 1.0 - crash;
         }
-        return 20px * (1.0 - root.smooth((root.cycle - 0.76) / 0.07));
+        let travel = root.clamp01((root.cycle - 0.12 - index * 0.006) / 0.48);
+        let eased = root.smooth(travel);
+        let top-bunch = sin(eased * 180deg) * 0.10;
+        return root.clamp01(eased - top-bunch);
     }
 
-    function beam-opacity() -> float {
-        if (!root.active || root.cycle < 0.75 || root.cycle >= 0.83) { return 0.0; }
-        if (root.cycle < 0.79) { return root.smooth((root.cycle - 0.75) / 0.04); }
-        return 1.0 - root.smooth((root.cycle - 0.79) / 0.04);
+    function orbit-angle(index: int) -> angle {
+        let track = root.orbit-progress(index);
+        return -92deg + track * 335deg;
     }
 
-    function active-face-progress() -> float {
-        if (!root.active || root.cycle < 0.82 || root.cycle >= 0.98) { return 0.0; }
-        if (root.cycle < 0.87) { return root.smooth((root.cycle - 0.82) / 0.05); }
-        if (root.cycle < 0.93) { return 1.0; }
-        return 1.0 - root.smooth((root.cycle - 0.93) / 0.05);
+    function track-radius(index: int) -> length {
+        let angle = root.orbit-angle(index);
+        return 21px + (1.0 - abs(cos(angle))) * 3px;
     }
 
     function dot-x(index: int) -> length {
         if (root.finishing) { return 32px; }
-        let base = -53.333deg + index * 13.333deg;
-        let sweep = root.cycle < 0.22 ? 0.0 : min(1.0, (root.cycle - 0.22) / 0.38);
-        let angle = base + sweep * 540deg;
-        return 32px + cos(angle) * root.dot-radius(index);
+        let p = root.dot-visible(index);
+        let angle = root.orbit-angle(index);
+        let orbit-x = 32px + cos(angle) * root.track-radius(index);
+        return 32px + (orbit-x - 32px) * p;
     }
 
     function dot-y(index: int) -> length {
         if (root.finishing) { return 32px; }
-        let base = -53.333deg + index * 13.333deg;
-        let sweep = root.cycle < 0.22 ? 0.0 : min(1.0, (root.cycle - 0.22) / 0.38);
-        let angle = base + sweep * 540deg;
-        return 32px + sin(angle) * root.dot-radius(index);
+        let p = root.dot-visible(index);
+        let angle = root.orbit-angle(index);
+        let orbit-y = 32px + sin(angle) * root.track-radius(index);
+        return 32px + (orbit-y - 32px) * p;
     }
 
-    function pixel-column(index: int) -> int {
-        return mod(index, 8);
+    function dot-size(index: int) -> length {
+        return 5px + 1px * root.dot-visible(index);
     }
 
-    function pixel-row(index: int) -> int {
-        return floor(index / 8);
+    function core-fill() -> float {
+        if (root.finishing) { return 1.0; }
+        let peeled = 0.0
+            + root.peel-progress(0) + root.peel-progress(1) + root.peel-progress(2)
+            + root.peel-progress(3) + root.peel-progress(4) + root.peel-progress(5)
+            + root.peel-progress(6) + root.peel-progress(7) + root.peel-progress(8);
+        let crashed = 0.0
+            + root.crash-progress(0) + root.crash-progress(1) + root.crash-progress(2)
+            + root.crash-progress(3) + root.crash-progress(4) + root.crash-progress(5)
+            + root.crash-progress(6) + root.crash-progress(7) + root.crash-progress(8);
+        return root.clamp01(1.0 - peeled / 9.0 + crashed / 9.0);
     }
 
-    function face-pixel-black(index: int) -> bool {
-        let row = root.pixel-row(index);
-        let col = root.pixel-column(index);
-        if ((row == 1 || row == 2) && ((col >= 1 && col <= 2) || (col >= 5 && col <= 6))) {
-            return true;
-        }
-        if (row == 3 && (col == 3 || col == 4)) {
-            return true;
-        }
-        if ((row == 4 || row == 5) && col >= 2 && col <= 5) {
-            return true;
-        }
-        if (row == 6 && (col == 2 || col == 5)) {
-            return true;
-        }
-        if (row == 7 && ((col >= 1 && col <= 2) || (col >= 5 && col <= 6))) {
-            return true;
-        }
-        return false;
+    function failed-pop() -> float {
+        if (root.finishing || root.cycle < 0.82) { return 0.0; }
+        let t = root.clamp01((root.cycle - 0.82) / 0.18);
+        return sin(t * 180deg);
     }
 
-    function pixel-x(index: int) -> length {
+    function core-size() -> length {
         if (root.finishing) {
-            if (root.finish-step <= 1) { return 30px; }
-            return 6px + root.pixel-column(index) * 6px;
+            let t = root.success;
+            if (t < 0.34) {
+                return 28px + root.smooth(t / 0.34) * 20px;
+            }
+            return 48px - root.smooth((t - 0.34) / 0.30) * 8px;
         }
-        let target = 6px + root.pixel-column(index) * 6px;
-        return 30px + (target - 30px) * root.active-face-progress();
+        return 8px + root.core-fill() * 22px + root.failed-pop() * 4px;
     }
 
-    function pixel-y(index: int) -> length {
-        if (root.finishing) {
-            if (root.finish-step <= 1) { return 30px; }
-            return 6px + root.pixel-row(index) * 6px;
-        }
-        let target = 6px + root.pixel-row(index) * 6px;
-        return 30px + (target - 30px) * root.active-face-progress();
+    function core-radius() -> length {
+        if (!root.finishing) { return root.core-size() / 2; }
+        let square = root.smooth((root.success - 0.20) / 0.30);
+        return root.core-size() / 2 * (1.0 - square) + 6px * square;
+    }
+
+    function face-opacity() -> float {
+        if (!root.finishing) { return 0.0; }
+        return root.smooth((root.success - 0.32) / 0.18);
     }
 
     HorizontalLayout {
@@ -213,34 +204,63 @@ export component MinesportLoader inherits Rectangle {
             height: 64px;
             background: transparent;
 
-            horizontal-beam := Rectangle {
-                width: 44px;
-                height: 2px;
-                x: 10px;
-                y: 31px;
-                border-radius: 1px;
-                background: #f2f4f3;
-                opacity: root.beam-opacity();
-            }
-
-            vertical-beam := Rectangle {
-                width: 2px;
-                height: 44px;
-                x: 31px;
-                y: 10px;
-                border-radius: 1px;
-                background: #f2f4f3;
-                opacity: root.beam-opacity() * 0.72;
-            }
-
-            center-mass := Rectangle {
-                width: root.center-mass-size();
+            core := Rectangle {
+                width: root.core-size();
                 height: self.width;
                 x: 32px - self.width / 2;
                 y: 32px - self.height / 2;
-                border-radius: self.width / 2;
+                border-radius: root.core-radius();
                 background: #f2f4f3;
-                visible: self.width > 0px;
+                visible: self.width > 1px;
+
+                Rectangle {
+                    x: core.width * 0.18;
+                    y: core.height * 0.22;
+                    width: core.width * 0.22;
+                    height: core.height * 0.22;
+                    background: #080a09;
+                    opacity: root.face-opacity();
+                }
+                Rectangle {
+                    x: core.width * 0.60;
+                    y: core.height * 0.22;
+                    width: core.width * 0.22;
+                    height: core.height * 0.22;
+                    background: #080a09;
+                    opacity: root.face-opacity();
+                }
+                Rectangle {
+                    x: core.width * 0.39;
+                    y: core.height * 0.43;
+                    width: core.width * 0.22;
+                    height: core.height * 0.18;
+                    background: #080a09;
+                    opacity: root.face-opacity();
+                }
+                Rectangle {
+                    x: core.width * 0.28;
+                    y: core.height * 0.56;
+                    width: core.width * 0.44;
+                    height: core.height * 0.20;
+                    background: #080a09;
+                    opacity: root.face-opacity();
+                }
+                Rectangle {
+                    x: core.width * 0.28;
+                    y: core.height * 0.70;
+                    width: core.width * 0.15;
+                    height: core.height * 0.16;
+                    background: #080a09;
+                    opacity: root.face-opacity();
+                }
+                Rectangle {
+                    x: core.width * 0.57;
+                    y: core.height * 0.70;
+                    width: core.width * 0.15;
+                    height: core.height * 0.16;
+                    background: #080a09;
+                    opacity: root.face-opacity();
+                }
             }
 
             for dot[index] in 9: Rectangle {
@@ -250,32 +270,8 @@ export component MinesportLoader inherits Rectangle {
                 y: root.dot-y(index) - self.height / 2;
                 border-radius: self.width / 2;
                 background: #f2f4f3;
-                opacity: root.dot-opacity(index);
+                opacity: root.dot-visible(index);
                 visible: self.opacity > 0.001;
-
-                animate x, y {
-                    duration: 145ms;
-                    easing: ease-in-out;
-                    enabled: root.finishing;
-                }
-            }
-
-            for pixel[index] in 64: Rectangle {
-                x: root.pixel-x(index);
-                y: root.pixel-y(index);
-                width: 5px;
-                height: 5px;
-                border-radius: 0px;
-                background: root.face-pixel-black(index) ? #080a09 : #f3f5f4;
-                visible: (root.finishing && root.finish-step >= 2 && root.finish-step < 5)
-                    || (root.active && root.active-face-progress() > 0.001);
-                opacity: root.finishing ? 1.0 : root.active-face-progress();
-
-                animate x, y {
-                    duration: 170ms;
-                    easing: ease-out;
-                    enabled: root.finishing;
-                }
             }
         }
 

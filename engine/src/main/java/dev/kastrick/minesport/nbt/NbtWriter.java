@@ -15,14 +15,57 @@ import java.util.zip.GZIPOutputStream;
 public final class NbtWriter {
     private NbtWriter() {}
 
+    @FunctionalInterface
+    public interface ProgressCallback {
+        void onProgress(long done, long total);
+    }
+
+    private static final ThreadLocal<ProgressTracker> ACTIVE_PROGRESS = new ThreadLocal<>();
+
+    private static final class ProgressTracker {
+        private final ProgressCallback callback;
+        private final long total;
+        private final long interval;
+        private long done;
+        private long next;
+
+        ProgressTracker(ProgressCallback callback, long total) {
+            this.callback = callback;
+            this.total = Math.max(0L, total);
+            this.interval = Math.max(1L, this.total / 100L);
+            this.next = 1L;
+        }
+
+        void wroteLong() {
+            if (callback == null || total <= 0L) return;
+            done++;
+            if (done >= next || done >= total) {
+                callback.onProgress(Math.min(done, total), total);
+                next = done + interval;
+            }
+        }
+    }
+
     public static void writeGzip(File file, Map<String, ?> root) throws IOException {
+        writeGzip(file, root, null);
+    }
+
+    public static void writeGzip(
+        File file,
+        Map<String, ?> root,
+        ProgressCallback callback
+    ) throws IOException {
         File parent = file.getParentFile();
         if (parent != null) parent.mkdirs();
+        ProgressTracker tracker = new ProgressTracker(callback, countLongArrayValues(root));
+        ACTIVE_PROGRESS.set(tracker);
         try (
             var gzip = new GZIPOutputStream(new BufferedOutputStream(new FileOutputStream(file)));
             var out = new DataOutputStream(gzip)
         ) {
             writeRoot(out, root);
+        } finally {
+            ACTIVE_PROGRESS.remove();
         }
     }
 
@@ -84,7 +127,11 @@ public final class NbtWriter {
             case NbtReader.TAG_LONG_ARRAY -> {
                 long[] values = (long[]) value;
                 out.writeInt(values.length);
-                for (long item : values) out.writeLong(item);
+                ProgressTracker tracker = ACTIVE_PROGRESS.get();
+                for (long item : values) {
+                    out.writeLong(item);
+                    if (tracker != null) tracker.wroteLong();
+                }
             }
             default -> throw new IOException("Unsupported NBT tag type: " + type);
         }
@@ -117,6 +164,25 @@ public final class NbtWriter {
             }
             writePayload(out, type, value);
         }
+    }
+
+    private static long countLongArrayValues(Object value) {
+        if (value == null) return 0L;
+        if (value instanceof long[] values) return values.length;
+        if (value instanceof NbtCompound parsed) {
+            return countLongArrayValues(parsed.asMapView());
+        }
+        if (value instanceof Map<?, ?> map) {
+            long total = 0L;
+            for (Object nested : map.values()) total += countLongArrayValues(nested);
+            return total;
+        }
+        if (value instanceof List<?> list) {
+            long total = 0L;
+            for (Object nested : list) total += countLongArrayValues(nested);
+            return total;
+        }
+        return 0L;
     }
 
     private static byte typeOf(Object value) throws IOException {

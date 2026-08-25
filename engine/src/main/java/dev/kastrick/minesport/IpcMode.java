@@ -8,7 +8,7 @@ import dev.kastrick.minesport.safety.WorldCopier;
 
 import javax.imageio.ImageIO;
 import java.io.*;
-import java.nio.file.Files;
+import java.nio.file.*;
 import java.util.*;
 
 /** IPC mode for the Go wrapper. */
@@ -116,6 +116,7 @@ public class IpcMode {
         if (parent != null) parent.mkdirs();
 
         File tempDir = null;
+        File stagedOutput = null;
         try {
             progressIndeterminate("Preparing selected world data");
             tempDir = WorldCopier.copyToTemp(
@@ -317,6 +318,13 @@ public class IpcMode {
                 }
                 progressIndeterminate("Writing Litematica file");
                 String schematicName = outFile.getName().replaceFirst("(?i)\\.litematic$", "");
+                Path outputParent = outFile.toPath().toAbsolutePath().getParent();
+                if (outputParent == null) outputParent = Path.of(".").toAbsolutePath();
+                stagedOutput = Files.createTempFile(
+                    outputParent,
+                    "." + outFile.getName() + ".",
+                    ".part"
+                ).toFile();
                 LitematicExporter.ExportStats schematicStats = LitematicExporter.export(
                     allBlocks,
                     allBlockEntities,
@@ -327,9 +335,15 @@ public class IpcMode {
                     "Minesport",
                     "Exported by Minesport from Minecraft " + mcVersion,
                     dataVersion,
-                    outFile
+                    stagedOutput,
+                    IpcMode::reportLitematicWriteProgress
                 );
-                progress(100, "Done");
+                progressIndeterminate("Cleaning temporary world data");
+                WorldCopier.cleanupTemp(tempDir);
+                tempDir = null;
+                commitStagedOutput(stagedOutput, outFile);
+                stagedOutput = null;
+                progress(99, "Finalizing export");
                 log(
                     "Litematica export: " + schematicStats.blockCount() + " blocks, "
                     + schematicStats.blockEntityCount() + " block entities, "
@@ -497,7 +511,29 @@ public class IpcMode {
             exception.printStackTrace(new PrintWriter(stack));
             error("Export failed: " + exception.getMessage() + "\n" + stack);
         } finally {
+            if (stagedOutput != null) {
+                try {
+                    Files.deleteIfExists(stagedOutput.toPath());
+                } catch (IOException ignored) {}
+            }
             if (tempDir != null) WorldCopier.cleanupTemp(tempDir);
+        }
+    }
+
+    private static void commitStagedOutput(File staged, File output) throws IOException {
+        try {
+            Files.move(
+                staged.toPath(),
+                output.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE
+            );
+        } catch (AtomicMoveNotSupportedException ignored) {
+            Files.move(
+                staged.toPath(),
+                output.toPath(),
+                StandardCopyOption.REPLACE_EXISTING
+            );
         }
     }
 
@@ -563,6 +599,21 @@ public class IpcMode {
         int interval = Math.max(1, total / 100);
         if (done <= 1 || done >= total || done % interval == 0) {
             progressIndeterminate(message + " · " + done + "/" + total + " chunks");
+        }
+    }
+
+    private static void reportLitematicWriteProgress(long done, long total) {
+        if (total <= 0L) {
+            progressIndeterminate("Writing Litematica file");
+            return;
+        }
+        long interval = Math.max(1L, total / 100L);
+        if (done <= 1L || done >= total || done % interval == 0L) {
+            int percent = (int)Math.round(done * 99.0 / total);
+            progress(
+                Math.max(1, Math.min(99, percent)),
+                "Writing Litematica · " + done + "/" + total + " state words"
+            );
         }
     }
 
