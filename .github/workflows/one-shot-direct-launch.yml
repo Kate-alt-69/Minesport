@@ -1,0 +1,402 @@
+name: One-shot direct launch optimizer
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-direct-launch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache Loom launch profile and bypass Gradle after resolution
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('desktop/src/runtime_worker.rs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old, new, label):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''    env,\n    fs::{self, File},\n''',
+              '''    collections::BTreeMap,\n    env,\n    fs::{self, File},\n''',
+              'import BTreeMap',
+          )
+
+          replace_once(
+              '''const FABRIC_MOD_JSON_LIMIT: u64 = 1 << 20;\n''',
+              '''const FABRIC_MOD_JSON_LIMIT: u64 = 1 << 20;\nconst DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 1;\n''',
+              'direct launch schema',
+          )
+
+          replace_once(
+              '''struct WorkspacePlan {\n    workspace: PathBuf,\n    java: u32,\n}\n''',
+              '''struct WorkspacePlan {\n    workspace: PathBuf,\n    java: u32,\n}\n\n#[derive(Debug, Deserialize)]\n#[serde(rename_all = "camelCase")]\nstruct DirectLaunchManifest {\n    schema: u32,\n    main_class: String,\n    classpath: Vec<String>,\n    #[serde(default)]\n    jvm_args: Vec<String>,\n    #[serde(default)]\n    args: Vec<String>,\n    working_dir: String,\n    #[serde(default)]\n    environment_overrides: BTreeMap<String, String>,\n}\n''',
+              'direct launch manifest type',
+          )
+
+          replace_once(
+              '''    if cancel.load(Ordering::Relaxed) {\n        bail!("runtime cache cancelled");\n    }\n\n    let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);\n''',
+              '''    if cancel.load(Ordering::Relaxed) {\n        bail!("runtime cache cancelled");\n    }\n\n    let direct_launch = if family == BridgeFamily::Fabric && version == MC_1_21_10 {\n        progress(Progress { percent: 54, message: "Preparing Minecraft launch…".into() });\n        Some(ensure_direct_launch_profile(&version, &java_home)?)\n    } else {\n        None\n    };\n    if cancel.load(Ordering::Relaxed) {\n        bail!("runtime cache cancelled");\n    }\n\n    let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);\n''',
+              'resolve direct launch profile before capture listener',
+          )
+
+          replace_once(
+              '''    let log_path = workspace.join("runtime-worker.log");\n    let mut child = start_gradle_worker(family, &workspace, &log_path, &java_home)?;\n    progress(Progress { percent: 62, message: "Loading runtime models…".into() });\n''',
+              '''    let log_path = workspace.join("runtime-worker.log");\n    let mut child = if let Some(manifest) = direct_launch.as_ref() {\n        start_direct_worker(family, &workspace, &log_path, &java_home, manifest)?\n    } else {\n        start_gradle_worker(family, &workspace, &log_path, &java_home)?\n    };\n    progress(Progress { percent: 62, message: "Loading runtime models…".into() });\n''',
+              'select direct worker launch',
+          )
+
+          marker = '''fn start_gradle_worker(\n'''
+          helpers = r'''fn direct_launch_profile_dir(version: &str) -> PathBuf {
+    runtime::cache_root()
+        .join("bridge-build")
+        .join("launch-profiles")
+        .join(format!(
+            "fabric-{}-loader-{}-api-{}-loom-{}-v{}",
+            safe(version),
+            safe(LOADER_1_21_10),
+            safe(FABRIC_API_1_21_10),
+            safe(LOOM_1_21_10),
+            DIRECT_LAUNCH_PROFILE_SCHEMA
+        ))
+}
+
+fn ensure_direct_launch_profile(version: &str, java_home: &Path) -> Result<DirectLaunchManifest> {
+    let profile = direct_launch_profile_dir(version);
+    let manifest_path = profile.join("minesport-launch.json");
+    if let Ok(manifest) = load_direct_launch_manifest(&manifest_path) {
+        return Ok(manifest);
+    }
+
+    create_fast_bundled_workspace(&profile, version)?;
+    let log_path = profile.join("resolve-runtime.log");
+    let stdout = File::create(&log_path)
+        .with_context(|| format!("create {}", log_path.display()))?;
+    let stderr = stdout.try_clone()?;
+    let java = java_home
+        .join("bin")
+        .join(if cfg!(windows) { "java.exe" } else { "java" });
+    if !java.is_file() {
+        bail!("selected runtime JDK has no Java launcher: {}", java.display());
+    }
+    let wrapper = profile
+        .join("gradle")
+        .join("wrapper")
+        .join("gradle-wrapper.jar");
+    if !wrapper.is_file() {
+        bail!("runtime launch profile has no embedded Gradle wrapper: {}", wrapper.display());
+    }
+
+    let mut command = Command::new(&java);
+    command
+        .arg("-Xmx512m")
+        .arg("-XX:MaxMetaspaceSize=384m")
+        .arg("-XX:ActiveProcessorCount=2")
+        .arg("-Dfile.encoding=UTF-8")
+        .arg("-cp")
+        .arg(&wrapper)
+        .arg("org.gradle.wrapper.GradleWrapperMain")
+        .args([
+            "--no-daemon",
+            "--console=plain",
+            "--max-workers=1",
+            "--no-watch-fs",
+            "minesportResolveRuntime",
+        ])
+        .current_dir(&profile)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    sanitize_java_environment(&mut command, java_home);
+    command.env("GRADLE_USER_HOME", gradle_user_home());
+    command.env("JAVA_TOOL_OPTIONS", "-XX:ActiveProcessorCount=2");
+    hide_console_window(&mut command);
+
+    let status = command.status().with_context(|| {
+        format!(
+            "resolve cached Fabric runtime launch profile with {}",
+            java_home.display()
+        )
+    })?;
+    if !status.success() {
+        let tail = tail_file(&log_path, 80);
+        if tail.is_empty() {
+            bail!("runtime launch profile resolver exited with {status}");
+        }
+        bail!("runtime launch profile resolver exited with {status}\n{tail}");
+    }
+
+    load_direct_launch_manifest(&manifest_path).with_context(|| {
+        format!(
+            "load resolved runtime launch profile {}",
+            manifest_path.display()
+        )
+    })
+}
+
+fn load_direct_launch_manifest(path: &Path) -> Result<DirectLaunchManifest> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let manifest: DirectLaunchManifest =
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
+    if manifest.schema != DIRECT_LAUNCH_PROFILE_SCHEMA {
+        bail!(
+            "runtime launch profile schema {} is not supported",
+            manifest.schema
+        );
+    }
+    if manifest.main_class.trim().is_empty() {
+        bail!("runtime launch profile has no main class");
+    }
+    if manifest.classpath.is_empty() {
+        bail!("runtime launch profile has an empty classpath");
+    }
+    if let Some(missing) = manifest
+        .classpath
+        .iter()
+        .find(|entry| entry.ends_with(".jar") && !Path::new(entry.as_str()).is_file())
+    {
+        bail!("runtime launch profile references missing JAR {missing}");
+    }
+    Ok(manifest)
+}
+
+fn start_direct_worker(
+    family: BridgeFamily,
+    workspace: &Path,
+    log_path: &Path,
+    java_home: &Path,
+    manifest: &DirectLaunchManifest,
+) -> Result<Child> {
+    let stdout = File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
+    let stderr = stdout.try_clone()?;
+    let java = java_home
+        .join("bin")
+        .join(if cfg!(windows) { "java.exe" } else { "java" });
+    if !java.is_file() {
+        bail!("selected runtime JDK has no Java launcher: {}", java.display());
+    }
+
+    let classpath = env::join_paths(manifest.classpath.iter().map(PathBuf::from))
+        .context("join cached runtime classpath")?;
+    let run_dir = workspace.join("run");
+    let runtime_args = direct_runtime_args(manifest, &run_dir);
+
+    let mut command = Command::new(&java);
+    for arg in &manifest.jvm_args {
+        if !managed_runtime_jvm_arg(arg) {
+            command.arg(arg);
+        }
+    }
+    command
+        .arg("-Xmx512m")
+        .arg("-XX:MaxMetaspaceSize=384m")
+        .arg("-XX:ActiveProcessorCount=2")
+        .arg("-Dfile.encoding=UTF-8")
+        .arg("-cp")
+        .arg(classpath)
+        .arg(&manifest.main_class)
+        .args(runtime_args)
+        .current_dir(&run_dir)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    sanitize_java_environment(&mut command, java_home);
+    for (key, value) in &manifest.environment_overrides {
+        command.env(key, value);
+    }
+    command.env("MINESPORT_BRIDGE_PORT", "25590");
+    command.env("MINESPORT_BRIDGE_MODE", "all");
+    command.env("MINESPORT_BRIDGE_WORKER", "1");
+    hide_console_window(&mut command);
+    command.spawn().with_context(|| {
+        format!(
+            "start isolated {} runtime worker directly with {}",
+            family.label(),
+            java_home.display()
+        )
+    })
+}
+
+fn managed_runtime_jvm_arg(arg: &str) -> bool {
+    arg.starts_with("-Xmx")
+        || arg.starts_with("-Xms")
+        || arg.starts_with("-XX:MaxMetaspaceSize=")
+        || arg.starts_with("-XX:ActiveProcessorCount=")
+        || arg.starts_with("-Dfile.encoding=")
+}
+
+fn direct_runtime_args(manifest: &DirectLaunchManifest, run_dir: &Path) -> Vec<String> {
+    let from = manifest.working_dir.as_str();
+    let to = run_dir.to_string_lossy();
+    manifest
+        .args
+        .iter()
+        .map(|arg| {
+            if from.is_empty() {
+                arg.clone()
+            } else {
+                arg.replace(from, to.as_ref())
+            }
+        })
+        .collect()
+}
+
+'''
+          replace_once(marker, helpers + marker, 'insert direct launch helpers')
+
+          old_build = r'''const BUILD_GRADLE: &str = r#"plugins {
+    id 'fabric-loom' version '1.11.7'
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+repositories {
+    maven { url 'https://maven.fabricmc.net/' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+"#;
+'''
+          new_build = r'''const BUILD_GRADLE: &str = r#"import groovy.json.JsonOutput
+
+plugins {
+    id 'fabric-loom' version '1.11.7'
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+repositories {
+    maven { url 'https://maven.fabricmc.net/' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+tasks.register('minesportResolveRuntime') {
+    dependsOn {
+        def runTask = tasks.named('runClient').get()
+        runTask.taskDependencies.getDependencies(runTask)
+    }
+    doLast {
+        def runTask = tasks.named('runClient').get()
+        def inherited = System.getenv()
+        def environmentOverrides = runTask.environment
+            .findAll { key, value -> inherited[key] != value?.toString() }
+            .collectEntries { key, value -> [(key.toString()): value?.toString()] }
+        def payload = [
+            schema: 1,
+            mainClass: runTask.mainClass.get(),
+            classpath: runTask.classpath.files.collect { it.absolutePath },
+            jvmArgs: runTask.allJvmArgs.collect { it.toString() },
+            args: (runTask.args ?: []).collect { it.toString() },
+            workingDir: runTask.workingDir.absolutePath,
+            environmentOverrides: environmentOverrides,
+        ]
+        file('minesport-launch.json').text = JsonOutput.toJson(payload)
+    }
+}
+"#;
+'''
+          replace_once(old_build, new_build, 'add Gradle launch manifest task')
+
+          old_test = r'''    #[test]
+    fn exact_capture_progress_maps_to_runtime_segment() {
+        assert_eq!(capture_progress_percent(0, 1000), 62);
+        assert_eq!(capture_progress_percent(500, 1000), 78);
+        assert_eq!(capture_progress_percent(1000, 1000), 94);
+        assert_eq!(capture_progress_percent(1200, 1000), 94);
+    }
+'''
+          new_test = r'''    #[test]
+    fn exact_capture_progress_maps_to_runtime_segment() {
+        assert_eq!(capture_progress_percent(0, 1000), 62);
+        assert_eq!(capture_progress_percent(500, 1000), 78);
+        assert_eq!(capture_progress_percent(1000, 1000), 94);
+        assert_eq!(capture_progress_percent(1200, 1000), 94);
+    }
+
+    #[test]
+    fn direct_launch_keeps_loom_flags_but_owns_resource_caps() {
+        assert!(managed_runtime_jvm_arg("-Xmx2G"));
+        assert!(managed_runtime_jvm_arg("-XX:ActiveProcessorCount=8"));
+        assert!(!managed_runtime_jvm_arg("-Dfabric.dli.env=client"));
+    }
+
+    #[test]
+    fn direct_launch_retargets_only_the_game_run_directory() {
+        let manifest = DirectLaunchManifest {
+            schema: DIRECT_LAUNCH_PROFILE_SCHEMA,
+            main_class: "example.Main".into(),
+            classpath: vec!["example.jar".into()],
+            jvm_args: vec![],
+            args: vec![
+                "--gameDir".into(),
+                "/profile/run".into(),
+                "--assetsDir".into(),
+                "/cache/assets".into(),
+            ],
+            working_dir: "/profile/run".into(),
+            environment_overrides: BTreeMap::new(),
+        };
+        assert_eq!(
+            direct_runtime_args(&manifest, Path::new("/worker/run")),
+            vec![
+                "--gameDir",
+                "/worker/run",
+                "--assetsDir",
+                "/cache/assets",
+            ]
+        );
+    }
+'''
+          replace_once(old_test, new_test, 'add direct launch tests')
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Format Rust
+        run: cargo fmt --manifest-path desktop/Cargo.toml --all
+
+      - name: Run focused Rust tests
+        run: cargo test --manifest-path desktop/Cargo.toml runtime_worker::tests
+
+      - name: Commit optimized runtime launch
+        shell: bash
+        run: |
+          rm -f .github/workflows/one-shot-direct-launch.yml
+          git config user.name 'Minesport optimization bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -- desktop/src/runtime_worker.rs .github/workflows/one-shot-direct-launch.yml
+          git commit -m 'Cache Fabric launch profile and bypass Gradle'
+          git push origin HEAD:main
