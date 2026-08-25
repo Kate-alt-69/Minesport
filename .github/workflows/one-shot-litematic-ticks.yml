@@ -107,6 +107,15 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon test
 
+      - name: Preserve Java test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: litematica-tick-test-report
+          path: engine/build/test-results/test/*.xml
+          if-no-files-found: warn
+          retention-days: 1
+
       - name: Validate build scripts
         shell: bash
         run: |
