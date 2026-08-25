@@ -27,9 +27,7 @@ jobs:
 
       - name: Test Java engine
         working-directory: engine
-        run: |
-          chmod +x gradlew
-          ./gradlew --no-daemon test --stacktrace
+        run: bash ./gradlew --no-daemon test --stacktrace
 
       - name: Install Slint build dependencies
         run: |
@@ -45,7 +43,10 @@ jobs:
 
       - name: Verify patch
         run: |
+          git checkout -- engine/gradlew
           git diff --check
+          echo "Changed production files:"
+          git diff --name-only
           test "$(git diff --name-only | sort | tr '\n' ' ')" = "desktop/ui/minesport-loader.slint engine/src/main/java/dev/kastrick/minesport/IpcMode.java engine/src/main/java/dev/kastrick/minesport/region/RegionReader.java engine/src/main/java/dev/kastrick/minesport/safety/WorldCopier.java "
 
       - name: Publish tested fix
@@ -55,6 +56,12 @@ jobs:
           rm -f .github/workflows/one-shot-litematic-ticks.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add -- desktop/ui/minesport-loader.slint \
+            engine/src/main/java/dev/kastrick/minesport/IpcMode.java \
+            engine/src/main/java/dev/kastrick/minesport/region/RegionReader.java \
+            engine/src/main/java/dev/kastrick/minesport/safety/WorldCopier.java \
+            .github/export_progress_patch.py \
+            .github/workflows/one-shot-export-progress.yml \
+            .github/workflows/one-shot-litematic-ticks.yml
           git commit -m 'Fix export progress and selected-region performance'
           git push origin HEAD:main
