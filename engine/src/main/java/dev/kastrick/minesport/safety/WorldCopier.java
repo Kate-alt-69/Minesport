@@ -26,6 +26,21 @@ public class WorldCopier {
      * dimension and then mirroring the Overworld again is pure duplicate I/O.
      */
     public static File copyToTemp(File worldFolder, Consumer<String> statusCallback) throws IOException {
+        return copyToTemp(
+            worldFolder,
+            Integer.MIN_VALUE, Integer.MIN_VALUE,
+            Integer.MAX_VALUE, Integer.MAX_VALUE,
+            statusCallback
+        );
+    }
+
+    /** Copy only the Overworld region files that can intersect selected X/Z bounds. */
+    public static File copyToTemp(
+        File worldFolder,
+        int minX, int minZ,
+        int maxX, int maxZ,
+        Consumer<String> statusCallback
+    ) throws IOException {
         if (!worldFolder.exists() || !worldFolder.isDirectory()) {
             throw new IOException("World folder does not exist: " + worldFolder);
         }
@@ -37,19 +52,25 @@ public class WorldCopier {
         }
 
         if (statusCallback != null) {
-            statusCallback.accept("Creating temp copy at: " + tempDir.getAbsolutePath());
+            statusCallback.accept("Preparing selected world data");
         }
 
         try {
             copyLevelMetadata(worldFolder, tempDir, statusCallback);
-            copyPreferredOverworldRegion(worldFolder, tempDir, statusCallback);
+            copyPreferredOverworldRegion(
+                worldFolder,
+                tempDir,
+                minX, minZ,
+                maxX, maxZ,
+                statusCallback
+            );
         } catch (IOException exception) {
             cleanupTemp(tempDir);
             throw exception;
         }
 
         if (statusCallback != null) {
-            statusCallback.accept("World copy complete.");
+            statusCallback.accept("Selected world data ready");
         }
         return tempDir;
     }
@@ -81,6 +102,23 @@ public class WorldCopier {
         File tempDir,
         Consumer<String> log
     ) throws IOException {
+        return copyOverworldEntitiesToTemp(
+            worldFolder,
+            tempDir,
+            Integer.MIN_VALUE, Integer.MIN_VALUE,
+            Integer.MAX_VALUE, Integer.MAX_VALUE,
+            log
+        );
+    }
+
+    /** Copy only entity-region files that can intersect selected X/Z bounds. */
+    public static boolean copyOverworldEntitiesToTemp(
+        File worldFolder,
+        File tempDir,
+        int minX, int minZ,
+        int maxX, int maxZ,
+        Consumer<String> log
+    ) throws IOException {
         File source = null;
         for (String relativePath : OVERWORLD_ENTITY_PATHS) {
             File candidate = new File(worldFolder, relativePath);
@@ -91,11 +129,11 @@ public class WorldCopier {
         }
         if (source == null) return false;
 
+        File[] files = selectedRegionFiles(source, minX, minZ, maxX, maxZ);
+        if (files.length == 0) return false;
+
         Path destination = tempDir.toPath().resolve("entities");
         Files.createDirectories(destination);
-        File[] files = source.listFiles(file -> file.isFile() && isRegionFile(file.getName()));
-        if (files == null || files.length == 0) return false;
-        Arrays.sort(files, Comparator.comparing(File::getName));
         for (File file : files) {
             copyFile(
                 file.toPath(),
@@ -105,7 +143,7 @@ public class WorldCopier {
             );
         }
         if (log != null) {
-            log.accept("Using Overworld entity folder: " + source.getAbsolutePath());
+            log.accept("Selected entity regions: " + files.length);
         }
         return true;
     }
@@ -120,6 +158,46 @@ public class WorldCopier {
 
     private static boolean isRegionFile(String name) {
         return name.endsWith(".mca") || name.endsWith(".mcr");
+    }
+
+    private static File[] selectedRegionFiles(
+        File directory,
+        int minX, int minZ,
+        int maxX, int maxZ
+    ) {
+        File[] files = directory.listFiles(file ->
+            file.isFile()
+                && isRegionFile(file.getName())
+                && regionIntersects(file.getName(), minX, minZ, maxX, maxZ)
+        );
+        if (files == null) return new File[0];
+        Arrays.sort(files, Comparator.comparing(File::getName));
+        return files;
+    }
+
+    private static boolean regionIntersects(
+        String name,
+        int minX, int minZ,
+        int maxX, int maxZ
+    ) {
+        String[] parts = name.split("\\.");
+        if (parts.length < 4 || !"r".equals(parts[0])) return false;
+        try {
+            long regionX = Long.parseLong(parts[1]);
+            long regionZ = Long.parseLong(parts[2]);
+            long regionMinX = regionX * 512L;
+            long regionMinZ = regionZ * 512L;
+            long regionMaxX = regionMinX + 511L;
+            long regionMaxZ = regionMinZ + 511L;
+            long selectionMinX = Math.min((long) minX, (long) maxX);
+            long selectionMaxX = Math.max((long) minX, (long) maxX);
+            long selectionMinZ = Math.min((long) minZ, (long) maxZ);
+            long selectionMaxZ = Math.max((long) minZ, (long) maxZ);
+            return regionMaxX >= selectionMinX && regionMinX <= selectionMaxX
+                && regionMaxZ >= selectionMinZ && regionMinZ <= selectionMaxZ;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
     }
 
     private static void copyLevelMetadata(
@@ -142,17 +220,21 @@ public class WorldCopier {
     private static void copyPreferredOverworldRegion(
         File worldFolder,
         File tempDir,
+        int minX, int minZ,
+        int maxX, int maxZ,
         Consumer<String> log
     ) throws IOException {
         File sourceRegion = findOverworldRegionDir(worldFolder);
+        File[] files = selectedRegionFiles(sourceRegion, minX, minZ, maxX, maxZ);
+        if (files.length == 0) {
+            throw new IOException(
+                "No Overworld region files intersect selected X/Z bounds: "
+                    + minX + ".." + maxX + ", " + minZ + ".." + maxZ
+            );
+        }
+
         Path destination = tempDir.toPath().resolve("region");
         Files.createDirectories(destination);
-
-        File[] files = sourceRegion.listFiles(file -> file.isFile() && isRegionFile(file.getName()));
-        if (files == null || files.length == 0) {
-            throw new IOException("Selected Overworld region directory became empty: " + sourceRegion);
-        }
-        Arrays.sort(files, Comparator.comparing(File::getName));
         for (File file : files) {
             copyFile(
                 file.toPath(),
@@ -163,7 +245,7 @@ public class WorldCopier {
         }
 
         if (log != null) {
-            log.accept("Using Overworld region folder: " + sourceRegion.getAbsolutePath());
+            log.accept("Selected block regions: " + files.length);
         }
     }
 

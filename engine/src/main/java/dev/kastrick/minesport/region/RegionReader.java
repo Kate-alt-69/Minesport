@@ -63,11 +63,25 @@ public class RegionReader {
             int minX, int minY, int minZ,
             int maxX, int maxY, int maxZ
     ) throws IOException {
+        return readEntityRegion(
+            regionFile,
+            minX, minY, minZ,
+            maxX, maxY, maxZ,
+            null
+        );
+    }
+
+    public static List<EntityData> readEntityRegion(
+            File regionFile,
+            int minX, int minY, int minZ,
+            int maxX, int maxY, int maxZ,
+            ProgressCallback progress
+    ) throws IOException {
         return readRegionInternal(
             regionFile,
             minX, minY, minZ,
             maxX, maxY, maxZ,
-            null,
+            progress,
             false,
             false,
             true
@@ -84,15 +98,9 @@ public class RegionReader {
             boolean includeEntities
     ) throws IOException {
 
-        int regionX = 0, regionZ = 0;
-        try {
-            String name = regionFile.getName();
-            String[] parts = name.split("\\.");
-            if (parts.length >= 4) {
-                regionX = Integer.parseInt(parts[1]);
-                regionZ = Integer.parseInt(parts[2]);
-            }
-        } catch (NumberFormatException ignored) {}
+        int[] coordinates = regionCoordinates(regionFile);
+        int regionX = coordinates[0];
+        int regionZ = coordinates[1];
 
         var blocks = new ArrayList<BlockData>();
         var blockEntities = new ArrayList<BlockEntityData>();
@@ -107,9 +115,14 @@ public class RegionReader {
             raf.readFully(header);
 
             int chunksProcessed = 0;
-            int totalChunks = 1024;
+            int totalChunks = countSelectedChunks(
+                header,
+                regionX, regionZ,
+                minX, minZ,
+                maxX, maxZ
+            );
 
-            for (int i = 0; i < totalChunks; i++) {
+            for (int i = 0; i < 1024; i++) {
                 int localCX = i % 32;
                 int localCZ = i / 32;
 
@@ -190,12 +203,15 @@ public class RegionReader {
                         System.err.println("[WARN] Skipping chunk " + worldChunkX + "," + worldChunkZ
                             + " in " + regionFile.getName() + ": " + e.getMessage());
                     }
-                }
-
-                chunksProcessed++;
-                if (progress != null) {
-                    progress.onProgress(chunksProcessed, totalChunks,
-                            "Reading chunk " + worldChunkX + "," + worldChunkZ);
+                } finally {
+                    chunksProcessed++;
+                    if (progress != null) {
+                        progress.onProgress(
+                            chunksProcessed,
+                            totalChunks,
+                            "Reading chunk " + worldChunkX + "," + worldChunkZ
+                        );
+                    }
                 }
             }
         }
@@ -302,6 +318,65 @@ public class RegionReader {
                 // Malformed entity: preserve the surrounding chunk.
             }
         }
+    }
+
+    public static int countSelectedChunks(
+        File regionFile,
+        int minX, int minZ,
+        int maxX, int maxZ
+    ) throws IOException {
+        try (var raf = new RandomAccessFile(regionFile, "r")) {
+            if (raf.length() < SECTOR_SIZE) return 0;
+            byte[] header = new byte[SECTOR_SIZE];
+            raf.readFully(header);
+            int[] coordinates = regionCoordinates(regionFile);
+            return countSelectedChunks(
+                header,
+                coordinates[0], coordinates[1],
+                minX, minZ,
+                maxX, maxZ
+            );
+        }
+    }
+
+    private static int countSelectedChunks(
+        byte[] header,
+        int regionX, int regionZ,
+        int minX, int minZ,
+        int maxX, int maxZ
+    ) {
+        int selectionMinX = Math.min(minX, maxX);
+        int selectionMaxX = Math.max(minX, maxX);
+        int selectionMinZ = Math.min(minZ, maxZ);
+        int selectionMaxZ = Math.max(minZ, maxZ);
+        int count = 0;
+        for (int i = 0; i < 1024; i++) {
+            int localCX = i % 32;
+            int localCZ = i / 32;
+            int worldChunkX = regionX * 32 + localCX;
+            int worldChunkZ = regionZ * 32 + localCZ;
+            if (worldChunkX * 16 + 15 < selectionMinX || worldChunkX * 16 > selectionMaxX) continue;
+            if (worldChunkZ * 16 + 15 < selectionMinZ || worldChunkZ * 16 > selectionMaxZ) continue;
+            int offset = ((header[i * 4] & 0xFF) << 16)
+                | ((header[i * 4 + 1] & 0xFF) << 8)
+                | (header[i * 4 + 2] & 0xFF);
+            int sectorCount = header[i * 4 + 3] & 0xFF;
+            if (offset != 0 && sectorCount != 0) count++;
+        }
+        return count;
+    }
+
+    private static int[] regionCoordinates(File regionFile) {
+        try {
+            String[] parts = regionFile.getName().split("\\.");
+            if (parts.length >= 4) {
+                return new int[] {
+                    Integer.parseInt(parts[1]),
+                    Integer.parseInt(parts[2])
+                };
+            }
+        } catch (NumberFormatException ignored) {}
+        return new int[] {0, 0};
     }
 
     private static byte[] decompress(byte[] data, int type) {

@@ -61,7 +61,7 @@ export component MinesportLoader inherits Rectangle {
         interval: 16ms;
         running: root.active && root.animate-working;
         triggered() => {
-            root.cycle = mod(root.cycle + 0.0089, 1.0);
+            root.cycle = mod(root.cycle + 0.0054, 1.0);
         }
     }
 
@@ -82,44 +82,78 @@ export component MinesportLoader inherits Rectangle {
         }
     }
 
-    function working-radius() -> length {
-        let p = root.cycle;
-        if (p < 0.54) {
-            return 21px;
-        }
-        if (p < 0.70) {
-            let t = (p - 0.54) / 0.16;
-            return 21px * (1.0 - t);
-        }
-        let t = (p - 0.70) / 0.30;
-        return 21px * t;
+    function smooth(t: float) -> float {
+        let c = max(0.0, min(1.0, t));
+        return c * c * (3.0 - 2.0 * c);
+    }
+
+    function spawn-progress(index: int) -> float {
+        if (root.finishing || root.cycle >= 0.22) { return 1.0; }
+        let start = index * 0.018;
+        let finish = start + 0.08;
+        return root.smooth((root.cycle - start) / (finish - start));
+    }
+
+    function collapse-progress(index: int) -> float {
+        if (root.finishing) { return 1.0; }
+        if (root.cycle < 0.60) { return 0.0; }
+        if (root.cycle >= 0.76) { return 1.0; }
+        let start = 0.60 + index * 0.010;
+        let finish = start + 0.08;
+        return root.smooth((root.cycle - start) / (finish - start));
+    }
+
+    function dot-radius(index: int) -> length {
+        if (root.finishing) { return 0px; }
+        return 21px * (1.0 - root.collapse-progress(index));
+    }
+
+    function dot-opacity(index: int) -> float {
+        if (root.finishing) { return root.finish-step <= 1 ? 1.0 : 0.0; }
+        if (root.cycle >= 0.78) { return 0.0; }
+        return root.spawn-progress(index) * (1.0 - root.collapse-progress(index));
+    }
+
+    function dot-size(index: int) -> length {
+        return 6px * (0.62 + 0.38 * root.spawn-progress(index));
     }
 
     function center-mass-size() -> length {
-        if (root.finishing && root.finish-step == 1) {
-            return 30px;
+        if (root.finishing && root.finish-step == 1) { return 30px; }
+        if (!root.active || root.cycle < 0.64 || root.cycle >= 0.83) { return 0px; }
+        if (root.cycle < 0.76) {
+            return 4px + 16px * root.smooth((root.cycle - 0.64) / 0.12);
         }
-        if (!root.active || root.cycle < 0.70) {
-            return 0px;
-        }
-        let t = (root.cycle - 0.70) / 0.30;
-        return 30px * (1.0 - t);
+        return 20px * (1.0 - root.smooth((root.cycle - 0.76) / 0.07));
+    }
+
+    function beam-opacity() -> float {
+        if (!root.active || root.cycle < 0.75 || root.cycle >= 0.83) { return 0.0; }
+        if (root.cycle < 0.79) { return root.smooth((root.cycle - 0.75) / 0.04); }
+        return 1.0 - root.smooth((root.cycle - 0.79) / 0.04);
+    }
+
+    function active-face-progress() -> float {
+        if (!root.active || root.cycle < 0.82 || root.cycle >= 0.98) { return 0.0; }
+        if (root.cycle < 0.87) { return root.smooth((root.cycle - 0.82) / 0.05); }
+        if (root.cycle < 0.93) { return 1.0; }
+        return 1.0 - root.smooth((root.cycle - 0.93) / 0.05);
     }
 
     function dot-x(index: int) -> length {
-        if (root.finishing) {
-            return 29px;
-        }
-        let angle = index * 40deg + root.cycle * 600deg;
-        return 29px + cos(angle) * root.working-radius();
+        if (root.finishing) { return 32px; }
+        let base = -53.333deg + index * 13.333deg;
+        let sweep = root.cycle < 0.22 ? 0.0 : min(1.0, (root.cycle - 0.22) / 0.38);
+        let angle = base + sweep * 540deg;
+        return 32px + cos(angle) * root.dot-radius(index);
     }
 
     function dot-y(index: int) -> length {
-        if (root.finishing) {
-            return 29px;
-        }
-        let angle = index * 40deg + root.cycle * 600deg;
-        return 29px + sin(angle) * root.working-radius();
+        if (root.finishing) { return 32px; }
+        let base = -53.333deg + index * 13.333deg;
+        let sweep = root.cycle < 0.22 ? 0.0 : min(1.0, (root.cycle - 0.22) / 0.38);
+        let angle = base + sweep * 540deg;
+        return 32px + sin(angle) * root.dot-radius(index);
     }
 
     function pixel-column(index: int) -> int {
@@ -152,13 +186,21 @@ export component MinesportLoader inherits Rectangle {
     }
 
     function pixel-x(index: int) -> length {
-        if (root.finish-step <= 1) { return 30px; }
-        return 6px + root.pixel-column(index) * 6px;
+        if (root.finishing) {
+            if (root.finish-step <= 1) { return 30px; }
+            return 6px + root.pixel-column(index) * 6px;
+        }
+        let target = 6px + root.pixel-column(index) * 6px;
+        return 30px + (target - 30px) * root.active-face-progress();
     }
 
     function pixel-y(index: int) -> length {
-        if (root.finish-step <= 1) { return 30px; }
-        return 6px + root.pixel-row(index) * 6px;
+        if (root.finishing) {
+            if (root.finish-step <= 1) { return 30px; }
+            return 6px + root.pixel-row(index) * 6px;
+        }
+        let target = 6px + root.pixel-row(index) * 6px;
+        return 30px + (target - 30px) * root.active-face-progress();
     }
 
     HorizontalLayout {
@@ -171,6 +213,26 @@ export component MinesportLoader inherits Rectangle {
             height: 64px;
             background: transparent;
 
+            horizontal-beam := Rectangle {
+                width: 44px;
+                height: 2px;
+                x: 10px;
+                y: 31px;
+                border-radius: 1px;
+                background: #f2f4f3;
+                opacity: root.beam-opacity();
+            }
+
+            vertical-beam := Rectangle {
+                width: 2px;
+                height: 44px;
+                x: 31px;
+                y: 10px;
+                border-radius: 1px;
+                background: #f2f4f3;
+                opacity: root.beam-opacity() * 0.72;
+            }
+
             center-mass := Rectangle {
                 width: root.center-mass-size();
                 height: self.width;
@@ -182,13 +244,14 @@ export component MinesportLoader inherits Rectangle {
             }
 
             for dot[index] in 9: Rectangle {
-                x: root.dot-x(index);
-                y: root.dot-y(index);
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
+                width: root.dot-size(index);
+                height: self.width;
+                x: root.dot-x(index) - self.width / 2;
+                y: root.dot-y(index) - self.height / 2;
+                border-radius: self.width / 2;
                 background: #f2f4f3;
-                visible: !root.finishing || root.finish-step <= 1;
+                opacity: root.dot-opacity(index);
+                visible: self.opacity > 0.001;
 
                 animate x, y {
                     duration: 145ms;
@@ -204,7 +267,9 @@ export component MinesportLoader inherits Rectangle {
                 height: 5px;
                 border-radius: 0px;
                 background: root.face-pixel-black(index) ? #080a09 : #f3f5f4;
-                visible: root.finishing && root.finish-step >= 2 && root.finish-step < 5;
+                visible: (root.finishing && root.finish-step >= 2 && root.finish-step < 5)
+                    || (root.active && root.active-face-progress() > 0.001);
+                opacity: root.finishing ? 1.0 : root.active-face-progress();
 
                 animate x, y {
                     duration: 170ms;
@@ -231,7 +296,7 @@ export component MinesportLoader inherits Rectangle {
                 wrap: word-wrap;
                 overflow: elide;
             }
-            if root.determinate: HorizontalLayout {
+            if root.determinate && root.progress > 0.02: HorizontalLayout {
                 spacing: 8px;
                 ProgressIndicator {
                     horizontal-stretch: 1;

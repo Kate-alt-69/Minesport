@@ -66,6 +66,24 @@ public class IpcMode {
         int maxX = getInt(request, "maxX", 256);
         int maxY = getInt(request, "maxY", 320);
         int maxZ = getInt(request, "maxZ", 256);
+
+        int copyMinX = minX;
+        int copyMinZ = minZ;
+        int copyMaxX = maxX;
+        int copyMaxZ = maxZ;
+        Integer copyCenterX = getOptionalInt(request, "centerX");
+        Integer copyCenterZ = getOptionalInt(request, "centerZ");
+        Integer copyRadiusX = getOptionalInt(request, "radiusX");
+        Integer copyRadiusZ = getOptionalInt(request, "radiusZ");
+        if (copyCenterX != null && copyCenterZ != null && copyRadiusX != null && copyRadiusZ != null) {
+            int rx = Math.max(copyRadiusX, 1);
+            int rz = Math.max(copyRadiusZ, 1);
+            copyMinX = copyCenterX - rx;
+            copyMaxX = copyCenterX + rx;
+            copyMinZ = copyCenterZ - rz;
+            copyMaxZ = copyCenterZ + rz;
+        }
+
         String format = getString(request, "format", "gltf").toLowerCase();
         String exportMode = getString(request, "exportMode", "grouped");
         String outputPath = getString(request, "outputPath", "");
@@ -99,11 +117,22 @@ public class IpcMode {
 
         File tempDir = null;
         try {
-            log("Creating temp copy...");
-            tempDir = WorldCopier.copyToTemp(worldFolder, IpcMode::log);
+            progressIndeterminate("Preparing selected world data");
+            tempDir = WorldCopier.copyToTemp(
+                worldFolder,
+                copyMinX, copyMinZ,
+                copyMaxX, copyMaxZ,
+                IpcMode::log
+            );
             boolean separateEntityRegions = format.equals("litematic")
-                && WorldCopier.copyOverworldEntitiesToTemp(worldFolder, tempDir, IpcMode::log);
-            progress(10, "World copy ready");
+                && WorldCopier.copyOverworldEntitiesToTemp(
+                    worldFolder,
+                    tempDir,
+                    copyMinX, copyMinZ,
+                    copyMaxX, copyMaxZ,
+                    IpcMode::log
+                );
+            progressIndeterminate("Scanning selected regions");
 
             log("Scanning region files...");
             File regionDir = new File(tempDir, "region");
@@ -118,19 +147,60 @@ public class IpcMode {
                 return;
             }
 
-            log("Found " + mcaFiles.length + " region file(s)");
+            Arrays.sort(mcaFiles, Comparator.comparing(File::getName));
+            log("Found " + mcaFiles.length + " selected region file(s)");
+
+            File[] entityFiles = new File[0];
+            if (format.equals("litematic") && separateEntityRegions) {
+                File entityDir = new File(tempDir, "entities");
+                File[] listed = entityDir.listFiles(
+                    (directory, name) -> name.endsWith(".mca") || name.endsWith(".mcr")
+                );
+                if (listed != null) {
+                    Arrays.sort(listed, Comparator.comparing(File::getName));
+                    entityFiles = listed;
+                }
+            }
+
+            int[] blockChunkCounts = new int[mcaFiles.length];
+            int[] entityChunkCounts = new int[entityFiles.length];
+            int inputChunkTotal = 0;
+            for (int i = 0; i < mcaFiles.length; i++) {
+                blockChunkCounts[i] = RegionReader.countSelectedChunks(
+                    mcaFiles[i], minX, minZ, maxX, maxZ
+                );
+                inputChunkTotal += blockChunkCounts[i];
+            }
+            for (int i = 0; i < entityFiles.length; i++) {
+                entityChunkCounts[i] = RegionReader.countSelectedChunks(
+                    entityFiles[i], minX, minZ, maxX, maxZ
+                );
+                inputChunkTotal += entityChunkCounts[i];
+            }
+            final int totalInputChunks = inputChunkTotal;
+
             var allBlocks = new ArrayList<BlockData>();
             var allBlockEntities = new ArrayList<BlockEntityData>();
             var allEntities = new ArrayList<EntityData>();
+            int inputDoneBase = 0;
+
             for (int fileIndex = 0; fileIndex < mcaFiles.length; fileIndex++) {
                 File mca = mcaFiles[fileIndex];
-                log("Reading: " + mca.getName());
+                final int progressBase = inputDoneBase;
+                progressIndeterminate("Reading " + mca.getName());
+                RegionReader.ProgressCallback chunkProgress = (doneCount, ignoredTotal, message) ->
+                    reportChunkProgress(
+                        progressBase + doneCount,
+                        totalInputChunks,
+                        message + " · " + mca.getName()
+                    );
+
                 if (format.equals("litematic")) {
                     RegionReader.RegionContents contents = RegionReader.readRegionContents(
                         mca,
                         minX, minY, minZ,
                         maxX, maxY, maxZ,
-                        null
+                        chunkProgress
                     );
                     allBlocks.addAll(contents.blocks());
                     allBlockEntities.addAll(contents.blockEntities());
@@ -142,24 +212,30 @@ public class IpcMode {
                         mca,
                         minX, minY, minZ,
                         maxX, maxY, maxZ,
-                        null
+                        chunkProgress
                     ));
                 }
-                int percent = 10 + (int)((fileIndex + 1.0) / mcaFiles.length * 30);
-                progress(percent, "Read " + mca.getName());
+                inputDoneBase += blockChunkCounts[fileIndex];
             }
+
             if (format.equals("litematic") && separateEntityRegions) {
-                File entityDir = new File(tempDir, "entities");
-                File[] entityFiles = entityDir.listFiles((directory, name) -> name.endsWith(".mca") || name.endsWith(".mcr"));
-                if (entityFiles != null) {
-                    Arrays.sort(entityFiles, Comparator.comparing(File::getName));
-                    for (File entityFile : entityFiles) {
-                        allEntities.addAll(RegionReader.readEntityRegion(
-                            entityFile,
-                            minX, minY, minZ,
-                            maxX, maxY, maxZ
-                        ));
-                    }
+                for (int fileIndex = 0; fileIndex < entityFiles.length; fileIndex++) {
+                    File entityFile = entityFiles[fileIndex];
+                    final int progressBase = inputDoneBase;
+                    progressIndeterminate("Reading entities " + entityFile.getName());
+                    RegionReader.ProgressCallback chunkProgress = (doneCount, ignoredTotal, message) ->
+                        reportChunkProgress(
+                            progressBase + doneCount,
+                            totalInputChunks,
+                            "Reading entities " + entityFile.getName()
+                        );
+                    allEntities.addAll(RegionReader.readEntityRegion(
+                        entityFile,
+                        minX, minY, minZ,
+                        maxX, maxY, maxZ,
+                        chunkProgress
+                    ));
+                    inputDoneBase += entityChunkCounts[fileIndex];
                 }
             }
 
@@ -231,7 +307,7 @@ public class IpcMode {
                     + " blocks kept (" + exact.size() + " coordinate(s) requested)"
                 );
             }
-            progress(40, "Region scan complete");
+            progressIndeterminate("Preparing export data");
 
             if (format.equals("litematic")) {
                 String mcVersion = readMcVersion(tempDir);
@@ -239,7 +315,7 @@ public class IpcMode {
                 if (dataVersion <= 0) {
                     log("[WARN] World has no Minecraft DataVersion; using the Litematica compatibility fallback");
                 }
-                progress(55, "Packing Litematica block states");
+                progressIndeterminate("Writing Litematica file");
                 String schematicName = outFile.getName().replaceFirst("(?i)\\.litematic$", "");
                 LitematicExporter.ExportStats schematicStats = LitematicExporter.export(
                     allBlocks,
@@ -473,6 +549,21 @@ public class IpcMode {
             json.addProperty("percent", percent);
             json.addProperty("message", message);
         });
+    }
+
+    private static void progressIndeterminate(String message) {
+        progress(0, message);
+    }
+
+    private static void reportChunkProgress(int done, int total, String message) {
+        if (total <= 0) {
+            progressIndeterminate(message);
+            return;
+        }
+        int interval = Math.max(1, total / 100);
+        if (done <= 1 || done >= total || done % interval == 0) {
+            progressIndeterminate(message + " · " + done + "/" + total + " chunks");
+        }
     }
 
     private static void done(String outputPath, ObjExporter.ExportStats stats) {
@@ -718,7 +809,12 @@ public class IpcMode {
         File tempWorldCopy = null;
         try {
             log("Preparing block list for 3D preview...");
-            tempWorldCopy = WorldCopier.copyToTemp(worldFolder, IpcMode::log);
+            tempWorldCopy = WorldCopier.copyToTemp(
+                worldFolder,
+                minX, minZ,
+                maxX, maxZ,
+                IpcMode::log
+            );
             File regionDir = new File(tempWorldCopy, "region");
             if (!regionDir.exists()) {
                 error("No region folder found in world");
