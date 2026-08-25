@@ -26,6 +26,22 @@ jobs:
       - name: Apply lifecycle patch
         run: python .github/loader_export_lifecycle_patch.py
 
+      - name: Fix Creeper cutout bindings
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('desktop/ui/minesport-loader.slint')
+          text = path.read_text()
+          width_count = text.count('self.width * 0.')
+          height_count = text.count('self.height * 0.')
+          if width_count != 6 or height_count != 6:
+              raise SystemExit(f'Unexpected Creeper cutout binding count: width={width_count}, height={height_count}')
+          text = text.replace('self.width * 0.', 'core.width * 0.')
+          text = text.replace('self.height * 0.', 'core.height * 0.')
+          path.write_text(text)
+          PY
+
       - name: Test Java engine
         working-directory: engine
         run: bash ./gradlew --no-daemon test --stacktrace
@@ -64,9 +80,6 @@ jobs:
         run: |
           rm -f .github/loader_export_lifecycle_patch.py
           rm -f .github/workflows/one-shot-loader-export-lifecycle.yml
-          rm -f .github/workflows/one-shot-litematic-fresh.yml
-          rm -f .github/litematic_ticks_patch.py
-          rm -f .github/litematic_ticks_fix.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
