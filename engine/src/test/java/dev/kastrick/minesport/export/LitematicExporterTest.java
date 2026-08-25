@@ -35,7 +35,7 @@ class LitematicExporterTest {
                 "Dense Test",
                 "Minesport",
                 "unit test",
-                4189,
+                3700,
                 output
             );
 
@@ -46,7 +46,7 @@ class LitematicExporterTest {
             NbtCompound root = NbtReader.readGzip(output);
             assertEquals(6, root.getInt("Version"));
             assertEquals(1, root.getInt("SubVersion"));
-            assertEquals(4189, root.getInt("MinecraftDataVersion"));
+            assertEquals(3700, root.getInt("MinecraftDataVersion"));
 
             NbtCompound metadata = root.getCompound("Metadata");
             assertEquals("Dense Test", metadata.getString("Name"));

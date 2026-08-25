@@ -16,8 +16,10 @@ import java.util.*;
  * a litematic stores Minecraft block states, not rendered geometry.
  */
 public final class LitematicExporter {
-    private static final int LITEMATIC_VERSION = 6;
+    private static final int LITEMATIC_VERSION_6 = 6;
+    private static final int LITEMATIC_VERSION_7 = 7;
     private static final int LITEMATIC_SUBVERSION = 1;
+    private static final int LITEMATIC_V6_MAX_DATA_VERSION = 3700; // Minecraft 1.20.4
     private static final int LEGACY_DATA_VERSION_FALLBACK = 2975; // 1.18.2
     private static final String AIR = "minecraft:air";
 
@@ -207,6 +209,9 @@ public final class LitematicExporter {
         int dataVersion = minecraftDataVersion > 0
             ? minecraftDataVersion
             : LEGACY_DATA_VERSION_FALLBACK;
+        int schematicVersion = dataVersion > LITEMATIC_V6_MAX_DATA_VERSION
+            ? LITEMATIC_VERSION_7
+            : LITEMATIC_VERSION_6;
         region.put("DataVersion", dataVersion);
 
         String displayName = cleanName(name);
@@ -229,7 +234,7 @@ public final class LitematicExporter {
         regions.put(displayName, region);
 
         LinkedHashMap<String, Object> root = new LinkedHashMap<>();
-        root.put("Version", LITEMATIC_VERSION);
+        root.put("Version", schematicVersion);
         root.put("SubVersion", LITEMATIC_SUBVERSION);
         root.put("MinecraftDataVersion", dataVersion);
         root.put("Metadata", metadata);
