@@ -5,6 +5,7 @@ on:
     branches: [ main ]
     paths:
       - '.github/litematic_ticks_patch.py'
+      - '.github/litematic_ticks_fix.py'
       - '.github/workflows/one-shot-litematic-ticks.yml'
 
 permissions:
@@ -25,8 +26,10 @@ jobs:
         shell: bash
         run: |
           cp .github/litematic_ticks_patch.py /tmp/litematic_ticks_patch.py
+          cp .github/litematic_ticks_fix.py /tmp/litematic_ticks_fix.py
           git reset --hard 7a1dd0bd05a8e378b7cf1d54cef89c0026fb5c81
           python /tmp/litematic_ticks_patch.py
+          python /tmp/litematic_ticks_fix.py
           python - <<'PY'
           import subprocess
           expected = {
