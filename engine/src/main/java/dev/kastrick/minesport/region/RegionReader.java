@@ -21,7 +21,9 @@ public class RegionReader {
     public record RegionContents(
         List<BlockData> blocks,
         List<BlockEntityData> blockEntities,
-        List<EntityData> entities
+        List<EntityData> entities,
+        List<ScheduledTickData> blockTicks,
+        List<ScheduledTickData> fluidTicks
     ) {}
 
     public static List<BlockData> readRegion(
@@ -36,6 +38,7 @@ public class RegionReader {
             maxX, maxY, maxZ,
             progress,
             true,
+            false,
             false,
             false
         ).blocks();
@@ -52,6 +55,7 @@ public class RegionReader {
             minX, minY, minZ,
             maxX, maxY, maxZ,
             progress,
+            true,
             true,
             true,
             true
@@ -84,7 +88,8 @@ public class RegionReader {
             progress,
             false,
             false,
-            true
+            true,
+            false
         ).entities();
     }
 
@@ -95,7 +100,8 @@ public class RegionReader {
             ProgressCallback progress,
             boolean decodeBlocks,
             boolean includeBlockEntities,
-            boolean includeEntities
+            boolean includeEntities,
+            boolean includeScheduledTicks
     ) throws IOException {
 
         int[] coordinates = regionCoordinates(regionFile);
@@ -105,10 +111,12 @@ public class RegionReader {
         var blocks = new ArrayList<BlockData>();
         var blockEntities = new ArrayList<BlockEntityData>();
         var entities = new ArrayList<EntityData>();
+        var blockTicks = new ArrayList<ScheduledTickData>();
+        var fluidTicks = new ArrayList<ScheduledTickData>();
 
         try (var raf = new RandomAccessFile(regionFile, "r")) {
             if (raf.length() < SECTOR_SIZE * 2L) {
-                return new RegionContents(blocks, blockEntities, entities);
+                return new RegionContents(blocks, blockEntities, entities, blockTicks, fluidTicks);
             }
 
             byte[] header = new byte[SECTOR_SIZE];
@@ -195,6 +203,15 @@ public class RegionReader {
                             entities
                         );
                     }
+                    if (includeScheduledTicks) {
+                        extractScheduledTicks(
+                            chunkNbt,
+                            minX, minY, minZ,
+                            maxX, maxY, maxZ,
+                            blockTicks,
+                            fluidTicks
+                        );
+                    }
 
                 } catch (EOFException e) {
                     // Truncated chunk — skip without aborting the export.
@@ -216,7 +233,7 @@ public class RegionReader {
             }
         }
 
-        return new RegionContents(blocks, blockEntities, entities);
+        return new RegionContents(blocks, blockEntities, entities, blockTicks, fluidTicks);
     }
 
     static void extractBlockEntities(
@@ -377,6 +394,72 @@ public class RegionReader {
             }
         } catch (NumberFormatException ignored) {}
         return new int[] {0, 0};
+    }
+
+    static void extractScheduledTicks(
+        NbtCompound chunk,
+        int minX, int minY, int minZ,
+        int maxX, int maxY, int maxZ,
+        List<ScheduledTickData> blockOut,
+        List<ScheduledTickData> fluidOut
+    ) {
+        if (chunk == null) return;
+
+        NbtCompound level = chunk;
+        if (chunk.has("Level")) {
+            try {
+                level = chunk.getCompound("Level");
+            } catch (Exception ignored) {}
+        }
+
+        appendTicks(findTickList(chunk, level, "block_ticks", "TileTicks"),
+            minX, minY, minZ, maxX, maxY, maxZ, blockOut);
+        appendTicks(findTickList(chunk, level, "fluid_ticks", "LiquidTicks"),
+            minX, minY, minZ, maxX, maxY, maxZ, fluidOut);
+    }
+
+    private static List<Object> findTickList(
+        NbtCompound root,
+        NbtCompound level,
+        String modernKey,
+        String legacyKey
+    ) {
+        try {
+            if (root.has(modernKey)) return root.getList(modernKey);
+            if (level.has(legacyKey)) return level.getList(legacyKey);
+            if (root.has(legacyKey)) return root.getList(legacyKey);
+        } catch (Exception ignored) {}
+        return List.of();
+    }
+
+    private static void appendTicks(
+        List<Object> entries,
+        int minX, int minY, int minZ,
+        int maxX, int maxY, int maxZ,
+        List<ScheduledTickData> out
+    ) {
+        if (entries == null || out == null) return;
+        for (Object entry : entries) {
+            if (!(entry instanceof NbtCompound tick)) continue;
+            try {
+                String id = tick.getString("i");
+                int x = tick.getInt("x");
+                int y = tick.getInt("y");
+                int z = tick.getInt("z");
+                if (
+                    x < minX || x > maxX ||
+                    y < minY || y > maxY ||
+                    z < minZ || z > maxZ
+                ) continue;
+                out.add(new ScheduledTickData(
+                    x, y, z, id,
+                    tick.getInt("t", 0),
+                    tick.getInt("p", 0)
+                ));
+            } catch (Exception ignored) {
+                // Malformed scheduled tick: preserve the surrounding chunk.
+            }
+        }
     }
 
     private static byte[] decompress(byte[] data, int type) {

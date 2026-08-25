@@ -4,6 +4,7 @@ import dev.kastrick.minesport.nbt.NbtWriter;
 import dev.kastrick.minesport.region.BlockData;
 import dev.kastrick.minesport.region.BlockEntityData;
 import dev.kastrick.minesport.region.EntityData;
+import dev.kastrick.minesport.region.ScheduledTickData;
 
 import java.io.File;
 import java.io.IOException;
@@ -30,7 +31,9 @@ public final class LitematicExporter {
         int paletteSize,
         int volume,
         int blockEntityCount,
-        int entityCount
+        int entityCount,
+        int blockTickCount,
+        int fluidTickCount
     ) {}
 
     private record StateKey(String blockId, SortedMap<String, String> properties) {
@@ -104,7 +107,7 @@ public final class LitematicExporter {
         File output
     ) throws IOException {
         return export(
-            blocks, blockEntities, entities,
+            blocks, blockEntities, entities, List.of(), List.of(),
             firstX, firstY, firstZ,
             secondX, secondY, secondZ,
             name, author, description,
@@ -116,6 +119,53 @@ public final class LitematicExporter {
         List<BlockData> blocks,
         List<BlockEntityData> blockEntities,
         List<EntityData> entities,
+        int firstX, int firstY, int firstZ,
+        int secondX, int secondY, int secondZ,
+        String name,
+        String author,
+        String description,
+        int minecraftDataVersion,
+        File output,
+        NbtWriter.ProgressCallback writeProgress
+    ) throws IOException {
+        return export(
+            blocks, blockEntities, entities, List.of(), List.of(),
+            firstX, firstY, firstZ,
+            secondX, secondY, secondZ,
+            name, author, description,
+            minecraftDataVersion, output, writeProgress
+        );
+    }
+
+    public static ExportStats export(
+        List<BlockData> blocks,
+        List<BlockEntityData> blockEntities,
+        List<EntityData> entities,
+        List<ScheduledTickData> blockTicks,
+        List<ScheduledTickData> fluidTicks,
+        int firstX, int firstY, int firstZ,
+        int secondX, int secondY, int secondZ,
+        String name,
+        String author,
+        String description,
+        int minecraftDataVersion,
+        File output
+    ) throws IOException {
+        return export(
+            blocks, blockEntities, entities, blockTicks, fluidTicks,
+            firstX, firstY, firstZ,
+            secondX, secondY, secondZ,
+            name, author, description,
+            minecraftDataVersion, output, null
+        );
+    }
+
+    public static ExportStats export(
+        List<BlockData> blocks,
+        List<BlockEntityData> blockEntities,
+        List<EntityData> entities,
+        List<ScheduledTickData> blockTicks,
+        List<ScheduledTickData> fluidTicks,
         int firstX, int firstY, int firstZ,
         int secondX, int secondY, int secondZ,
         String name,
@@ -218,6 +268,9 @@ public final class LitematicExporter {
             }
         }
 
+        List<Object> blockTickTags = writeTicks(blockTicks, "Block", minX, minY, minZ, maxX, maxY, maxZ);
+        List<Object> fluidTickTags = writeTicks(fluidTicks, "Fluid", minX, minY, minZ, maxX, maxY, maxZ);
+
         LinkedHashMap<String, Object> region = new LinkedHashMap<>();
         region.put("Position", xyz(0, 0, 0));
         region.put("Size", xyz(width, height, length));
@@ -225,8 +278,8 @@ public final class LitematicExporter {
         region.put("BlockStates", packed);
         region.put("TileEntities", tileEntities);
         region.put("Entities", entityTags);
-        region.put("PendingBlockTicks", List.of());
-        region.put("PendingFluidTicks", List.of());
+        region.put("PendingBlockTicks", blockTickTags);
+        region.put("PendingFluidTicks", fluidTickTags);
 
         int dataVersion = minecraftDataVersion > 0
             ? minecraftDataVersion
@@ -268,8 +321,38 @@ public final class LitematicExporter {
             palette.size(),
             volume,
             tileEntities.size(),
-            entityTags.size()
+            entityTags.size(),
+            blockTickTags.size(),
+            fluidTickTags.size()
         );
+    }
+
+    private static List<Object> writeTicks(
+        List<ScheduledTickData> ticks,
+        String idKey,
+        int minX, int minY, int minZ,
+        int maxX, int maxY, int maxZ
+    ) {
+        List<Object> result = new ArrayList<>();
+        if (ticks == null) return result;
+        long subTick = 0L;
+        for (ScheduledTickData tick : ticks) {
+            if (
+                tick.x() < minX || tick.x() > maxX ||
+                tick.y() < minY || tick.y() > maxY ||
+                tick.z() < minZ || tick.z() > maxZ
+            ) continue;
+            LinkedHashMap<String, Object> tag = new LinkedHashMap<>();
+            tag.put(idKey, tick.id());
+            tag.put("Priority", tick.priority());
+            tag.put("Time", tick.delay());
+            tag.put("SubTick", subTick++);
+            tag.put("x", tick.x() - minX);
+            tag.put("y", tick.y() - minY);
+            tag.put("z", tick.z() - minZ);
+            result.add(tag);
+        }
+        return result;
     }
 
     private static LinkedHashMap<String, Object> xyz(int x, int y, int z) {

@@ -183,6 +183,8 @@ public class IpcMode {
             var allBlocks = new ArrayList<BlockData>();
             var allBlockEntities = new ArrayList<BlockEntityData>();
             var allEntities = new ArrayList<EntityData>();
+            var allBlockTicks = new ArrayList<ScheduledTickData>();
+            var allFluidTicks = new ArrayList<ScheduledTickData>();
             int inputDoneBase = 0;
 
             for (int fileIndex = 0; fileIndex < mcaFiles.length; fileIndex++) {
@@ -205,6 +207,8 @@ public class IpcMode {
                     );
                     allBlocks.addAll(contents.blocks());
                     allBlockEntities.addAll(contents.blockEntities());
+                    allBlockTicks.addAll(contents.blockTicks());
+                    allFluidTicks.addAll(contents.fluidTicks());
                     if (!separateEntityRegions) {
                         allEntities.addAll(contents.entities());
                     }
@@ -245,6 +249,8 @@ public class IpcMode {
                 + (format.equals("litematic")
                     ? " · block entities: " + allBlockEntities.size()
                         + " · entities: " + allEntities.size()
+                        + " · block ticks: " + allBlockTicks.size()
+                        + " · fluid ticks: " + allFluidTicks.size()
                     : "")
             );
 
@@ -281,6 +287,20 @@ public class IpcMode {
                     Math.max(radiusY, 1),
                     Math.max(radiusZ, 1)
                 ));
+                allBlockTicks.removeIf(tick -> !insideEllipsoidPoint(
+                    tick.x() + 0.5, tick.y() + 0.5, tick.z() + 0.5,
+                    centerX, centerY, centerZ,
+                    Math.max(radiusX, 1),
+                    Math.max(radiusY, 1),
+                    Math.max(radiusZ, 1)
+                ));
+                allFluidTicks.removeIf(tick -> !insideEllipsoidPoint(
+                    tick.x() + 0.5, tick.y() + 0.5, tick.z() + 0.5,
+                    centerX, centerY, centerZ,
+                    Math.max(radiusX, 1),
+                    Math.max(radiusY, 1),
+                    Math.max(radiusZ, 1)
+                ));
                 log(
                     "Bubble selection: " + allBlocks.size() + " / " + before
                     + " blocks kept (center " + centerX + "," + centerY + "," + centerZ
@@ -302,6 +322,12 @@ public class IpcMode {
                         (int)Math.floor(entity.y()),
                         (int)Math.floor(entity.z())
                     ))
+                );
+                allBlockTicks.removeIf(tick ->
+                    !exact.contains(SpatialKey.of(tick.x(), tick.y(), tick.z()))
+                );
+                allFluidTicks.removeIf(tick ->
+                    !exact.contains(SpatialKey.of(tick.x(), tick.y(), tick.z()))
                 );
                 log(
                     "Custom selection: " + allBlocks.size() + " / " + before
@@ -329,6 +355,8 @@ public class IpcMode {
                     allBlocks,
                     allBlockEntities,
                     allEntities,
+                    allBlockTicks,
+                    allFluidTicks,
                     minX, minY, minZ,
                     maxX, maxY, maxZ,
                     schematicName,
@@ -348,6 +376,8 @@ public class IpcMode {
                     "Litematica export: " + schematicStats.blockCount() + " blocks, "
                     + schematicStats.blockEntityCount() + " block entities, "
                     + schematicStats.entityCount() + " entities, "
+                    + schematicStats.blockTickCount() + " block ticks, "
+                    + schematicStats.fluidTickCount() + " fluid ticks, "
                     + schematicStats.paletteSize() + " palette states, "
                     + schematicStats.volume() + " volume"
                 );
@@ -598,7 +628,11 @@ public class IpcMode {
         }
         int interval = Math.max(1, total / 100);
         if (done <= 1 || done >= total || done % interval == 0) {
-            progressIndeterminate(message + " · " + done + "/" + total + " chunks");
+            int percent = (int)Math.round(done * 100.0 / total);
+            progress(
+                Math.max(1, Math.min(100, percent)),
+                message + " · " + done + "/" + total + " chunks"
+            );
         }
     }
 

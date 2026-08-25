@@ -161,20 +161,26 @@ needs_rebuild() {
 }
 
 remove_build_outputs() {
-  echo '[FRESH] Removing Minesport build outputs only...'
+  echo '[FRESH] Removing Minesport build outputs and project-local Gradle state...'
   rm -rf \
+    "$ROOT/.gradle" \
     "$ROOT/minesport-bridge-fabric/build" \
+    "$ROOT/minesport-bridge-fabric/.gradle" \
     "$ROOT/minesport-bridge-forge/build" \
+    "$ROOT/minesport-bridge-forge/.gradle" \
     "$ROOT/minesport-bridge-neoforge/build" \
+    "$ROOT/minesport-bridge-neoforge/.gradle" \
     "$ROOT/minesport-bridge-quilt/build" \
+    "$ROOT/minesport-bridge-quilt/.gradle" \
     "$ROOT/engine/build" \
+    "$ROOT/engine/.gradle" \
     "$ROOT/desktop/target" \
     "$ROOT/desktop/dist" \
     "$ROOT/dist/bundled-bridge" \
     "$ROOT/dist/source" \
     "$ROOT/dist/installer" \
     "$STATE_FILE"
-  echo '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.'
+  echo '  Preserved: global ~/.gradle downloads/cache, Cargo registry/git caches, downloaded JDKs.'
   echo
 }
 
@@ -212,7 +218,7 @@ printf '%s\n' '============================================'
 printf 'Target: %s / amd64\n' "$OS_NAME"
 printf '%s\n' 'Desktop: Rust + Slint 1.17.1'
 printf '%s\n' 'Mode: content-aware incremental build'
-$FRESH && printf '%s\n' 'Fresh: YES (outputs only; caches preserved)'
+$FRESH && printf '%s\n' 'Fresh: YES (clean rerun; global caches preserved)'
 $DESKTOP_ONLY && printf '%s\n' 'Desktop-only: YES'
 if ! $BUILD_DEB && ! $BUILD_APPIMAGE; then
   printf '%s\n' 'Packaging: disabled (executable only)'
@@ -230,6 +236,14 @@ printf '\n'
 
 $FRESH && remove_build_outputs
 mkdir -p "$BUNDLED_DIR"
+
+run_gradle_build() {
+  if $FRESH; then
+    ./gradlew --no-daemon clean build --rerun-tasks --no-build-cache
+  else
+    ./gradlew --no-daemon build
+  fi
+}
 
 build_bridge() {
   local name="$1" slug="$2" project="$3" output="$4"
@@ -253,7 +267,7 @@ build_bridge() {
   echo 'changed, building...'
   (
     cd "$project_path"
-    ./gradlew --no-daemon build
+    run_gradle_build
   )
   local jar
   jar="$(find "$project_path/build/libs" -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-dev.jar' | sort | head -n1)"
@@ -284,7 +298,7 @@ else
     echo '  -> changed, building...'
     (
       cd "$ENGINE_ROOT"
-      ./gradlew --no-daemon build
+      run_gradle_build
     )
     ENGINE_JAR="$(find "$ENGINE_ROOT/build/libs" -maxdepth 1 -type f -name 'minesport-engine-*.jar' ! -name '*-sources.jar' | sort | head -n1)"
     [[ -n "$ENGINE_JAR" && -f "$ENGINE_JAR" ]] || { echo 'ERROR: Java engine jar not found.' >&2; exit 1; }

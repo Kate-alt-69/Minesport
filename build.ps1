@@ -186,13 +186,19 @@ function Test-NeedsRebuild(
 }
 
 function Remove-BuildOutputs {
-    Write-Host '[FRESH] Removing Minesport build outputs only...' -ForegroundColor Yellow
+    Write-Host '[FRESH] Removing Minesport build outputs and project-local Gradle state...' -ForegroundColor Yellow
     $paths = @(
+        (Join-Path $Root '.gradle'),
         (Join-Path $Root 'minesport-bridge-fabric\build'),
+        (Join-Path $Root 'minesport-bridge-fabric\.gradle'),
         (Join-Path $Root 'minesport-bridge-forge\build'),
+        (Join-Path $Root 'minesport-bridge-forge\.gradle'),
         (Join-Path $Root 'minesport-bridge-neoforge\build'),
+        (Join-Path $Root 'minesport-bridge-neoforge\.gradle'),
         (Join-Path $Root 'minesport-bridge-quilt\build'),
+        (Join-Path $Root 'minesport-bridge-quilt\.gradle'),
         (Join-Path $Root 'engine\build'),
+        (Join-Path $Root 'engine\.gradle'),
         (Join-Path $Root 'desktop\target'),
         (Join-Path $Root 'desktop\dist'),
         (Join-Path $Root 'dist\bundled-bridge'),
@@ -205,7 +211,7 @@ function Remove-BuildOutputs {
             Remove-Item -LiteralPath $path -Recurse -Force
         }
     }
-    Write-Host '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.' -ForegroundColor DarkGray
+    Write-Host '  Preserved: global ~/.gradle downloads/cache, Cargo registry/git caches, downloaded JDKs.' -ForegroundColor DarkGray
     $BuildState.Clear()
     Write-Host ''
 }
@@ -231,7 +237,7 @@ Write-Host '============================================' -ForegroundColor Cyan
 Write-Host 'Target: Windows / amd64' -ForegroundColor DarkGray
 Write-Host 'Desktop: Rust + Slint 1.17.1' -ForegroundColor DarkGray
 Write-Host 'Mode: content-aware incremental build' -ForegroundColor DarkGray
-if ($Fresh) { Write-Host 'Fresh: YES (outputs only; caches preserved)' -ForegroundColor Yellow }
+if ($Fresh) { Write-Host 'Fresh: YES (clean rerun; global caches preserved)' -ForegroundColor Yellow }
 if ($DesktopOnly) { Write-Host 'Desktop-only: YES' -ForegroundColor DarkGray }
 if (-not $BuildNsisInstaller -and -not $BuildInnoInstaller -and -not $BuildMsiInstaller) {
     Write-Host 'Packaging: disabled (executable only)' -ForegroundColor DarkGray
@@ -271,7 +277,11 @@ function Build-Bridge($bridge) {
     Push-Location $projectPath
     try {
         # No clean: if a rebuild is needed, preserve Gradle's local incremental work.
-        & .\gradlew.bat --no-daemon --stacktrace build
+        if ($Fresh) {
+            & .\gradlew.bat --no-daemon --stacktrace clean build --rerun-tasks --no-build-cache
+        } else {
+            & .\gradlew.bat --no-daemon --stacktrace build
+        }
         if ($LASTEXITCODE -ne 0) { throw "$($bridge.Name) Bridge build failed." }
         $bridgeJar = Get-ChildItem -Path 'build\libs\*.jar' -File |
             Where-Object { $_.Name -notmatch '(sources|javadoc)' } |
@@ -327,7 +337,11 @@ if (-not $DesktopOnly) {
         Write-Host '  -> changed/missing, building...' -ForegroundColor Yellow
         Push-Location $engineProject
         try {
+            if ($Fresh) {
+            & .\gradlew.bat --no-daemon --stacktrace clean build --rerun-tasks --no-build-cache
+        } else {
             & .\gradlew.bat --no-daemon --stacktrace build
+        }
             if ($LASTEXITCODE -ne 0) { throw 'Java engine build failed.' }
             $engineJar = Get-ChildItem -Path 'build\libs\minesport-engine-*.jar' -File |
                 Where-Object { $_.Name -notmatch 'sources' } |
