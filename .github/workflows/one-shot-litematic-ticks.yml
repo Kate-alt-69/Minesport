@@ -22,13 +22,13 @@ jobs:
           java-version: '22'
 
       - name: Apply Litematica ticks to current main
+        id: apply
         shell: bash
         run: |
           python .github/litematic_ticks_patch.py
           python .github/litematic_ticks_fix.py
           python - <<'PY'
           from pathlib import Path
-
           path = Path('engine/src/main/java/dev/kastrick/minesport/export/LitematicExporter.java')
           text = path.read_text()
           broken = '''        return new ExportStats(
@@ -58,11 +58,11 @@ jobs:
           PY
 
       - name: Harden fresh builds
+        id: harden
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-
           def replace(path, old, new, count=1):
               p = Path(path)
               text = p.read_text()
@@ -71,67 +71,22 @@ jobs:
                   raise SystemExit(f"{path}: expected {count} match(es), found {actual}: {old[:80]!r}")
               p.write_text(text.replace(old, new))
 
-          replace(
-              "build.ps1",
-              "    Write-Host '[FRESH] Removing Minesport build outputs only...' -ForegroundColor Yellow",
-              "    Write-Host '[FRESH] Removing Minesport build outputs and project-local Gradle state...' -ForegroundColor Yellow",
-          )
-          replace(
-              "build.ps1",
-              "        (Join-Path $Root 'minesport-bridge-fabric\\build'),\n        (Join-Path $Root 'minesport-bridge-forge\\build'),\n        (Join-Path $Root 'minesport-bridge-neoforge\\build'),\n        (Join-Path $Root 'minesport-bridge-quilt\\build'),\n        (Join-Path $Root 'engine\\build'),",
-              "        (Join-Path $Root 'minesport-bridge-fabric\\build'),\n        (Join-Path $Root 'minesport-bridge-fabric\\.gradle'),\n        (Join-Path $Root 'minesport-bridge-forge\\build'),\n        (Join-Path $Root 'minesport-bridge-forge\\.gradle'),\n        (Join-Path $Root 'minesport-bridge-neoforge\\build'),\n        (Join-Path $Root 'minesport-bridge-neoforge\\.gradle'),\n        (Join-Path $Root 'minesport-bridge-quilt\\build'),\n        (Join-Path $Root 'minesport-bridge-quilt\\.gradle'),\n        (Join-Path $Root 'engine\\build'),\n        (Join-Path $Root 'engine\\.gradle'),",
-          )
-          replace(
-              "build.ps1",
-              "    Write-Host '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.' -ForegroundColor DarkGray",
-              "    Write-Host '  Preserved: global ~/.gradle downloads/cache, Cargo registry/git caches, downloaded JDKs.' -ForegroundColor DarkGray",
-          )
-          replace(
-              "build.ps1",
-              "if ($Fresh) { Write-Host 'Fresh: YES (outputs only; caches preserved)' -ForegroundColor Yellow }",
-              "if ($Fresh) { Write-Host 'Fresh: YES (clean rerun; global caches preserved)' -ForegroundColor Yellow }",
-          )
-          replace(
-              "build.ps1",
-              "        & .\\gradlew.bat --no-daemon --stacktrace build",
-              "        if ($Fresh) {\n            & .\\gradlew.bat --no-daemon --stacktrace clean build --rerun-tasks --no-build-cache\n        } else {\n            & .\\gradlew.bat --no-daemon --stacktrace build\n        }",
-              count=2,
-          )
+          replace("build.ps1", "    Write-Host '[FRESH] Removing Minesport build outputs only...' -ForegroundColor Yellow", "    Write-Host '[FRESH] Removing Minesport build outputs and project-local Gradle state...' -ForegroundColor Yellow")
+          replace("build.ps1", "        (Join-Path $Root 'minesport-bridge-fabric\\build'),\n        (Join-Path $Root 'minesport-bridge-forge\\build'),\n        (Join-Path $Root 'minesport-bridge-neoforge\\build'),\n        (Join-Path $Root 'minesport-bridge-quilt\\build'),\n        (Join-Path $Root 'engine\\build'),", "        (Join-Path $Root 'minesport-bridge-fabric\\build'),\n        (Join-Path $Root 'minesport-bridge-fabric\\.gradle'),\n        (Join-Path $Root 'minesport-bridge-forge\\build'),\n        (Join-Path $Root 'minesport-bridge-forge\\.gradle'),\n        (Join-Path $Root 'minesport-bridge-neoforge\\build'),\n        (Join-Path $Root 'minesport-bridge-neoforge\\.gradle'),\n        (Join-Path $Root 'minesport-bridge-quilt\\build'),\n        (Join-Path $Root 'minesport-bridge-quilt\\.gradle'),\n        (Join-Path $Root 'engine\\build'),\n        (Join-Path $Root 'engine\\.gradle'),")
+          replace("build.ps1", "    Write-Host '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.' -ForegroundColor DarkGray", "    Write-Host '  Preserved: global ~/.gradle downloads/cache, Cargo registry/git caches, downloaded JDKs.' -ForegroundColor DarkGray")
+          replace("build.ps1", "if ($Fresh) { Write-Host 'Fresh: YES (outputs only; caches preserved)' -ForegroundColor Yellow }", "if ($Fresh) { Write-Host 'Fresh: YES (clean rerun; global caches preserved)' -ForegroundColor Yellow }")
+          replace("build.ps1", "        & .\\gradlew.bat --no-daemon --stacktrace build", "        if ($Fresh) {\n            & .\\gradlew.bat --no-daemon --stacktrace clean build --rerun-tasks --no-build-cache\n        } else {\n            & .\\gradlew.bat --no-daemon --stacktrace build\n        }", count=2)
 
-          replace(
-              "build.sh",
-              "  echo '[FRESH] Removing Minesport build outputs only...'",
-              "  echo '[FRESH] Removing Minesport build outputs and project-local Gradle state...'",
-          )
-          replace(
-              "build.sh",
-              "    \"$ROOT/minesport-bridge-fabric/build\" \\\n    \"$ROOT/minesport-bridge-forge/build\" \\\n    \"$ROOT/minesport-bridge-neoforge/build\" \\\n    \"$ROOT/minesport-bridge-quilt/build\" \\\n    \"$ROOT/engine/build\" \\",
-              "    \"$ROOT/minesport-bridge-fabric/build\" \\\n    \"$ROOT/minesport-bridge-fabric/.gradle\" \\\n    \"$ROOT/minesport-bridge-forge/build\" \\\n    \"$ROOT/minesport-bridge-forge/.gradle\" \\\n    \"$ROOT/minesport-bridge-neoforge/build\" \\\n    \"$ROOT/minesport-bridge-neoforge/.gradle\" \\\n    \"$ROOT/minesport-bridge-quilt/build\" \\\n    \"$ROOT/minesport-bridge-quilt/.gradle\" \\\n    \"$ROOT/engine/build\" \\\n    \"$ROOT/engine/.gradle\" \\",
-          )
-          replace(
-              "build.sh",
-              "  echo '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.'",
-              "  echo '  Preserved: global ~/.gradle downloads/cache, Cargo registry/git caches, downloaded JDKs.'",
-          )
-          replace(
-              "build.sh",
-              "$FRESH && printf '%s\\n' 'Fresh: YES (outputs only; caches preserved)'",
-              "$FRESH && printf '%s\\n' 'Fresh: YES (clean rerun; global caches preserved)'",
-          )
-          replace(
-              "build.sh",
-              "build_bridge() {",
-              "run_gradle_build() {\n  if $FRESH; then\n    ./gradlew --no-daemon clean build --rerun-tasks --no-build-cache\n  else\n    local gradle_args=(--no-daemon build)\n    ./gradlew \"${gradle_args[@]}\"\n  fi\n}\n\nbuild_bridge() {",
-          )
-          replace(
-              "build.sh",
-              "./gradlew --no-daemon build",
-              "run_gradle_build",
-              count=2,
-          )
+          replace("build.sh", "  echo '[FRESH] Removing Minesport build outputs only...'", "  echo '[FRESH] Removing Minesport build outputs and project-local Gradle state...'")
+          replace("build.sh", "    \"$ROOT/minesport-bridge-fabric/build\" \\\n    \"$ROOT/minesport-bridge-forge/build\" \\\n    \"$ROOT/minesport-bridge-neoforge/build\" \\\n    \"$ROOT/minesport-bridge-quilt/build\" \\\n    \"$ROOT/engine/build\" \\", "    \"$ROOT/minesport-bridge-fabric/build\" \\\n    \"$ROOT/minesport-bridge-fabric/.gradle\" \\\n    \"$ROOT/minesport-bridge-forge/build\" \\\n    \"$ROOT/minesport-bridge-forge/.gradle\" \\\n    \"$ROOT/minesport-bridge-neoforge/build\" \\\n    \"$ROOT/minesport-bridge-neoforge/.gradle\" \\\n    \"$ROOT/minesport-bridge-quilt/build\" \\\n    \"$ROOT/minesport-bridge-quilt/.gradle\" \\\n    \"$ROOT/engine/build\" \\\n    \"$ROOT/engine/.gradle\" \\")
+          replace("build.sh", "  echo '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.'", "  echo '  Preserved: global ~/.gradle downloads/cache, Cargo registry/git caches, downloaded JDKs.'")
+          replace("build.sh", "$FRESH && printf '%s\\n' 'Fresh: YES (outputs only; caches preserved)'", "$FRESH && printf '%s\\n' 'Fresh: YES (clean rerun; global caches preserved)'")
+          replace("build.sh", "build_bridge() {", "run_gradle_build() {\n  if $FRESH; then\n    ./gradlew --no-daemon clean build --rerun-tasks --no-build-cache\n  else\n    local gradle_args=(--no-daemon build)\n    ./gradlew \"${gradle_args[@]}\"\n  fi\n}\n\nbuild_bridge() {")
+          replace("build.sh", "./gradlew --no-daemon build", "run_gradle_build", count=2)
           PY
 
       - name: Test Java engine
+        id: test
         shell: bash
         run: |
           cd engine
@@ -141,42 +96,20 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           cd ..
-          if [ "$status" -ne 0 ]; then
-            {
-              echo '=== Gradle output ==='
-              cat .github/litematica-gradle.log
-              echo
-              echo '=== JUnit XML ==='
-              find engine/build/test-results/test -name '*.xml' -type f -print -exec cat {} \; 2>/dev/null || true
-            } > .github/litematica-test-failure.txt
-            rm -f .github/litematica-gradle.log
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add .github/litematica-test-failure.txt
-            git commit -m 'Capture Litematica tick test failure'
-            git push origin HEAD:main
-            exit "$status"
-          fi
-          rm -f .github/litematica-gradle.log
-
-      - name: Preserve Java test report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: litematica-tick-test-report
-          path: engine/build/test-results/test/*.xml
-          if-no-files-found: warn
-          retention-days: 1
+          exit "$status"
 
       - name: Validate build scripts
+        id: validate
         shell: bash
         run: |
           bash -n build.sh
           pwsh -NoProfile -Command '$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
 
       - name: Verify integration diff
+        id: verify
         shell: bash
         run: |
+          rm -f .github/litematica-gradle.log
           python - <<'PY'
           import subprocess
           expected = {
@@ -195,6 +128,32 @@ jobs:
           if actual != expected:
               raise SystemExit(f'Unexpected integration files: {sorted(actual)}')
           PY
+
+      - name: Capture failed phase
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "apply=${{ steps.apply.outcome }}"
+            echo "harden=${{ steps.harden.outcome }}"
+            echo "test=${{ steps.test.outcome }}"
+            echo "validate=${{ steps.validate.outcome }}"
+            echo "verify=${{ steps.verify.outcome }}"
+            if [ -f .github/litematica-gradle.log ]; then
+              echo
+              echo '=== Gradle output ==='
+              cat .github/litematica-gradle.log
+            fi
+            echo
+            echo '=== JUnit XML ==='
+            find engine/build/test-results/test -name '*.xml' -type f -print -exec cat {} \; 2>/dev/null || true
+          } > .github/litematica-test-failure.txt
+          rm -f .github/litematica-gradle.log
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/litematica-test-failure.txt
+          git commit -m 'Capture Litematica landing failure phase'
+          git push origin HEAD:main
 
       - name: Publish tested integration without force push
         shell: bash
