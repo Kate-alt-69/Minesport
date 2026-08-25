@@ -20,7 +20,8 @@ public class RegionReader {
 
     public record RegionContents(
         List<BlockData> blocks,
-        List<BlockEntityData> blockEntities
+        List<BlockEntityData> blockEntities,
+        List<EntityData> entities
     ) {}
 
     public static List<BlockData> readRegion(
@@ -34,6 +35,8 @@ public class RegionReader {
             minX, minY, minZ,
             maxX, maxY, maxZ,
             progress,
+            true,
+            false,
             false
         ).blocks();
     }
@@ -49,8 +52,26 @@ public class RegionReader {
             minX, minY, minZ,
             maxX, maxY, maxZ,
             progress,
+            true,
+            true,
             true
         );
+    }
+
+    public static List<EntityData> readEntityRegion(
+            File regionFile,
+            int minX, int minY, int minZ,
+            int maxX, int maxY, int maxZ
+    ) throws IOException {
+        return readRegionInternal(
+            regionFile,
+            minX, minY, minZ,
+            maxX, maxY, maxZ,
+            null,
+            false,
+            false,
+            true
+        ).entities();
     }
 
     private static RegionContents readRegionInternal(
@@ -58,7 +79,9 @@ public class RegionReader {
             int minX, int minY, int minZ,
             int maxX, int maxY, int maxZ,
             ProgressCallback progress,
-            boolean includeBlockEntities
+            boolean decodeBlocks,
+            boolean includeBlockEntities,
+            boolean includeEntities
     ) throws IOException {
 
         int regionX = 0, regionZ = 0;
@@ -73,10 +96,11 @@ public class RegionReader {
 
         var blocks = new ArrayList<BlockData>();
         var blockEntities = new ArrayList<BlockEntityData>();
+        var entities = new ArrayList<EntityData>();
 
         try (var raf = new RandomAccessFile(regionFile, "r")) {
             if (raf.length() < SECTOR_SIZE * 2L) {
-                return new RegionContents(blocks, blockEntities);
+                return new RegionContents(blocks, blockEntities, entities);
             }
 
             byte[] header = new byte[SECTOR_SIZE];
@@ -132,20 +156,30 @@ public class RegionReader {
                     if (nbtBytes == null || nbtBytes.length == 0) continue;
 
                     NbtCompound chunkNbt = NbtReader.readBytes(nbtBytes);
-                    ChunkBlockDecoder.decodeInto(
-                        chunkNbt,
-                        worldChunkX,
-                        worldChunkZ,
-                        minX, minY, minZ,
-                        maxX, maxY, maxZ,
-                        blocks
-                    );
+                    if (decodeBlocks) {
+                        ChunkBlockDecoder.decodeInto(
+                            chunkNbt,
+                            worldChunkX,
+                            worldChunkZ,
+                            minX, minY, minZ,
+                            maxX, maxY, maxZ,
+                            blocks
+                        );
+                    }
                     if (includeBlockEntities) {
                         extractBlockEntities(
                             chunkNbt,
                             minX, minY, minZ,
                             maxX, maxY, maxZ,
                             blockEntities
+                        );
+                    }
+                    if (includeEntities) {
+                        extractEntities(
+                            chunkNbt,
+                            minX, minY, minZ,
+                            maxX, maxY, maxZ,
+                            entities
                         );
                     }
 
@@ -166,7 +200,7 @@ public class RegionReader {
             }
         }
 
-        return new RegionContents(blocks, blockEntities);
+        return new RegionContents(blocks, blockEntities, entities);
     }
 
     static void extractBlockEntities(
@@ -212,6 +246,60 @@ public class RegionReader {
                 out.add(new BlockEntityData(x, y, z, entity));
             } catch (Exception ignored) {
                 // Malformed block entity: preserve the surrounding chunk.
+            }
+        }
+    }
+
+    static void extractEntities(
+        NbtCompound chunk,
+        int minX, int minY, int minZ,
+        int maxX, int maxY, int maxZ,
+        List<EntityData> out
+    ) {
+        if (chunk == null || out == null) return;
+
+        NbtCompound level = chunk;
+        if (chunk.has("Level")) {
+            try {
+                level = chunk.getCompound("Level");
+            } catch (Exception ignored) {}
+        }
+
+        List<Object> entries = null;
+        try {
+            if (chunk.has("Entities")) {
+                entries = chunk.getList("Entities");
+            } else if (chunk.has("entities")) {
+                entries = chunk.getList("entities");
+            } else if (level.has("Entities")) {
+                entries = level.getList("Entities");
+            }
+        } catch (Exception ignored) {
+            return;
+        }
+        if (entries == null) return;
+
+        for (Object entry : entries) {
+            if (!(entry instanceof NbtCompound entity) || !entity.has("Pos")) continue;
+            try {
+                List<Object> pos = entity.getList("Pos");
+                if (pos.size() < 3) continue;
+                if (
+                    !(pos.get(0) instanceof Number xValue) ||
+                    !(pos.get(1) instanceof Number yValue) ||
+                    !(pos.get(2) instanceof Number zValue)
+                ) continue;
+                double x = xValue.doubleValue();
+                double y = yValue.doubleValue();
+                double z = zValue.doubleValue();
+                if (
+                    x < minX || x >= (double) maxX + 1.0 ||
+                    y < minY || y >= (double) maxY + 1.0 ||
+                    z < minZ || z >= (double) maxZ + 1.0
+                ) continue;
+                out.add(new EntityData(x, y, z, entity));
+            } catch (Exception ignored) {
+                // Malformed entity: preserve the surrounding chunk.
             }
         }
     }

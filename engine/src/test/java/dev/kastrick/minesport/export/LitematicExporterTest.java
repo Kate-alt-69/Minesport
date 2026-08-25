@@ -4,6 +4,7 @@ import dev.kastrick.minesport.nbt.NbtCompound;
 import dev.kastrick.minesport.nbt.NbtReader;
 import dev.kastrick.minesport.region.BlockData;
 import dev.kastrick.minesport.region.BlockEntityData;
+import dev.kastrick.minesport.region.EntityData;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -124,6 +125,58 @@ class LitematicExporterTest {
             NbtCompound exportedItem = (NbtCompound) chest.getList("Items").getFirst();
             assertEquals("minecraft:diamond", exportedItem.getString("id"));
             assertEquals(3, exportedItem.getByte("Count"));
+        } finally {
+            Files.deleteIfExists(output.toPath());
+        }
+    }
+
+    @Test
+    void preservesEntityNbtWithRegionLocalPosition() throws Exception {
+        var entityTag = new LinkedHashMap<String, Object>();
+        entityTag.put("id", "minecraft:armor_stand");
+        entityTag.put("Pos", List.of(101.25d, 64.0d, -28.5d));
+        entityTag.put("Rotation", List.of(90.0f, 0.0f));
+        entityTag.put("CustomName", "{\"text\":\"Actor\"}");
+
+        var entities = List.of(new EntityData(
+            101.25d,
+            64.0d,
+            -28.5d,
+            new NbtCompound(entityTag)
+        ));
+
+        var output = Files.createTempFile("minesport-entity-", ".litematic").toFile();
+        try {
+            var stats = LitematicExporter.export(
+                List.of(),
+                List.of(),
+                entities,
+                100, 60, -30,
+                102, 66, -28,
+                "Entity Test",
+                "Minesport",
+                "unit test",
+                4189,
+                output
+            );
+
+            assertEquals(1, stats.entityCount());
+
+            NbtCompound root = NbtReader.readGzip(output);
+            assertEquals(1, root.getCompound("Metadata").getInt("EntityCount"));
+
+            NbtCompound region = root.getCompound("Regions").getCompound("Entity Test");
+            NbtCompound entity = (NbtCompound) region.getList("Entities").getFirst();
+            assertEquals("minecraft:armor_stand", entity.getString("id"));
+            assertEquals("{\"text\":\"Actor\"}", entity.getString("CustomName"));
+
+            List<Object> pos = entity.getList("Pos");
+            assertEquals(1.25d, ((Number) pos.get(0)).doubleValue(), 0.00001d);
+            assertEquals(4.0d, ((Number) pos.get(1)).doubleValue(), 0.00001d);
+            assertEquals(1.5d, ((Number) pos.get(2)).doubleValue(), 0.00001d);
+
+            List<Object> rotation = entity.getList("Rotation");
+            assertEquals(90.0f, ((Number) rotation.get(0)).floatValue(), 0.00001f);
         } finally {
             Files.deleteIfExists(output.toPath());
         }

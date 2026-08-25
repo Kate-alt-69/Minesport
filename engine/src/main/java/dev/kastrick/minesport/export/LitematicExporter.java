@@ -3,6 +3,7 @@ package dev.kastrick.minesport.export;
 import dev.kastrick.minesport.nbt.NbtWriter;
 import dev.kastrick.minesport.region.BlockData;
 import dev.kastrick.minesport.region.BlockEntityData;
+import dev.kastrick.minesport.region.EntityData;
 
 import java.io.File;
 import java.io.IOException;
@@ -26,7 +27,8 @@ public final class LitematicExporter {
         int blockCount,
         int paletteSize,
         int volume,
-        int blockEntityCount
+        int blockEntityCount,
+        int entityCount
     ) {}
 
     private record StateKey(String blockId, SortedMap<String, String> properties) {
@@ -55,6 +57,7 @@ public final class LitematicExporter {
         return export(
             blocks,
             List.of(),
+            List.of(),
             firstX, firstY, firstZ,
             secondX, secondY, secondZ,
             name, author, description,
@@ -66,6 +69,30 @@ public final class LitematicExporter {
     public static ExportStats export(
         List<BlockData> blocks,
         List<BlockEntityData> blockEntities,
+        int firstX, int firstY, int firstZ,
+        int secondX, int secondY, int secondZ,
+        String name,
+        String author,
+        String description,
+        int minecraftDataVersion,
+        File output
+    ) throws IOException {
+        return export(
+            blocks,
+            blockEntities,
+            List.of(),
+            firstX, firstY, firstZ,
+            secondX, secondY, secondZ,
+            name, author, description,
+            minecraftDataVersion,
+            output
+        );
+    }
+
+    public static ExportStats export(
+        List<BlockData> blocks,
+        List<BlockEntityData> blockEntities,
+        List<EntityData> entities,
         int firstX, int firstY, int firstZ,
         int secondX, int secondY, int secondZ,
         String name,
@@ -153,13 +180,27 @@ public final class LitematicExporter {
             }
         }
 
+        List<Object> entityTags = new ArrayList<>();
+        if (entities != null) {
+            for (EntityData entity : entities) {
+                if (!inside(entity, minX, minY, minZ, maxX, maxY, maxZ)) continue;
+                LinkedHashMap<String, Object> tag = new LinkedHashMap<>(entity.nbt().asMapView());
+                tag.put("Pos", List.of(
+                    entity.x() - minX,
+                    entity.y() - minY,
+                    entity.z() - minZ
+                ));
+                entityTags.add(tag);
+            }
+        }
+
         LinkedHashMap<String, Object> region = new LinkedHashMap<>();
         region.put("Position", xyz(0, 0, 0));
         region.put("Size", xyz(width, height, length));
         region.put("BlockStatePalette", paletteTag);
         region.put("BlockStates", packed);
         region.put("TileEntities", tileEntities);
-        region.put("Entities", List.of());
+        region.put("Entities", entityTags);
         region.put("PendingBlockTicks", List.of());
         region.put("PendingFluidTicks", List.of());
 
@@ -180,6 +221,7 @@ public final class LitematicExporter {
         metadata.put("TimeModified", now);
         metadata.put("TotalBlocks", nonAir);
         metadata.put("BlockEntityCount", tileEntities.size());
+        metadata.put("EntityCount", entityTags.size());
         metadata.put("TotalVolume", volume);
         metadata.put("EnclosingSize", xyz(width, height, length));
 
@@ -194,7 +236,13 @@ public final class LitematicExporter {
         root.put("Regions", regions);
 
         NbtWriter.writeGzip(output, root);
-        return new ExportStats(nonAir, palette.size(), volume, tileEntities.size());
+        return new ExportStats(
+            nonAir,
+            palette.size(),
+            volume,
+            tileEntities.size(),
+            entityTags.size()
+        );
     }
 
     private static LinkedHashMap<String, Object> xyz(int x, int y, int z) {
@@ -223,6 +271,16 @@ public final class LitematicExporter {
         return entity.x() >= minX && entity.x() <= maxX
             && entity.y() >= minY && entity.y() <= maxY
             && entity.z() >= minZ && entity.z() <= maxZ;
+    }
+
+    private static boolean inside(
+        EntityData entity,
+        int minX, int minY, int minZ,
+        int maxX, int maxY, int maxZ
+    ) {
+        return entity.x() >= minX && entity.x() < (double) maxX + 1.0
+            && entity.y() >= minY && entity.y() < (double) maxY + 1.0
+            && entity.z() >= minZ && entity.z() < (double) maxZ + 1.0;
     }
 
     private static boolean isTrueAir(String blockId) {

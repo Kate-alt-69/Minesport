@@ -101,6 +101,8 @@ public class IpcMode {
         try {
             log("Creating temp copy...");
             tempDir = WorldCopier.copyToTemp(worldFolder, IpcMode::log);
+            boolean separateEntityRegions = format.equals("litematic")
+                && WorldCopier.copyOverworldEntitiesToTemp(worldFolder, tempDir, IpcMode::log);
             progress(10, "World copy ready");
 
             log("Scanning region files...");
@@ -119,6 +121,7 @@ public class IpcMode {
             log("Found " + mcaFiles.length + " region file(s)");
             var allBlocks = new ArrayList<BlockData>();
             var allBlockEntities = new ArrayList<BlockEntityData>();
+            var allEntities = new ArrayList<EntityData>();
             for (int fileIndex = 0; fileIndex < mcaFiles.length; fileIndex++) {
                 File mca = mcaFiles[fileIndex];
                 log("Reading: " + mca.getName());
@@ -131,6 +134,9 @@ public class IpcMode {
                     );
                     allBlocks.addAll(contents.blocks());
                     allBlockEntities.addAll(contents.blockEntities());
+                    if (!separateEntityRegions) {
+                        allEntities.addAll(contents.entities());
+                    }
                 } else {
                     allBlocks.addAll(RegionReader.readRegion(
                         mca,
@@ -142,10 +148,26 @@ public class IpcMode {
                 int percent = 10 + (int)((fileIndex + 1.0) / mcaFiles.length * 30);
                 progress(percent, "Read " + mca.getName());
             }
+            if (format.equals("litematic") && separateEntityRegions) {
+                File entityDir = new File(tempDir, "entities");
+                File[] entityFiles = entityDir.listFiles((directory, name) -> name.endsWith(".mca") || name.endsWith(".mcr"));
+                if (entityFiles != null) {
+                    Arrays.sort(entityFiles, Comparator.comparing(File::getName));
+                    for (File entityFile : entityFiles) {
+                        allEntities.addAll(RegionReader.readEntityRegion(
+                            entityFile,
+                            minX, minY, minZ,
+                            maxX, maxY, maxZ
+                        ));
+                    }
+                }
+            }
+
             log(
                 "Total blocks: " + allBlocks.size()
                 + (format.equals("litematic")
                     ? " · block entities: " + allBlockEntities.size()
+                        + " · entities: " + allEntities.size()
                     : "")
             );
 
@@ -175,6 +197,13 @@ public class IpcMode {
                     Math.max(radiusY, 1),
                     Math.max(radiusZ, 1)
                 ));
+                allEntities.removeIf(entity -> !insideEllipsoidPoint(
+                    entity.x(), entity.y(), entity.z(),
+                    centerX, centerY, centerZ,
+                    Math.max(radiusX, 1),
+                    Math.max(radiusY, 1),
+                    Math.max(radiusZ, 1)
+                ));
                 log(
                     "Bubble selection: " + allBlocks.size() + " / " + before
                     + " blocks kept (center " + centerX + "," + centerY + "," + centerZ
@@ -189,6 +218,13 @@ public class IpcMode {
                 allBlocks.removeIf(block -> !exact.contains(SpatialKey.of(block.x, block.y, block.z)));
                 allBlockEntities.removeIf(entity ->
                     !exact.contains(SpatialKey.of(entity.x(), entity.y(), entity.z()))
+                );
+                allEntities.removeIf(entity ->
+                    !exact.contains(SpatialKey.of(
+                        (int)Math.floor(entity.x()),
+                        (int)Math.floor(entity.y()),
+                        (int)Math.floor(entity.z())
+                    ))
                 );
                 log(
                     "Custom selection: " + allBlocks.size() + " / " + before
@@ -208,6 +244,7 @@ public class IpcMode {
                 LitematicExporter.ExportStats schematicStats = LitematicExporter.export(
                     allBlocks,
                     allBlockEntities,
+                    allEntities,
                     minX, minY, minZ,
                     maxX, maxY, maxZ,
                     schematicName,
@@ -220,6 +257,7 @@ public class IpcMode {
                 log(
                     "Litematica export: " + schematicStats.blockCount() + " blocks, "
                     + schematicStats.blockEntityCount() + " block entities, "
+                    + schematicStats.entityCount() + " entities, "
                     + schematicStats.paletteSize() + " palette states, "
                     + schematicStats.volume() + " volume"
                 );
@@ -533,6 +571,17 @@ public class IpcMode {
         double dx = (x + 0.5 - centerX) / (double)radiusX;
         double dy = (y + 0.5 - centerY) / (double)radiusY;
         double dz = (z + 0.5 - centerZ) / (double)radiusZ;
+        return dx * dx + dy * dy + dz * dz <= 1.0;
+    }
+
+    private static boolean insideEllipsoidPoint(
+        double x, double y, double z,
+        int centerX, int centerY, int centerZ,
+        int radiusX, int radiusY, int radiusZ
+    ) {
+        double dx = (x - centerX) / radiusX;
+        double dy = (y - centerY) / radiusY;
+        double dz = (z - centerZ) / radiusZ;
         return dx * dx + dy * dy + dz * dz <= 1.0;
     }
 

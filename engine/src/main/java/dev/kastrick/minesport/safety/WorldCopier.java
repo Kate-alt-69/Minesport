@@ -15,6 +15,10 @@ public class WorldCopier {
         "dimensions" + File.separator + "minecraft" + File.separator + "overworld" + File.separator + "region",
         "region"
     );
+    private static final List<String> OVERWORLD_ENTITY_PATHS = List.of(
+        "dimensions" + File.separator + "minecraft" + File.separator + "overworld" + File.separator + "entities",
+        "entities"
+    );
 
     /**
      * Copy only level metadata and the active Overworld region into the system
@@ -66,6 +70,44 @@ public class WorldCopier {
         throw new IOException(
             "No Overworld region files found; checked: " + String.join(", ", checked)
         );
+    }
+
+    /**
+     * Copy modern separate entity-region files only when a caller needs them.
+     * Geometry exports deliberately never call this method.
+     */
+    public static boolean copyOverworldEntitiesToTemp(
+        File worldFolder,
+        File tempDir,
+        Consumer<String> log
+    ) throws IOException {
+        File source = null;
+        for (String relativePath : OVERWORLD_ENTITY_PATHS) {
+            File candidate = new File(worldFolder, relativePath);
+            if (hasRegionFiles(candidate)) {
+                source = candidate;
+                break;
+            }
+        }
+        if (source == null) return false;
+
+        Path destination = tempDir.toPath().resolve("entities");
+        Files.createDirectories(destination);
+        File[] files = source.listFiles(file -> file.isFile() && isRegionFile(file.getName()));
+        if (files == null || files.length == 0) return false;
+        Arrays.sort(files, Comparator.comparing(File::getName));
+        for (File file : files) {
+            copyFile(
+                file.toPath(),
+                destination.resolve(file.getName()),
+                log,
+                "entities/" + file.getName()
+            );
+        }
+        if (log != null) {
+            log.accept("Using Overworld entity folder: " + source.getAbsolutePath());
+        }
+        return true;
     }
 
     private static boolean hasRegionFiles(File directory) {

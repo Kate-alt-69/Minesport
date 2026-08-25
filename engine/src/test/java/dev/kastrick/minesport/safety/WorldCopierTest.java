@@ -39,15 +39,18 @@ class WorldCopierTest {
         Path modern = world.resolve("dimensions/minecraft/overworld/region");
         Path legacy = world.resolve("region");
         Path nether = world.resolve("dimensions/minecraft/the_nether/region");
+        Path entities = world.resolve("dimensions/minecraft/overworld/entities");
         Files.createDirectories(modern);
         Files.createDirectories(legacy);
         Files.createDirectories(nether);
+        Files.createDirectories(entities);
         Files.writeString(world.resolve("level.dat"), "level");
         Files.writeString(world.resolve("level.dat_old"), "old-level");
         Files.writeString(modern.resolve("r.0.0.mca"), "modern");
         Files.writeString(legacy.resolve("r.0.0.mca"), "stale");
         Files.writeString(legacy.resolve("r.9.9.mca"), "stale-only");
         Files.writeString(nether.resolve("r.0.0.mca"), "nether");
+        Files.writeString(entities.resolve("r.0.0.mca"), "entities");
 
         assertEquals(
             modern.toFile().getCanonicalFile(),
@@ -64,6 +67,17 @@ class WorldCopierTest {
             // Minesport's readers consume only temp/region. Keeping duplicate
             // source-layout dimensions would waste disk I/O and temp space.
             assertFalse(Files.exists(copied.toPath().resolve("dimensions")));
+            assertFalse(Files.exists(copied.toPath().resolve("entities")));
+
+            assertTrue(WorldCopier.copyOverworldEntitiesToTemp(
+                world.toFile(),
+                copied,
+                null
+            ));
+            assertEquals(
+                "entities",
+                Files.readString(copied.toPath().resolve("entities").resolve("r.0.0.mca"))
+            );
         } finally {
             WorldCopier.cleanupTemp(copied);
         }
