@@ -103,6 +103,7 @@ public final class MinesportBridge implements ClientModInitializer {
             }
 
             boolean polymerPresent = FabricLoader.getInstance().isModLoaded("polymer");
+            PolymerApi polymerApi = polymerPresent ? PolymerApi.resolve() : null;
             sender.send("hello", new Hello(
                 SharedConstants.getCurrentVersion().id(),
                 FabricLoader.getInstance()
@@ -129,7 +130,7 @@ public final class MinesportBridge implements ClientModInitializer {
                     List<BlockVariant> variants = index < extracted.size()
                         ? extracted.get(index)
                         : List.of();
-                    String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
+                    String vanillaMapping = polymerApi != null ? polymerApi.tryGetMapping(block) : null;
                     String loaderType = vanillaMapping != null
                         ? "polymer"
                         : ("minecraft".equals(id.getNamespace()) ? "vanilla" : "fabric");
@@ -199,43 +200,58 @@ public final class MinesportBridge implements ClientModInitializer {
         return String.valueOf(state.getValue((Property) property));
     }
 
-    /** Polymer remains optional; resolve its API dynamically. */
-    private String tryGetPolymerMapping(Block block) {
-        try {
-            Class<?> polymerBlock = Class.forName("eu.pb4.polymer.core.api.block.PolymerBlock");
-            if (!polymerBlock.isInstance(block)) return null;
+    /** Polymer remains optional; resolve its mapping API once per worker. */
+    private static final class PolymerApi {
+        private final Class<?> blockType;
+        private final Method getPolymerState;
 
-            Method method = Arrays.stream(polymerBlock.getMethods())
-                .filter(candidate ->
-                    candidate.getName().equals("getPolymerBlockState")
-                    && candidate.getParameterCount() >= 1
-                    && candidate.getParameterTypes()[0].isAssignableFrom(BlockState.class)
-                )
-                .findFirst()
-                .orElse(null);
-            if (method == null) return null;
+        private PolymerApi(Class<?> blockType, Method getPolymerState) {
+            this.blockType = blockType;
+            this.getPolymerState = getPolymerState;
+        }
 
-            Object[] args = new Object[method.getParameterCount()];
-            args[0] = block.defaultBlockState();
-            for (int i = 1; i < args.length; i++) args[i] = null;
-
-            Object result = method.invoke(block, args);
-            if (!(result instanceof BlockState vanillaState)) return null;
-
-            Identifier vanillaId = BuiltInRegistries.BLOCK.getKey(vanillaState.getBlock());
-            if (vanillaId == null) return null;
-
-            StringBuilder text = new StringBuilder(vanillaId.toString());
-            var values = new ArrayList<String>();
-            for (var property : vanillaState.getProperties()) {
-                values.add(property.getName() + "=" + propertyValue(vanillaState, property));
+        private static PolymerApi resolve() {
+            try {
+                Class<?> blockType = Class.forName("eu.pb4.polymer.core.api.block.PolymerBlock");
+                Method method = Arrays.stream(blockType.getMethods())
+                    .filter(candidate ->
+                        candidate.getName().equals("getPolymerBlockState")
+                        && candidate.getParameterCount() >= 1
+                        && candidate.getParameterTypes()[0].isAssignableFrom(BlockState.class)
+                    )
+                    .findFirst()
+                    .orElse(null);
+                return method == null ? null : new PolymerApi(blockType, method);
+            } catch (ReflectiveOperationException ignored) {
+                return null;
             }
-            if (!values.isEmpty()) {
-                text.append("[").append(String.join(",", values)).append("]");
+        }
+
+        private String tryGetMapping(Block block) {
+            if (!blockType.isInstance(block)) return null;
+            try {
+                Object[] args = new Object[getPolymerState.getParameterCount()];
+                args[0] = block.defaultBlockState();
+                for (int i = 1; i < args.length; i++) args[i] = null;
+
+                Object result = getPolymerState.invoke(block, args);
+                if (!(result instanceof BlockState vanillaState)) return null;
+
+                Identifier vanillaId = BuiltInRegistries.BLOCK.getKey(vanillaState.getBlock());
+                if (vanillaId == null) return null;
+
+                StringBuilder text = new StringBuilder(vanillaId.toString());
+                var values = new ArrayList<String>();
+                for (var property : vanillaState.getProperties()) {
+                    values.add(property.getName() + "=" + propertyValue(vanillaState, property));
+                }
+                if (!values.isEmpty()) {
+                    text.append("[").append(String.join(",", values)).append("]");
+                }
+                return text.toString();
+            } catch (ReflectiveOperationException | ClassCastException ignored) {
+                return null;
             }
-            return text.toString();
-        } catch (Exception ignored) {
-            return null;
         }
     }
 
