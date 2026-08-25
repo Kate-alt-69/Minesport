@@ -369,9 +369,6 @@ public class IpcMode {
                 progressIndeterminate("Cleaning temporary world data");
                 WorldCopier.cleanupTemp(tempDir);
                 tempDir = null;
-                commitStagedOutput(stagedOutput, outFile);
-                stagedOutput = null;
-                progress(99, "Finalizing export");
                 log(
                     "Litematica export: " + schematicStats.blockCount() + " blocks, "
                     + schematicStats.blockEntityCount() + " block entities, "
@@ -381,6 +378,12 @@ public class IpcMode {
                     + schematicStats.paletteSize() + " palette states, "
                     + schematicStats.volume() + " volume"
                 );
+                progressIndeterminate("Publishing Litematica file");
+                commitStagedOutput(stagedOutput, outFile);
+                stagedOutput = null;
+                // The final path now represents a complete export. Make the terminal
+                // event the very next IPC message so the desktop cannot remain in an
+                // earlier "Reading..." state while a finished file is visible.
                 done(
                     outFile.getAbsolutePath(),
                     new ObjExporter.ExportStats(schematicStats.blockCount(), 0, 0)

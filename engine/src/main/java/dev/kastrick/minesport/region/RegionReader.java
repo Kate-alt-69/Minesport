@@ -152,6 +152,13 @@ public class RegionReader {
                 if (seekPos < SECTOR_SIZE * 2L || seekPos + 5 > raf.length() || allocatedEnd > raf.length()) continue;
 
                 try {
+                    if (progress != null) {
+                        progress.onProgress(
+                            chunksProcessed,
+                            totalChunks,
+                            "Opening chunk " + worldChunkX + "," + worldChunkZ
+                        );
+                    }
                     raf.seek(seekPos);
                     int dataLength = raf.readInt();
 
@@ -175,8 +182,22 @@ public class RegionReader {
 
                     byte[] nbtBytes = decompress(compressed, compressionType);
                     if (nbtBytes == null || nbtBytes.length == 0) continue;
+                    if (progress != null) {
+                        progress.onProgress(
+                            chunksProcessed,
+                            totalChunks,
+                            "Parsing chunk " + worldChunkX + "," + worldChunkZ
+                        );
+                    }
 
                     NbtCompound chunkNbt = NbtReader.readBytes(nbtBytes);
+                    if (progress != null) {
+                        progress.onProgress(
+                            chunksProcessed,
+                            totalChunks,
+                            "Decoding chunk " + worldChunkX + "," + worldChunkZ
+                        );
+                    }
                     if (decodeBlocks) {
                         ChunkBlockDecoder.decodeInto(
                             chunkNbt,
@@ -226,7 +247,7 @@ public class RegionReader {
                         progress.onProgress(
                             chunksProcessed,
                             totalChunks,
-                            "Reading chunk " + worldChunkX + "," + worldChunkZ
+                            "Read chunk " + worldChunkX + "," + worldChunkZ
                         );
                     }
                 }
