@@ -21,18 +21,57 @@ public class BlockGeometryExtractor {
         Direction.NORTH, Direction.SOUTH,
         Direction.EAST, Direction.WEST
     };
+    private static final int CACHE_BLOCK_WINDOW = 256;
+    private static final int MAX_CACHED_QUADS = 65_536;
+    private static final ThreadLocal<ExtractionCache> EXTRACTION_CACHE =
+        ThreadLocal.withInitial(ExtractionCache::new);
+
+    private static final class ExtractionCache {
+        private final IdentityHashMap<BakedQuad, BakedQuadData[]> convertedQuads =
+            new IdentityHashMap<>();
+        private int blocks;
+
+        BakedQuadData[] slots(BakedQuad quad) {
+            BakedQuadData[] existing = convertedQuads.get(quad);
+            if (existing != null) return existing;
+            if (convertedQuads.size() >= MAX_CACHED_QUADS) {
+                return new BakedQuadData[7];
+            }
+            BakedQuadData[] created = new BakedQuadData[7];
+            convertedQuads.put(quad, created);
+            return created;
+        }
+
+        void finishBlock() {
+            blocks++;
+            if (blocks >= CACHE_BLOCK_WINDOW || convertedQuads.size() >= MAX_CACHED_QUADS) {
+                convertedQuads.clear();
+                blocks = 0;
+            }
+        }
+    }
 
     public static List<BlockVariant> extractBlock(Block block, Minecraft client) {
+        var cache = EXTRACTION_CACHE.get();
+        try {
+            return extractBlock(block, client, cache);
+        } finally {
+            cache.finishBlock();
+        }
+    }
+
+    private static List<BlockVariant> extractBlock(
+        Block block,
+        Minecraft client,
+        ExtractionCache cache
+    ) {
         var variants = new ArrayList<BlockVariant>();
         var shaper = client.getModelManager().getBlockModelShaper();
 
-        // Minecraft commonly reuses immutable BakedQuad objects across several
-        // states of the same block. Conversion to Minesport's packed float form
-        // is pure, so cache it by object identity + requested cull direction for
-        // the lifetime of this block extraction. State property keys remain
-        // separate and are never deduplicated.
-        var convertedQuads = new IdentityHashMap<BakedQuad, BakedQuadData[]>();
-
+        // Minecraft commonly reuses immutable BakedQuad objects across states
+        // and multipart models. Keep converted quad data for one 256-block dump
+        // window so neighboring blocks can reuse it too, while bounding cache
+        // memory for giant modpacks. State property keys remain independent.
         for (BlockState state : block.getStateDefinition().getPossibleStates()) {
             BlockStateModel model = shaper.getBlockModel(state);
             if (model == null) continue;
@@ -44,7 +83,7 @@ public class BlockGeometryExtractor {
             List<BakedQuadData> quads = extractQuads(
                 model,
                 stableSeed(block, state),
-                convertedQuads
+                cache
             );
             variants.add(new BlockVariant(props, quads));
         }
@@ -64,7 +103,7 @@ public class BlockGeometryExtractor {
     private static List<BakedQuadData> extractQuads(
         BlockStateModel model,
         long seed,
-        IdentityHashMap<BakedQuad, BakedQuadData[]> convertedQuads
+        ExtractionCache cache
     ) {
         var quads = new ArrayList<BakedQuadData>();
         List<BlockModelPart> parts;
@@ -87,14 +126,11 @@ public class BlockGeometryExtractor {
                 if (baked == null) continue;
 
                 for (BakedQuad quad : baked) {
-                    BakedQuadData[] cache = convertedQuads.computeIfAbsent(
-                        quad,
-                        ignored -> new BakedQuadData[7]
-                    );
-                    BakedQuadData data = cache[directionSlot];
+                    BakedQuadData[] slots = cache.slots(quad);
+                    BakedQuadData data = slots[directionSlot];
                     if (data == null) {
                         data = convertQuad(quad, dir);
-                        if (data != null) cache[directionSlot] = data;
+                        if (data != null) slots[directionSlot] = data;
                     }
                     if (data != null) quads.add(data);
                 }
