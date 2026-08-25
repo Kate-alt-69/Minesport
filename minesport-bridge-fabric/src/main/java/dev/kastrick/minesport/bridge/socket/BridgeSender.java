@@ -45,13 +45,16 @@ public class BridgeSender implements Closeable {
     public void send(String type, Object payload) throws IOException {
         JsonObject object = GSON.toJsonTree(payload).getAsJsonObject();
         object.addProperty("type", type);
-        writer.write(GSON.toJson(object));
+        // Stream the JSON tree straight into the socket buffer. Calling
+        // GSON.toJson(object) first duplicates large baked-model packets as a
+        // second giant String and creates avoidable allocation/GC pressure.
+        GSON.toJson(object, writer);
         writer.newLine();
     }
 
     /** Send a raw map directly as one framed JSON line. */
     public void sendRaw(Map<String, Object> map) throws IOException {
-        writer.write(GSON.toJson(map));
+        GSON.toJson(map, writer);
         writer.newLine();
     }
 
