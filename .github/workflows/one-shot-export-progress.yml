@@ -39,6 +39,8 @@ jobs:
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
 
       - name: Check Rust and Slint desktop
+        env:
+          MINESPORT_FAST_CHECK: '1'
         run: cargo check --manifest-path desktop/Cargo.toml
 
       - name: Verify patch
