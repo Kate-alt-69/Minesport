@@ -43,9 +43,12 @@ public final class MinesportBridge implements ClientModInitializer {
         System.out.println("[MinesportBridge] Initializing 26.x runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
             hideWorkerWindow(client);
-            Thread dumpThread = new Thread(() -> runDump(client), "MinesportBridge-Dump");
-            dumpThread.setDaemon(false);
-            dumpThread.start();
+            // The worker exists only to capture the runtime registry, so keep
+            // extraction on Minecraft's client thread instead of spawning a
+            // dump thread that immediately schedules every batch back here and
+            // blocks on a CompletableFuture. This matches the canonical bridge
+            // and removes one cross-thread round trip per extraction batch.
+            runDump(client);
         });
     }
 
@@ -160,25 +163,15 @@ public final class MinesportBridge implements ClientModInitializer {
     }
 
     private List<List<BlockVariant>> extractBatchSafe(Minecraft client, List<Block> blocks) {
-        try {
-            var future = new java.util.concurrent.CompletableFuture<List<List<BlockVariant>>>();
-            client.execute(() -> {
-                var result = new ArrayList<List<BlockVariant>>(blocks.size());
-                for (Block block : blocks) {
-                    try {
-                        result.add(BlockGeometryExtractor.extractBlock(block, client));
-                    } catch (Exception ignored) {
-                        result.add(List.of());
-                    }
-                }
-                future.complete(result);
-            });
-            return future.get(60, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (Exception exception) {
-            var fallback = new ArrayList<List<BlockVariant>>(blocks.size());
-            for (int i = 0; i < blocks.size(); i++) fallback.add(List.of());
-            return fallback;
+        var result = new ArrayList<List<BlockVariant>>(blocks.size());
+        for (Block block : blocks) {
+            try {
+                result.add(BlockGeometryExtractor.extractBlock(block, client));
+            } catch (Exception ignored) {
+                result.add(List.of());
+            }
         }
+        return result;
     }
 
     private List<LightState> extractLightStates(Block block) {
