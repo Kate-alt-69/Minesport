@@ -26,6 +26,36 @@ jobs:
         run: |
           python .github/litematic_ticks_patch.py
           python .github/litematic_ticks_fix.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('engine/src/main/java/dev/kastrick/minesport/export/LitematicExporter.java')
+          text = path.read_text()
+          broken = '''        return new ExportStats(
+            nonAir,
+            palette.size(),
+            volume,
+            tileEntities.size(),
+            volume,
+            tileEntities.size(),
+            entityTags.size(),
+            blockTickTags.size(),
+            fluidTickTags.size()
+        );'''
+          fixed = '''        return new ExportStats(
+            nonAir,
+            palette.size(),
+            volume,
+            tileEntities.size(),
+            entityTags.size(),
+            blockTickTags.size(),
+            fluidTickTags.size()
+        );'''
+          count = text.count(broken)
+          if count != 1:
+              raise SystemExit(f'Expected one broken ExportStats constructor, found {count}')
+          path.write_text(text.replace(broken, fixed, 1))
+          PY
 
       - name: Harden fresh builds
         shell: bash
