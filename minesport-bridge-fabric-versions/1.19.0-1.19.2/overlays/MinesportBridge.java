@@ -64,10 +64,8 @@ public class MinesportBridge implements ClientModInitializer {
                 polymerPresent,
                 getLoadedMods()
             ));
-            sender.flush();
 
             System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " registered block types...");
-            int sent = 0;
             for (Block block : allBlocks) {
                 ResourceLocation id = Registry.BLOCK.getKey(block);
                 if (id == null) continue;
@@ -86,13 +84,9 @@ public class MinesportBridge implements ClientModInitializer {
                 if (!lightStates.isEmpty()) {
                     sender.send(TYPE_BLOCK_LIGHT, new BlockLightEntry(blockId, lightStates));
                 }
-
-                sent++;
-                if ((sent & 127) == 0) sender.flush();
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
-            sender.flush();
             System.out.println("[MinesportBridge] Registry/model dump complete. Exiting worker.");
             Thread.sleep(250);
 
