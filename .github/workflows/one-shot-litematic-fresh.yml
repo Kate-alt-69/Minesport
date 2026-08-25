@@ -1,0 +1,217 @@
+name: One Shot Litematica + Fresh Build Landing
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/one-shot-litematic-fresh.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+
+      - name: Adapt and apply Litematica scheduled ticks
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/litematic_ticks_patch.py')
+          text = path.read_text()
+          old = "'''            null,\\n            false,\\n            false,\\n            true\\n        ).entities();'''"
+          new = "'''            progress,\\n            false,\\n            false,\\n            true\\n        ).entities();'''"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected one legacy entity-reader matcher, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          python .github/litematic_ticks_patch.py
+          python .github/litematic_ticks_fix.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('engine/src/main/java/dev/kastrick/minesport/export/LitematicExporter.java')
+          text = path.read_text()
+          broken = '''        return new ExportStats(
+              nonAir,
+              palette.size(),
+              volume,
+              tileEntities.size(),
+              volume,
+              tileEntities.size(),
+              entityTags.size(),
+              blockTickTags.size(),
+              fluidTickTags.size()
+          );'''
+          fixed = '''        return new ExportStats(
+              nonAir,
+              palette.size(),
+              volume,
+              tileEntities.size(),
+              entityTags.size(),
+              blockTickTags.size(),
+              fluidTickTags.size()
+          );'''
+          count = text.count(broken)
+          if count != 1:
+              # The helper may already contain the constructor fix; accept the correct form.
+              if text.count(fixed) != 1:
+                  raise SystemExit(f'Could not locate ExportStats constructor to normalize (broken={count}, fixed={text.count(fixed)})')
+          else:
+              path.write_text(text.replace(broken, fixed, 1))
+          PY
+
+      - name: Make counted read progress real
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('engine/src/main/java/dev/kastrick/minesport/IpcMode.java')
+          text = path.read_text()
+          old = '''        int interval = Math.max(1, total / 100);
+          if (done <= 1 || done >= total || done % interval == 0) {
+              progressIndeterminate(message + " · " + done + "/" + total + " chunks");
+          }'''
+          new = '''        int interval = Math.max(1, total / 100);
+          if (done <= 1 || done >= total || done % interval == 0) {
+              int percent = (int)Math.round(done * 100.0 / total);
+              progress(
+                  Math.max(1, Math.min(100, percent)),
+                  message + " · " + done + "/" + total + " chunks"
+              );
+          }'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected one text-only chunk progress block, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Harden fresh builds
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f'{path}: expected {count} match(es), found {actual}: {old[:80]!r}')
+              p.write_text(text.replace(old, new))
+
+          # PowerShell: invalidate project-local Gradle state, but preserve global downloads.
+          replace('build.ps1', "    Write-Host '[FRESH] Removing Minesport build outputs only...' -ForegroundColor Yellow", "    Write-Host '[FRESH] Removing Minesport build outputs and project-local Gradle state...' -ForegroundColor Yellow")
+          replace('build.ps1', "    $paths = @(\n", "    $paths = @(\n        (Join-Path $Root '.gradle'),\n")
+          for project in ('minesport-bridge-fabric', 'minesport-bridge-forge', 'minesport-bridge-neoforge', 'minesport-bridge-quilt', 'engine'):
+              old = f"        (Join-Path $Root '{project}\\build'),"
+              new = old + f"\n        (Join-Path $Root '{project}\\.gradle'),"
+              replace('build.ps1', old, new)
+          replace('build.ps1', "    Write-Host '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.' -ForegroundColor DarkGray", "    Write-Host '  Preserved: global ~/.gradle downloads/cache, Cargo registry/git caches, downloaded JDKs.' -ForegroundColor DarkGray")
+          replace('build.ps1', "if ($Fresh) { Write-Host 'Fresh: YES (outputs only; caches preserved)' -ForegroundColor Yellow }", "if ($Fresh) { Write-Host 'Fresh: YES (clean rerun; global caches preserved)' -ForegroundColor Yellow }")
+          replace(
+              'build.ps1',
+              '        & .\\gradlew.bat --no-daemon --stacktrace build',
+              '''        if ($Fresh) {
+              & .\\gradlew.bat --no-daemon --stacktrace clean build --rerun-tasks --no-build-cache
+          } else {
+              & .\\gradlew.bat --no-daemon --stacktrace build
+          }''',
+              count=2,
+          )
+
+          # Bash: same semantics and no recursive helper replacement.
+          replace('build.sh', "  echo '[FRESH] Removing Minesport build outputs only...'", "  echo '[FRESH] Removing Minesport build outputs and project-local Gradle state...'")
+          replace('build.sh', "  rm -rf \\\n", "  rm -rf \\\n    \"$ROOT/.gradle\" \\\n")
+          for project in ('minesport-bridge-fabric', 'minesport-bridge-forge', 'minesport-bridge-neoforge', 'minesport-bridge-quilt', 'engine'):
+              old = f'    "$ROOT/{project}/build" \\\\n'
+              new = old + f'    "$ROOT/{project}/.gradle" \\\\n'
+              replace('build.sh', old, new)
+          replace('build.sh', "  echo '  Preserved: project .gradle caches, ~/.gradle, Cargo registry/git caches, downloaded JDKs.'", "  echo '  Preserved: global ~/.gradle downloads/cache, Cargo registry/git caches, downloaded JDKs.'")
+          replace('build.sh', "$FRESH && printf '%s\\n' 'Fresh: YES (outputs only; caches preserved)'", "$FRESH && printf '%s\\n' 'Fresh: YES (clean rerun; global caches preserved)'")
+          replace('build.sh', '''build_bridge() {
+''', '''run_gradle_build() {
+  if $FRESH; then
+    ./gradlew --no-daemon clean build --rerun-tasks --no-build-cache
+  else
+    local gradle_args=(--no-daemon build)
+    ./gradlew "${gradle_args[@]}"
+  fi
+}
+
+build_bridge() {
+''')
+          replace('build.sh', './gradlew --no-daemon build', 'run_gradle_build', count=2)
+          PY
+
+      - name: Test Java engine
+        working-directory: engine
+        run: bash ./gradlew --no-daemon test --stacktrace
+
+      - name: Validate build scripts
+        shell: bash
+        run: |
+          bash -n build.sh
+          pwsh -NoProfile -Command '$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
+          grep -F -- '--rerun-tasks --no-build-cache' build.ps1 >/dev/null
+          grep -F -- '--rerun-tasks --no-build-cache' build.sh >/dev/null
+          grep -F -- "Join-Path \$Root '.gradle'" build.ps1 >/dev/null
+          grep -F -- '"$ROOT/.gradle"' build.sh >/dev/null
+
+      - name: Verify integration diff
+        shell: bash
+        run: |
+          git checkout -- .github/litematic_ticks_patch.py engine/gradlew
+          git diff --check
+          python - <<'PY'
+          import subprocess
+          expected = {
+              'build.ps1',
+              'build.sh',
+              'engine/src/main/java/dev/kastrick/minesport/IpcMode.java',
+              'engine/src/main/java/dev/kastrick/minesport/export/LitematicExporter.java',
+              'engine/src/main/java/dev/kastrick/minesport/region/RegionReader.java',
+              'engine/src/main/java/dev/kastrick/minesport/region/ScheduledTickData.java',
+              'engine/src/test/java/dev/kastrick/minesport/export/LitematicTickExporterTest.java',
+              'engine/src/test/java/dev/kastrick/minesport/region/RegionReaderScheduledTickTest.java',
+          }
+          tracked = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          untracked = set(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], text=True).splitlines())
+          actual = tracked | untracked
+          print('Integration files:', *sorted(actual), sep='\n  ')
+          if actual != expected:
+              raise SystemExit(f'Unexpected integration files: {sorted(actual)}')
+          PY
+
+      - name: Publish tested integration
+        shell: bash
+        run: |
+          rm -f .github/litematic_ticks_patch.py
+          rm -f .github/litematic_ticks_fix.py
+          rm -f .github/workflows/one-shot-litematic-fresh.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            build.ps1 \
+            build.sh \
+            engine/src/main/java/dev/kastrick/minesport/IpcMode.java \
+            engine/src/main/java/dev/kastrick/minesport/export/LitematicExporter.java \
+            engine/src/main/java/dev/kastrick/minesport/region/RegionReader.java \
+            engine/src/main/java/dev/kastrick/minesport/region/ScheduledTickData.java \
+            engine/src/test/java/dev/kastrick/minesport/export/LitematicTickExporterTest.java \
+            engine/src/test/java/dev/kastrick/minesport/region/RegionReaderScheduledTickTest.java \
+            .github/litematic_ticks_patch.py \
+            .github/litematic_ticks_fix.py \
+            .github/workflows/one-shot-litematic-fresh.yml
+          git commit -m 'Preserve Litematica ticks and harden fresh builds'
+          git push origin HEAD:main
