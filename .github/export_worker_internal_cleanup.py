@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 ROOT = Path('.')
 
@@ -19,11 +18,6 @@ IDENTIFIERS = [
     ('MinesportBridge', 'MinesportExportWorker'),
     ('BridgeProtocol', 'ExportWorkerProtocol'),
     ('BridgeSender', 'ExportWorkerSender'),
-]
-FILE_RENAMES = [
-    ('MinesportBridge.java', 'MinesportExportWorker.java'),
-    ('BridgeProtocol.java', 'ExportWorkerProtocol.java'),
-    ('BridgeSender.java', 'ExportWorkerSender.java'),
 ]
 
 
@@ -60,15 +54,23 @@ for path in Path('desktop/src').rglob('*.rs'):
     if editable(path):
         replace_identifiers(path)
 
+# Compatibility helpers have composite names too (for example
+# BridgeProtocolAnimated.java). Rename any Java filename containing one of the
+# migrated identifiers instead of only three exact canonical filenames.
 for root in WORKER_ROOTS:
     if not root.exists():
         continue
-    for old_name, new_name in FILE_RENAMES:
-        for old_path in list(root.rglob(old_name)):
-            new_path = old_path.with_name(new_name)
-            if new_path.exists():
-                raise SystemExit(f'rename collision: {new_path}')
-            old_path.rename(new_path)
+    java_files = [path for path in root.rglob('*.java') if path.is_file()]
+    for old_path in java_files:
+        new_name = old_path.name
+        for old, new in IDENTIFIERS:
+            new_name = new_name.replace(old, new)
+        if new_name == old_path.name:
+            continue
+        new_path = old_path.with_name(new_name)
+        if new_path.exists():
+            raise SystemExit(f'rename collision: {new_path}')
+        old_path.rename(new_path)
 
 # Finish the 0.2.1 runtime materialization contract. The embedded engine version
 # and temporary worker filenames must agree with the artifacts that produced them.
