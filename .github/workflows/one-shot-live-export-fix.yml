@@ -33,6 +33,17 @@ jobs:
                   raise SystemExit(f"{label}: expected exactly one match in {path}, found {count}")
               p.write_text(text.replace(old, new, 1), encoding="utf-8")
 
+          def replace_section(path, start_marker, end_marker, replacement, label):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              start = text.find(start_marker)
+              if start < 0:
+                  raise SystemExit(f"{label}: start marker missing in {path}")
+              end = text.find(end_marker, start)
+              if end < 0:
+                  raise SystemExit(f"{label}: end marker missing in {path}")
+              p.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+
           replace_once(
               "desktop/src/app.rs",
               '''        "progress" => {
@@ -44,9 +55,8 @@ jobs:
           ''',
               '''        "progress" => {
                       ui.set_task_active(true);
-                      // Percent 0 is the engine's explicit indeterminate sentinel.
-                      // Keep the last real progress value instead of snapping the
-                      // bar backwards every time a new export phase starts.
+                      // Percent 0 is the engine's indeterminate sentinel. Keep
+                      // the last real value so phase changes cannot reset the bar.
                       if response.percent > 0 {
                           let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
                           ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
@@ -70,9 +80,8 @@ jobs:
           ''',
               '''        int interval = Math.max(1, total / 100);
                   if (done <= 1 || done >= total || done % interval == 0) {
-                      // Region IO owns the first 40% of an export. The old code
-                      // reported 100% here and then jumped backwards to 45/50%
-                      // for multipart/resolver work, which made the UI look stuck.
+                      // Region IO owns only the first 40% of the export. The old
+                      // 1..100 mapping made later 45/50% phases jump backwards.
                       int percent = 5 + (int)Math.round(done * 35.0 / total);
                       progress(
                           Math.max(5, Math.min(40, percent)),
@@ -83,64 +92,45 @@ jobs:
               "monotonic region progress",
           )
 
-          replace_once(
-              "engine/src/main/java/dev/kastrick/minesport/export/FlatterOptimizer.java",
+          flatter_path = "engine/src/main/java/dev/kastrick/minesport/export/FlatterOptimizer.java"
+          replace_section(
+              flatter_path,
+              "    public static Result compile(List<BlockData> blocks, ResolverChain resolvers) {",
+              "    private static Candidate analyze(",
               '''    public static Result compile(List<BlockData> blocks, ResolverChain resolvers) {
-                      return compile(blocks, resolvers, FlatterSettings.cellSize());
-                  }
+                  return compile(blocks, resolvers, FlatterSettings.cellSize(), null);
+              }
 
-                  /** Explicit cell-size overload used by tests/tools without changing global settings. */
-                  public static Result compile(List<BlockData> blocks, ResolverChain resolvers, int requestedCellSize) {
-                      if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
+              public static Result compile(
+                  List<BlockData> blocks,
+                  ResolverChain resolvers,
+                  ObjExporter.ProgressCallback progress
+              ) {
+                  return compile(blocks, resolvers, FlatterSettings.cellSize(), progress);
+              }
 
-                      int cellSize = FlatterSettings.normalizeCellSize(requestedCellSize);
-          ''',
-              '''    public static Result compile(List<BlockData> blocks, ResolverChain resolvers) {
-                      return compile(blocks, resolvers, FlatterSettings.cellSize(), null);
-                  }
+              /** Explicit cell-size overload used by tests/tools without changing global settings. */
+              public static Result compile(List<BlockData> blocks, ResolverChain resolvers, int requestedCellSize) {
+                  return compile(blocks, resolvers, requestedCellSize, null);
+              }
 
-                  public static Result compile(
-                      List<BlockData> blocks,
-                      ResolverChain resolvers,
-                      ObjExporter.ProgressCallback progress
-                  ) {
-                      return compile(blocks, resolvers, FlatterSettings.cellSize(), progress);
-                  }
+              public static Result compile(
+                  List<BlockData> blocks,
+                  ResolverChain resolvers,
+                  int requestedCellSize,
+                  ObjExporter.ProgressCallback progress
+              ) {
+                  if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
 
-                  /** Explicit cell-size overload used by tests/tools without changing global settings. */
-                  public static Result compile(List<BlockData> blocks, ResolverChain resolvers, int requestedCellSize) {
-                      return compile(blocks, resolvers, requestedCellSize, null);
-                  }
+                  int cellSize = FlatterSettings.normalizeCellSize(requestedCellSize);
+                  // Use the IPC/export GeometryBuilder rather than a second plain asset
+                  // builder. That wrapper understands BlockData.runtimeRegistryPath, so
+                  // FLATTER and conventional objects consume the same baked model source.
+                  GeometryBuilder geometry = new dev.kastrick.minesport.GeometryBuilder(resolvers);
+                  Map<MaterialKey,Boolean> opaqueCache = new HashMap<>();
+                  Map<ObjectKey,List<Candidate>> cells = new LinkedHashMap<>();
 
-                  public static Result compile(
-                      List<BlockData> blocks,
-                      ResolverChain resolvers,
-                      int requestedCellSize,
-                      ObjExporter.ProgressCallback progress
-                  ) {
-                      if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
-
-                      int cellSize = FlatterSettings.normalizeCellSize(requestedCellSize);
-          ''',
-              "FLATTER progress overload",
-          )
-
-          replace_once(
-              "engine/src/main/java/dev/kastrick/minesport/export/FlatterOptimizer.java",
-              '''        for (BlockData block : blocks) {
-                      if (block == null || block.isAir()) continue;
-                      Candidate candidate = analyze(block, geometry, resolvers, opaqueCache);
-                      if (candidate == null) continue;
-
-                      CellKey cell = cellFor(block, cellSize);
-                      String shapeKey = candidate.kind() == CandidateKind.SHAPE
-                          ? candidate.paletteKey()
-                          : "";
-                      ObjectKey key = new ObjectKey(cell, candidate.kind(), shapeKey);
-                      cells.computeIfAbsent(key, ignored -> new ArrayList<>()).add(candidate);
-                  }
-          ''',
-              '''        int analyzed = 0;
+                  int analyzed = 0;
                   int total = Math.max(blocks.size(), 1);
                   int interval = Math.max(1, total / 200);
                   for (BlockData block : blocks) {
@@ -160,23 +150,52 @@ jobs:
                           progress.onProgress(analyzed, total);
                       }
                   }
+
+                  List<FlatterObject> objects = new ArrayList<>();
+                  Set<BlockData> included = Collections.newSetFromMap(new IdentityHashMap<>());
+
+                  for (var entry : cells.entrySet()) {
+                      // A single block would only trade one normal object for one FLATTER
+                      // object plus metadata. Repeated geometry is where virtualization wins.
+                      if (entry.getValue().size() < 2) continue;
+                      FlatterObject object = buildObject(entry.getKey(), entry.getValue());
+                      if (object == null || object.blockCount() < 2) continue;
+                      objects.add(object);
+                      for (Candidate candidate : entry.getValue()) included.add(candidate.block());
+                  }
+
+                  return objects.isEmpty() ? Result.empty() : new Result(objects, included);
+              }
+
           ''',
-              "FLATTER live progress loop",
+              "FLATTER live progress section",
           )
 
-          for path in [
-              "engine/src/main/java/dev/kastrick/minesport/export/ObjExporter.java",
-              "engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java",
-          ]:
-              replace_once(
-                  path,
+          exporters = [
+              (
+                  "engine/src/main/java/dev/kastrick/minesport/export/ObjExporter.java",
                   '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
                       Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
                       Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
                       FlatterOptimizer.Result flatter = FlatterSettings.enabled()
                           ? FlatterOptimizer.compile(blocks, builder.getResolvers())
                           : FlatterOptimizer.Result.empty();
-          ''' if path.endswith("ObjExporter.java") else '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
+          ''',
+                  '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
+                      Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
+                      Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+                      int progressBlocks = Math.max(blocks.size(), 1);
+                      boolean flatterEnabled = FlatterSettings.enabled();
+                      FlatterOptimizer.Result flatter = flatterEnabled
+                          ? FlatterOptimizer.compile(blocks, builder.getResolvers(), (doneCount, total) -> {
+                              if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
+                          })
+                          : FlatterOptimizer.Result.empty();
+          ''',
+              ),
+              (
+                  "engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java",
+                  '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
                       Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
                       Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
                       FlatterOptimizer.Result flatter = FlatterSettings.enabled()
@@ -190,25 +209,17 @@ jobs:
                       int progressBlocks = Math.max(blocks.size(), 1);
                       boolean flatterEnabled = FlatterSettings.enabled();
                       FlatterOptimizer.Result flatter = flatterEnabled
-                          ? FlatterOptimizer.compile(blocks, builder.getResolvers(), (doneCount, total) -> {
-                              if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
-                          })
-                          : FlatterOptimizer.Result.empty();
-          ''' if path.endswith("ObjExporter.java") else '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
-                      Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
-                      Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
-                      int progressBlocks = Math.max(blocks.size(), 1);
-                      boolean flatterEnabled = FlatterSettings.enabled();
-                      FlatterOptimizer.Result flatter = flatterEnabled
                           ? FlatterOptimizer.compile(blocks, resolvers, (doneCount, total) -> {
                               if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
                           })
                           : FlatterOptimizer.Result.empty();
                       Map<String,List<Quad>> groups = new LinkedHashMap<>();
           ''',
-                  f"{path} FLATTER progress hookup",
-              )
+              ),
+          ]
 
+          for path, old, new in exporters:
+              replace_once(path, old, new, f"{path} FLATTER progress hookup")
               replace_once(
                   path,
                   '''        int done = 0;
@@ -221,12 +232,18 @@ jobs:
           ''',
                   f"{path} combined progress range",
               )
-              text = Path(path).read_text(encoding="utf-8")
-              text = text.replace(
-                  'progress.onProgress(++done, total)',
-                  'progress.onProgress(progressBase + ++done, progressTotal)'
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count("progress.onProgress(++done, total)")
+              if count < 1:
+                  raise SystemExit(f"{path}: no normal export progress calls found")
+              p.write_text(
+                  text.replace(
+                      "progress.onProgress(++done, total)",
+                      "progress.onProgress(progressBase + ++done, progressTotal)",
+                  ),
+                  encoding="utf-8",
               )
-              Path(path).write_text(text, encoding="utf-8")
 
           replace_once(
               "engine/src/main/java/dev/kastrick/minesport/resolver/ResolverChain.java",
