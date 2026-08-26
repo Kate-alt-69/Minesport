@@ -1,0 +1,309 @@
+name: One Shot Live Export Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-live-export-fix.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply live export fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match in {path}, found {count}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "desktop/src/app.rs",
+              '''        "progress" => {
+                      ui.set_task_active(true);
+                      let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
+                      ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
+                      ui.set_task_detail(response.message.into());
+                  }
+          ''',
+              '''        "progress" => {
+                      ui.set_task_active(true);
+                      // Percent 0 is the engine's explicit indeterminate sentinel.
+                      // Keep the last real progress value instead of snapping the
+                      // bar backwards every time a new export phase starts.
+                      if response.percent > 0 {
+                          let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
+                          ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
+                      }
+                      ui.set_task_detail(response.message.into());
+                  }
+          ''',
+              "desktop indeterminate progress handling",
+          )
+
+          replace_once(
+              "engine/src/main/java/dev/kastrick/minesport/IpcMode.java",
+              '''        int interval = Math.max(1, total / 100);
+                  if (done <= 1 || done >= total || done % interval == 0) {
+                      int percent = (int)Math.round(done * 100.0 / total);
+                      progress(
+                          Math.max(1, Math.min(100, percent)),
+                          message + " · " + done + "/" + total + " chunks"
+                      );
+                  }
+          ''',
+              '''        int interval = Math.max(1, total / 100);
+                  if (done <= 1 || done >= total || done % interval == 0) {
+                      // Region IO owns the first 40% of an export. The old code
+                      // reported 100% here and then jumped backwards to 45/50%
+                      // for multipart/resolver work, which made the UI look stuck.
+                      int percent = 5 + (int)Math.round(done * 35.0 / total);
+                      progress(
+                          Math.max(5, Math.min(40, percent)),
+                          message + " · " + done + "/" + total + " chunks"
+                      );
+                  }
+          ''',
+              "monotonic region progress",
+          )
+
+          replace_once(
+              "engine/src/main/java/dev/kastrick/minesport/export/FlatterOptimizer.java",
+              '''    public static Result compile(List<BlockData> blocks, ResolverChain resolvers) {
+                      return compile(blocks, resolvers, FlatterSettings.cellSize());
+                  }
+
+                  /** Explicit cell-size overload used by tests/tools without changing global settings. */
+                  public static Result compile(List<BlockData> blocks, ResolverChain resolvers, int requestedCellSize) {
+                      if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
+
+                      int cellSize = FlatterSettings.normalizeCellSize(requestedCellSize);
+          ''',
+              '''    public static Result compile(List<BlockData> blocks, ResolverChain resolvers) {
+                      return compile(blocks, resolvers, FlatterSettings.cellSize(), null);
+                  }
+
+                  public static Result compile(
+                      List<BlockData> blocks,
+                      ResolverChain resolvers,
+                      ObjExporter.ProgressCallback progress
+                  ) {
+                      return compile(blocks, resolvers, FlatterSettings.cellSize(), progress);
+                  }
+
+                  /** Explicit cell-size overload used by tests/tools without changing global settings. */
+                  public static Result compile(List<BlockData> blocks, ResolverChain resolvers, int requestedCellSize) {
+                      return compile(blocks, resolvers, requestedCellSize, null);
+                  }
+
+                  public static Result compile(
+                      List<BlockData> blocks,
+                      ResolverChain resolvers,
+                      int requestedCellSize,
+                      ObjExporter.ProgressCallback progress
+                  ) {
+                      if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
+
+                      int cellSize = FlatterSettings.normalizeCellSize(requestedCellSize);
+          ''',
+              "FLATTER progress overload",
+          )
+
+          replace_once(
+              "engine/src/main/java/dev/kastrick/minesport/export/FlatterOptimizer.java",
+              '''        for (BlockData block : blocks) {
+                      if (block == null || block.isAir()) continue;
+                      Candidate candidate = analyze(block, geometry, resolvers, opaqueCache);
+                      if (candidate == null) continue;
+
+                      CellKey cell = cellFor(block, cellSize);
+                      String shapeKey = candidate.kind() == CandidateKind.SHAPE
+                          ? candidate.paletteKey()
+                          : "";
+                      ObjectKey key = new ObjectKey(cell, candidate.kind(), shapeKey);
+                      cells.computeIfAbsent(key, ignored -> new ArrayList<>()).add(candidate);
+                  }
+          ''',
+              '''        int analyzed = 0;
+                  int total = Math.max(blocks.size(), 1);
+                  int interval = Math.max(1, total / 200);
+                  for (BlockData block : blocks) {
+                      if (block != null && !block.isAir()) {
+                          Candidate candidate = analyze(block, geometry, resolvers, opaqueCache);
+                          if (candidate != null) {
+                              CellKey cell = cellFor(block, cellSize);
+                              String shapeKey = candidate.kind() == CandidateKind.SHAPE
+                                  ? candidate.paletteKey()
+                                  : "";
+                              ObjectKey key = new ObjectKey(cell, candidate.kind(), shapeKey);
+                              cells.computeIfAbsent(key, ignored -> new ArrayList<>()).add(candidate);
+                          }
+                      }
+                      analyzed++;
+                      if (progress != null && (analyzed == 1 || analyzed >= total || analyzed % interval == 0)) {
+                          progress.onProgress(analyzed, total);
+                      }
+                  }
+          ''',
+              "FLATTER live progress loop",
+          )
+
+          for path in [
+              "engine/src/main/java/dev/kastrick/minesport/export/ObjExporter.java",
+              "engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java",
+          ]:
+              replace_once(
+                  path,
+                  '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
+                      Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
+                      Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+                      FlatterOptimizer.Result flatter = FlatterSettings.enabled()
+                          ? FlatterOptimizer.compile(blocks, builder.getResolvers())
+                          : FlatterOptimizer.Result.empty();
+          ''' if path.endswith("ObjExporter.java") else '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
+                      Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
+                      Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+                      FlatterOptimizer.Result flatter = FlatterSettings.enabled()
+                          ? FlatterOptimizer.compile(blocks, resolvers)
+                          : FlatterOptimizer.Result.empty();
+                      Map<String,List<Quad>> groups = new LinkedHashMap<>();
+          ''',
+                  '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
+                      Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
+                      Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+                      int progressBlocks = Math.max(blocks.size(), 1);
+                      boolean flatterEnabled = FlatterSettings.enabled();
+                      FlatterOptimizer.Result flatter = flatterEnabled
+                          ? FlatterOptimizer.compile(blocks, builder.getResolvers(), (doneCount, total) -> {
+                              if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
+                          })
+                          : FlatterOptimizer.Result.empty();
+          ''' if path.endswith("ObjExporter.java") else '''        float[] center = BlockGrouper.boundingBoxCenter(blocks);
+                      Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
+                      Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+                      int progressBlocks = Math.max(blocks.size(), 1);
+                      boolean flatterEnabled = FlatterSettings.enabled();
+                      FlatterOptimizer.Result flatter = flatterEnabled
+                          ? FlatterOptimizer.compile(blocks, resolvers, (doneCount, total) -> {
+                              if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
+                          })
+                          : FlatterOptimizer.Result.empty();
+                      Map<String,List<Quad>> groups = new LinkedHashMap<>();
+          ''',
+                  f"{path} FLATTER progress hookup",
+              )
+
+              replace_once(
+                  path,
+                  '''        int done = 0;
+                      int total = Math.max(blocks.size(), 1);
+          ''',
+                  '''        int done = 0;
+                      int total = progressBlocks;
+                      int progressBase = flatterEnabled ? total : 0;
+                      int progressTotal = flatterEnabled ? total * 2 : total;
+          ''',
+                  f"{path} combined progress range",
+              )
+              text = Path(path).read_text(encoding="utf-8")
+              text = text.replace(
+                  'progress.onProgress(++done, total)',
+                  'progress.onProgress(progressBase + ++done, progressTotal)'
+              )
+              Path(path).write_text(text, encoding="utf-8")
+
+          replace_once(
+              "engine/src/main/java/dev/kastrick/minesport/resolver/ResolverChain.java",
+              '''    private static final Set<String> VIRTUAL_PARENTS = Set.of(
+                      "minecraft:block/block",
+                      "minecraft:builtin/generated",
+                      "minecraft:builtin/entity"
+                  );
+          ''',
+              '''    private static final Set<String> VIRTUAL_PARENTS = Set.of(
+                      "minecraft:block/block",
+                      "minecraft:builtin/generated",
+                      "minecraft:builtin/entity"
+                  );
+                  private static final Set<String> ENTITY_RENDERED_MODELS = Set.of(
+                      "minecraft:block/chest",
+                      "minecraft:block/trapped_chest",
+                      "minecraft:block/ender_chest"
+                  );
+          ''',
+              "entity-rendered model set",
+          )
+
+          replace_once(
+              "engine/src/main/java/dev/kastrick/minesport/resolver/ResolverChain.java",
+              '''        modelSources.put(normalized, "missing");
+                  if (missingModels.add(normalized)) System.err.println("[ResolverChain] No model found for: " + normalized);
+                  return null;
+          ''',
+              '''        modelSources.put(normalized, "missing");
+                  if (missingModels.add(normalized) && !ENTITY_RENDERED_MODELS.contains(normalized)) {
+                      System.err.println("[ResolverChain] No model found for: " + normalized);
+                  }
+                  return null;
+          ''',
+              "expected chest model warning suppression",
+          )
+          PY
+          git diff --check
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
+      - name: Install Slint dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+
+      - name: Check desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: "1"
+        run: cargo check --locked --all-targets
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Test engine
+        working-directory: engine
+        run: bash ./gradlew --no-daemon test
+
+      - name: Commit tested source fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            desktop/src/app.rs \
+            engine/src/main/java/dev/kastrick/minesport/IpcMode.java \
+            engine/src/main/java/dev/kastrick/minesport/export/FlatterOptimizer.java \
+            engine/src/main/java/dev/kastrick/minesport/export/ObjExporter.java \
+            engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java \
+            engine/src/main/java/dev/kastrick/minesport/resolver/ResolverChain.java
+          git diff --cached --check
+          git commit -m "Fix live export progress and resolver stalls"
+          git push origin HEAD:main
