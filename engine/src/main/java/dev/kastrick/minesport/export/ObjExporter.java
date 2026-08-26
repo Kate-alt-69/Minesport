@@ -54,8 +54,12 @@ public class ObjExporter {
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
         Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
         Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
-        FlatterOptimizer.Result flatter = FlatterSettings.enabled()
-            ? FlatterOptimizer.compile(blocks, builder.getResolvers())
+        int progressBlocks = Math.max(blocks.size(), 1);
+        boolean flatterEnabled = FlatterSettings.enabled();
+        FlatterOptimizer.Result flatter = flatterEnabled
+            ? FlatterOptimizer.compile(blocks, builder.getResolvers(), (doneCount, total) -> {
+                if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
+            })
             : FlatterOptimizer.Result.empty();
 
         String exportName = safeObjectName(
@@ -66,25 +70,27 @@ public class ObjExporter {
         LinkedHashSet<MaterialKey> textures = new LinkedHashSet<>();
 
         int done = 0;
-        int total = Math.max(blocks.size(), 1);
+        int total = progressBlocks;
+        int progressBase = flatterEnabled ? total : 0;
+        int progressTotal = flatterEnabled ? total * 2 : total;
         int solid = 0;
         int quadCount = 0;
 
         for (BlockData block : blocks) {
             if (block.isAir()) {
-                if (progress != null) progress.onProgress(++done, total);
+                if (progress != null) progress.onProgress(progressBase + ++done, progressTotal);
                 continue;
             }
 
             if (flatter.contains(block)) {
                 solid++;
-                if (progress != null) progress.onProgress(++done, total);
+                if (progress != null) progress.onProgress(progressBase + ++done, progressTotal);
                 continue;
             }
 
             List<Quad> quads = builder.buildBlock(block);
             if (quads.isEmpty()) {
-                if (progress != null) progress.onProgress(++done, total);
+                if (progress != null) progress.onProgress(progressBase + ++done, progressTotal);
                 continue;
             }
 
@@ -108,7 +114,7 @@ public class ObjExporter {
                 objects.computeIfAbsent(objectName, ignored -> new ArrayList<>()).add(quad);
             }
 
-            if (progress != null) progress.onProgress(++done, total);
+            if (progress != null) progress.onProgress(progressBase + ++done, progressTotal);
         }
 
         for (FlatterOptimizer.FlatterObject object : flatter.objects()) {

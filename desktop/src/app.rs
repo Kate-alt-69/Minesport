@@ -227,12 +227,23 @@ fn wire_settings_persistence(
     ui.on_settings_changed(move || {
         let Some(ui) = weak.upgrade() else { return; };
         let format_index = ui.get_export_format_index();
-        if let Ok(mut guard) = state.lock() {
+        let cancelled_pending_export = if let Ok(mut guard) = state.lock() {
             guard.export_format_index = format_index;
-        }
+            if format_index == 2 {
+                guard.pending_export.take().is_some()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         if format_index == 2 {
             cache.cancel();
             ui.set_runtime_cache_status("NOT REQUIRED FOR LITEMATICA".into());
+            if cancelled_pending_export {
+                ui.set_task_title("EXPORT CANCELLED".into());
+                ui.set_task_detail("Cancelled".into());
+            }
         }
         sync_debug_console(&ui, state.clone());
         persist_settings_snapshot(&ui, &state);
@@ -533,7 +544,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
     let weak = ui.as_weak();
     ui.on_export_requested(move || {
         let Some(ui) = weak.upgrade() else { return; };
-        if !ui.get_engine_ready() || ui.get_task_active() { return; }
+        if !ui.get_engine_ready() || ui.get_task_active() || has_pending_export(&state) { return; }
 
         let world = PathBuf::from(ui.get_world_path().to_string());
         if !world.join("level.dat").is_file() {
@@ -1031,11 +1042,21 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
     });
 
     let weak = ui.as_weak();
+    let cancel_state = state.clone();
     ui.on_cancel_runtime_cache(move || {
-        if cache.cancel() {
-            aux_windows::mark_runtime_cache_cancelling();
+        let cancelled_pending_export = cancel_pending_export(&cancel_state);
+        let cancelled_cache = cache.cancel();
+        if cancelled_cache || cancelled_pending_export {
+            if cancelled_cache {
+                aux_windows::mark_runtime_cache_cancelling();
+            }
             if let Some(ui) = weak.upgrade() {
-                ui.set_runtime_cache_status("CANCELLING…".into());
+                ui.set_runtime_cache_status(
+                    if cancelled_cache { "CANCELLING…" } else { "CANCELLED" }.into()
+                );
+                ui.set_task_title(
+                    if cancelled_pending_export { "EXPORT CANCELLED" } else { "RUNTIME CANCELLED" }.into()
+                );
                 ui.set_task_detail("Cancelling…".into());
                 append_diagnostic(&ui, "Runtime registry cancellation requested.");
             }
@@ -1105,11 +1126,21 @@ fn start_runtime_cache_job(
                         append_diagnostic(&ui, &format!("Full runtime registry ready: {} · fingerprint {}{}", cache_result.registry_path.display(), fingerprint, if reused { " · reused" } else { "" }));
                     }
                     Err(error) => {
+                        let cancelled = error.to_ascii_lowercase().contains("cancel");
                         if foreground && !has_pending_export(&ui_completion_state) {
-                            ui.set_task_title("RUNTIME CACHE FAILED".into());
-                            ui.set_task_detail(first_line(error).into());
+                            if cancelled {
+                                ui.set_task_title("RUNTIME CANCELLED".into());
+                                ui.set_task_detail("Cancelled".into());
+                            } else {
+                                ui.set_task_title("RUNTIME CACHE FAILED".into());
+                                ui.set_task_detail(first_line(error).into());
+                            }
                         }
-                        append_diagnostic(&ui, &format!("[WARN] Runtime registry unavailable: {error}"));
+                        if cancelled {
+                            append_diagnostic(&ui, "Runtime registry cancelled.");
+                        } else {
+                            append_diagnostic(&ui, &format!("[WARN] Runtime registry unavailable: {error}"));
+                        }
                     }
                 }
             });
@@ -1136,55 +1167,74 @@ fn dispatch_pending_export(
     registry_path: Option<PathBuf>,
     cache_error: Option<String>,
 ) {
-    let request = state.lock().ok().and_then(|mut guard| guard.pending_export.take());
-    let Some(mut request) = request else { return; };
-
     if let Some(error) = cache_error.as_ref() {
+        if !cancel_pending_export(state) { return; }
         let error = first_line(error).to_string();
         let weak = weak.clone();
         let _ = weak.upgrade_in_event_loop(move |ui| {
             ui.set_task_active(false);
-            ui.set_task_title("EXPORT WAIT FAILED".into());
+            ui.set_task_title("EXPORT FAILED".into());
             ui.set_task_detail(format!("Runtime registry failed: {error}").into());
-            append_diagnostic(&ui, &format!("Queued export was not started because runtime preparation failed: {error}"));
+            append_diagnostic(&ui, &format!("Queued export was not started: {error}"));
         });
         return;
     }
 
     let Some(path) = registry_path else {
+        if !cancel_pending_export(state) { return; }
         let weak = weak.clone();
         let _ = weak.upgrade_in_event_loop(move |ui| {
             ui.set_task_active(false);
-            ui.set_task_title("EXPORT WAIT FAILED".into());
-            ui.set_task_detail("Runtime registry completed without a usable registry file".into());
+            ui.set_task_title("EXPORT FAILED".into());
+            ui.set_task_detail("Runtime registry file is unavailable".into());
         });
         return;
     };
-    attach_registry(&mut request, &path);
 
-    let engine = engine.clone();
-    let weak = weak.clone();
-    thread::spawn(move || {
-        let send_result = engine.send_value(request);
-        let _ = weak.upgrade_in_event_loop(move |ui| {
-            append_diagnostic(&ui, "Runtime registry attached to queued export.");
-            match send_result {
-                Ok(()) => {
-                    ui.set_task_completing(false);
-                    ui.set_task_completion_detail("".into());
-                    ui.set_task_active(true);
-                    ui.set_task_progress(0.02);
-                    ui.set_task_title("EXPORT".into());
-                    ui.set_task_detail("Runtime ready · export started".into());
-                }
-                Err(error) => {
+    // Cancel and dispatch share this lock. If Cancel wins, pending_export is
+    // removed and nothing is sent. If dispatch wins, send_value executes before
+    // the lock is released, so there is no taken-but-not-yet-sent ghost window.
+    let send_result = {
+        let mut guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                let weak = weak.clone();
+                let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_task_active(false);
                     ui.set_task_title("EXPORT FAILED".into());
-                    ui.set_task_detail(error.to_string().into());
-                }
+                    ui.set_task_detail("Export state is unavailable".into());
+                });
+                return;
             }
-        });
+        };
+        let Some(mut request) = guard.pending_export.take() else { return; };
+        attach_registry(&mut request, &path);
+        engine.send_value(request)
+    };
+
+    let weak = weak.clone();
+    let _ = weak.upgrade_in_event_loop(move |ui| match send_result {
+        Ok(()) => {
+            append_diagnostic(&ui, "Runtime registry attached to queued export.");
+            ui.set_task_completing(false);
+            ui.set_task_completion_detail("".into());
+            ui.set_task_active(true);
+            ui.set_task_progress(0.02);
+            ui.set_task_title("EXPORT".into());
+            ui.set_task_detail("Exporting…".into());
+        }
+        Err(error) => {
+            ui.set_task_active(false);
+            ui.set_task_title("EXPORT FAILED".into());
+            ui.set_task_detail(error.to_string().into());
+        }
     });
+}
+
+fn cancel_pending_export(state: &SharedState) -> bool {
+    state.lock()
+        .map(|mut guard| guard.pending_export.take().is_some())
+        .unwrap_or(false)
 }
 
 fn has_pending_export(state: &SharedState) -> bool {
@@ -1702,8 +1752,12 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         }
         "progress" => {
             ui.set_task_active(true);
-            let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
-            ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
+            // Percent 0 is the engine's indeterminate sentinel. Keep the
+            // last real value so phase announcements cannot rewind the bar.
+            if response.percent > 0 {
+                let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
+                ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
+            }
             ui.set_task_detail(response.message.into());
         }
         "done" => {
@@ -2032,6 +2086,16 @@ mod tests {
         assert!(bridge_family::is_supported(BridgeFamily::NeoForge, "1.21.10"));
         assert!(bridge_family::is_supported(BridgeFamily::Quilt, "1.21.10"));
         assert!(!runtime_registry_supported("unknown-loader", "1.21.10", Path::new("mods")));
+    }
+
+    #[test]
+    fn cancelling_pending_export_is_terminal() {
+        let state: SharedState = Arc::new(Mutex::new(AppState::default()));
+        state.lock().unwrap().pending_export = Some(json!({ "command": "export" }));
+        assert!(has_pending_export(&state));
+        assert!(cancel_pending_export(&state));
+        assert!(!has_pending_export(&state));
+        assert!(!cancel_pending_export(&state));
     }
 
     #[test]

@@ -378,7 +378,7 @@ public class IpcMode {
                     + schematicStats.paletteSize() + " palette states, "
                     + schematicStats.volume() + " volume"
                 );
-                progressIndeterminate("Publishing Litematica file");
+                progress(98, "Publishing Litematica file");
                 commitStagedOutput(stagedOutput, outFile);
                 stagedOutput = null;
                 // The final path now represents a complete export. Make the terminal
@@ -466,6 +466,33 @@ public class IpcMode {
             boolean optimize = getBoolOption(request, "optimize", false);
             boolean faceCulling = getBoolOption(request, "faceCulling", false);
             boolean hiddenBlockCulling = getBoolOption(request, "hiddenBlockCulling", false);
+
+            // The desktop export request is authoritative for FLATTER. The old
+            // path ignored these IPC options and let FlatterSettings fall back
+            // to unrelated JVM/env/legacy settings, so the UI could say ON or
+            // 64x64 while the Java exporter actually ran OFF or 16x16.
+            boolean flatterOptimization = getBoolOption(
+                request,
+                "flatterOptimization",
+                FlatterSettings.enabled()
+            );
+            int flatterCellSize = FlatterSettings.cellSize();
+            String requestedFlatterCellSize = getStringOption(request, "flatterCellSize", null);
+            if (requestedFlatterCellSize != null && !requestedFlatterCellSize.isBlank()) {
+                try {
+                    flatterCellSize = Integer.parseInt(requestedFlatterCellSize.trim());
+                } catch (NumberFormatException ignored) {
+                    log("[WARN] Invalid FLATTER cell size in export request: " + requestedFlatterCellSize);
+                }
+            }
+            flatterCellSize = FlatterSettings.normalizeCellSize(flatterCellSize);
+            System.setProperty("minesport.flatter", Boolean.toString(flatterOptimization));
+            System.setProperty("minesport.flatterCellSize", Integer.toString(flatterCellSize));
+            log(
+                "FLATTER " + (flatterOptimization ? "enabled" : "disabled")
+                    + " · cell " + flatterCellSize
+            );
+
             boolean blenderExport = getBoolOption(request, "blenderExport", false);
             String blenderAnimationMode = getStringOption(
                 request,
@@ -631,9 +658,9 @@ public class IpcMode {
         }
         int interval = Math.max(1, total / 100);
         if (done <= 1 || done >= total || done % interval == 0) {
-            int percent = (int)Math.round(done * 100.0 / total);
+            int percent = 5 + (int)Math.round(done * 35.0 / total);
             progress(
-                Math.max(1, Math.min(100, percent)),
+                Math.max(5, Math.min(40, percent)),
                 message + " · " + done + "/" + total + " chunks"
             );
         }
@@ -646,9 +673,9 @@ public class IpcMode {
         }
         long interval = Math.max(1L, total / 100L);
         if (done <= 1L || done >= total || done % interval == 0L) {
-            int percent = (int)Math.round(done * 99.0 / total);
+            int percent = 45 + (int)Math.round(done * 50.0 / total);
             progress(
-                Math.max(1, Math.min(99, percent)),
+                Math.max(45, Math.min(95, percent)),
                 "Writing Litematica · " + done + "/" + total + " state words"
             );
         }

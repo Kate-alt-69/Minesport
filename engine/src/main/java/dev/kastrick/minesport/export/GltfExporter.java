@@ -51,25 +51,31 @@ public class GltfExporter {
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
         Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
         Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
-        FlatterOptimizer.Result flatter = FlatterSettings.enabled()
-            ? FlatterOptimizer.compile(blocks, resolvers)
+        int progressBlocks = Math.max(blocks.size(), 1);
+        boolean flatterEnabled = FlatterSettings.enabled();
+        FlatterOptimizer.Result flatter = flatterEnabled
+            ? FlatterOptimizer.compile(blocks, resolvers, (doneCount, total) -> {
+                if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
+            })
             : FlatterOptimizer.Result.empty();
         Map<String,List<Quad>> groups = new LinkedHashMap<>();
         Map<String,int[]> individualBounds = new LinkedHashMap<>();
 
         int done = 0;
-        int total = Math.max(blocks.size(), 1);
+        int total = progressBlocks;
+        int progressBase = flatterEnabled ? total : 0;
+        int progressTotal = flatterEnabled ? total * 2 : total;
         int solid = 0;
 
         for (BlockData block : blocks) {
             if (block.isAir()) {
-                if (progress != null) progress.onProgress(++done, total);
+                if (progress != null) progress.onProgress(progressBase + ++done, progressTotal);
                 continue;
             }
 
             if (flatter.contains(block)) {
                 solid++;
-                if (progress != null) progress.onProgress(++done, total);
+                if (progress != null) progress.onProgress(progressBase + ++done, progressTotal);
                 continue;
             }
 
@@ -97,7 +103,7 @@ public class GltfExporter {
                 }
             }
             solid++;
-            if (progress != null) progress.onProgress(++done, total);
+            if (progress != null) progress.onProgress(progressBase + ++done, progressTotal);
         }
 
         // FLATTER objects deliberately remain separate even in ALL_MERGED mode.

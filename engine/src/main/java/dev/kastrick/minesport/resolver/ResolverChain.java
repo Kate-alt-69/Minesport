@@ -14,6 +14,11 @@ public class ResolverChain {
         "minecraft:builtin/generated",
         "minecraft:builtin/entity"
     );
+    private static final Set<String> ENTITY_RENDERED_MODELS = Set.of(
+        "minecraft:block/chest",
+        "minecraft:block/trapped_chest",
+        "minecraft:block/ender_chest"
+    );
     public static final String CLASSIC_MISSING_SOURCE = "Classic Missing Texture";
 
     private final List<AssetResolver> resolvers = new ArrayList<>();
@@ -70,7 +75,9 @@ public class ResolverChain {
             return model;
         }
         modelSources.put(normalized, "missing");
-        if (missingModels.add(normalized)) System.err.println("[ResolverChain] No model found for: " + normalized);
+        if (missingModels.add(normalized) && !ENTITY_RENDERED_MODELS.contains(normalized)) {
+            System.err.println("[ResolverChain] No model found for: " + normalized);
+        }
         return null;
     }
 

@@ -528,7 +528,7 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
     thread::spawn(move || {
         let logger = diagnostics::Logger::new("IPC").child("RX");
         let reader = BufReader::new(stdout);
-        let mut last_progress: Option<(String, String, i32)> = None;
+        let mut last_progress: Option<(String, String, i32, String)> = None;
         for line in reader.lines() {
             match line {
                 Ok(line) if !line.trim().is_empty() => {
@@ -544,7 +544,10 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                         "progress" => {
                             let percent = response.percent.clamp(0, 100);
                             let progress_key = (
-                                response.operation_id.clone(), response.trace_id.clone(), percent,
+                                response.operation_id.clone(),
+                                response.trace_id.clone(),
+                                percent,
+                                response.message.clone(),
                             );
                             if last_progress.as_ref() != Some(&progress_key) {
                                 logger.correlated(

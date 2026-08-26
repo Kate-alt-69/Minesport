@@ -144,41 +144,62 @@ public final class FlatterOptimizer {
     ) {}
 
     public static Result compile(List<BlockData> blocks, ResolverChain resolvers) {
-        return compile(blocks, resolvers, FlatterSettings.cellSize());
+        return compile(blocks, resolvers, FlatterSettings.cellSize(), null);
+    }
+
+    public static Result compile(
+        List<BlockData> blocks,
+        ResolverChain resolvers,
+        ObjExporter.ProgressCallback progress
+    ) {
+        return compile(blocks, resolvers, FlatterSettings.cellSize(), progress);
     }
 
     /** Explicit cell-size overload used by tests/tools without changing global settings. */
     public static Result compile(List<BlockData> blocks, ResolverChain resolvers, int requestedCellSize) {
+        return compile(blocks, resolvers, requestedCellSize, null);
+    }
+
+    public static Result compile(
+        List<BlockData> blocks,
+        ResolverChain resolvers,
+        int requestedCellSize,
+        ObjExporter.ProgressCallback progress
+    ) {
         if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
 
         int cellSize = FlatterSettings.normalizeCellSize(requestedCellSize);
-        // Use the IPC/export GeometryBuilder rather than a second plain asset
-        // builder. That wrapper understands BlockData.runtimeRegistryPath, so
-        // FLATTER and conventional objects now consume the exact same baked
-        // Minecraft model source after runtime-cache capture.
+        // Use the IPC/export GeometryBuilder so FLATTER and conventional output
+        // consume the same captured runtime baked-model source.
         GeometryBuilder geometry = new dev.kastrick.minesport.GeometryBuilder(resolvers);
         Map<MaterialKey,Boolean> opaqueCache = new HashMap<>();
         Map<ObjectKey,List<Candidate>> cells = new LinkedHashMap<>();
 
+        int analyzed = 0;
+        int total = Math.max(blocks.size(), 1);
+        int interval = Math.max(1, total / 200);
         for (BlockData block : blocks) {
-            if (block == null || block.isAir()) continue;
-            Candidate candidate = analyze(block, geometry, resolvers, opaqueCache);
-            if (candidate == null) continue;
-
-            CellKey cell = cellFor(block, cellSize);
-            String shapeKey = candidate.kind() == CandidateKind.SHAPE
-                ? candidate.paletteKey()
-                : "";
-            ObjectKey key = new ObjectKey(cell, candidate.kind(), shapeKey);
-            cells.computeIfAbsent(key, ignored -> new ArrayList<>()).add(candidate);
+            if (block != null && !block.isAir()) {
+                Candidate candidate = analyze(block, geometry, resolvers, opaqueCache);
+                if (candidate != null) {
+                    CellKey cell = cellFor(block, cellSize);
+                    String shapeKey = candidate.kind() == CandidateKind.SHAPE
+                        ? candidate.paletteKey()
+                        : "";
+                    ObjectKey key = new ObjectKey(cell, candidate.kind(), shapeKey);
+                    cells.computeIfAbsent(key, ignored -> new ArrayList<>()).add(candidate);
+                }
+            }
+            analyzed++;
+            if (progress != null && (analyzed == 1 || analyzed >= total || analyzed % interval == 0)) {
+                progress.onProgress(analyzed, total);
+            }
         }
 
         List<FlatterObject> objects = new ArrayList<>();
         Set<BlockData> included = Collections.newSetFromMap(new IdentityHashMap<>());
 
         for (var entry : cells.entrySet()) {
-            // A single block would only trade one normal object for one FLATTER
-            // object plus metadata. Repeated geometry is where virtualization wins.
             if (entry.getValue().size() < 2) continue;
             FlatterObject object = buildObject(entry.getKey(), entry.getValue());
             if (object == null || object.blockCount() < 2) continue;
