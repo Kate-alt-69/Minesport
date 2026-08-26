@@ -1,0 +1,114 @@
+name: One Shot Export Worker Rust and CI Identity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/export_worker_rust_ci_cleanup.py'
+      - '.github/workflows/one-shot-export-worker-rust-ci.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Apply Export Worker Rust and CI cleanup
+        run: |
+          python3 -m py_compile .github/export_worker_rust_ci_cleanup.py
+          python3 .github/export_worker_rust_ci_cleanup.py
+          git diff --check
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
+      - name: Install Slint build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+
+      - name: Check and test renamed Rust desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          cargo check --locked --all-targets
+          cargo test --locked --all-targets
+
+      - name: Exercise renamed compatibility helper
+        env:
+          MINESPORT_FAST_CHECK: '1'
+          MINESPORT_HEADLESS_EXPORT_WORKER_PREPARE: '1'
+        run: |
+          check_source() {
+            loader="$1"
+            version="$2"
+            out="$(cargo run --quiet --locked --manifest-path desktop/Cargo.toml --bin export-worker-prepare -- --loader "$loader" --version "$version" --source-only)"
+            echo "$loader $version -> $out"
+            test -d "$out"
+            test -n "$(find "$out" -type f -name 'MinesportExportWorker.java' -print -quit)"
+            test -n "$(find "$out" -type f -name 'ExportWorkerProtocol.java' -print -quit)"
+            test -n "$(find "$out" -type f -name 'ExportWorkerSender.java' -print -quit)"
+          }
+          check_source fabric 1.19.2
+          check_source fabric 26.2
+          check_source fabric 1.21.5
+          check_source forge 1.21.5
+          check_source neoforge 1.21.5
+          check_source quilt 1.21.5
+
+      - name: Validate maintained CI and packaging contracts
+        run: |
+          test -f desktop/src/export_worker_build.rs
+          test -f desktop/src/export_worker_cli.rs
+          test -f desktop/src/export_worker_compat.rs
+          test -f desktop/src/export_worker_family.rs
+          test -f desktop/src/export_worker_java.rs
+          test -f desktop/src/bin/export-worker-prepare.rs
+          test ! -e desktop/src/bridge_build.rs
+          test ! -e desktop/src/bridge_cli.rs
+          test ! -e desktop/src/bridge_compat.rs
+          test ! -e desktop/src/bridge_family.rs
+          test ! -e desktop/src/bridge_java.rs
+          test ! -e desktop/src/bin/bridge-prepare.rs
+          test -f .github/workflows/export-worker-1.19.yml
+          test -f .github/workflows/export-worker-1.20.yml
+          test ! -e .github/workflows/bridge-1.19.yml
+          test ! -e .github/workflows/bridge-1.20.yml
+          grep -q -- '--bin export-worker-prepare' .github/workflows/build.yml
+          grep -q 'MINESPORT_HEADLESS_EXPORT_WORKER_PREPARE' .github/workflows/build.yml
+          grep -q 'loader-export-workers-1.21.10' .github/workflows/build.yml
+          grep -q 'minesport_export_worker-fabric-${{ matrix.minecraft }}.jar' .github/workflows/build.yml
+          grep -q 'Minesport-0.2.1-x64' .github/workflows/build.yml
+          grep -q '<OutputName>Minesport-0.2.1-x64</OutputName>' installer/windows/Minesport.wixproj
+          ! grep -R -E -- '--bin bridge-prepare|MINESPORT_HEADLESS_BRIDGE_PREPARE|Minesport-0\.2\.0|recipe-bridges' .github/workflows
+          git diff --check
+
+      - name: Create tested Rust and CI cleanup commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/export_worker_rust_ci_cleanup.py .github/workflows/one-shot-export-worker-rust-ci.yml
+          rm -rf .github/__pycache__
+          git add -A
+          git diff --cached --check
+          git commit -m 'Rename Export Worker Rust and CI identities'
+          tested="$(git rev-parse HEAD)"
+          echo "TESTED_COMMIT=$tested"
+          set +e
+          git push origin HEAD:main
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "GitHub Actions cannot publish workflow-changing commits; tested object uploaded as $tested"
+          fi
+          exit 0
