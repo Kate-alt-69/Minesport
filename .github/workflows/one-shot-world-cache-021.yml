@@ -1,0 +1,55 @@
+name: One Shot Minesport 0.2.1 World Cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/world_cache_021_patch.py'
+      - '.github/workflows/one-shot-world-cache-021.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+      - name: Apply 0.2.1 world cache patch
+        run: python3 .github/world_cache_021_patch.py
+      - name: Test Java engine
+        working-directory: engine
+        run: bash ./gradlew --no-daemon test
+      - name: Install Slint build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
+      - name: Check Rust world cache and desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          cargo check --locked
+          cargo test --locked
+      - name: Validate patch
+        run: |
+          git diff --check
+          test -f desktop/src/world_cache.rs
+          test -f engine/src/main/java/dev/kastrick/minesport/cache/ChunkCacheMaterializer.java
+          grep -q 'version = "0.2.1"' desktop/Cargo.toml
+          grep -q 'const VERSION: &str = "0.2.1"' desktop/src/app.rs
+          grep -q 'worldCachePath' desktop/src/app.rs
+          grep -q 'ChunkCacheMaterializer' engine/src/main/java/dev/kastrick/minesport/IpcMode.java
+          grep -q 'kastrick.*software' desktop/src/world_cache.rs
+      - name: Publish tested 0.2.1 integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/world_cache_021_patch.py .github/workflows/one-shot-world-cache-021.yml
+          git add -A
+          git commit -m 'Start 0.2.1 world chunk cache'
+          git push origin HEAD:main
