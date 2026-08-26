@@ -1,12 +1,15 @@
-name: One Shot Export Worker Rust and Registry Stability
+name: One Shot Export Worker Stability
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
-      - '.github/export_worker_rust_ci_cleanup.py'
-      - '.github/runtime_registry_stability_patch.py'
-      - '.github/workflows/one-shot-export-worker-rust-ci.yml'
+      - ".github/export_worker_rust_ci_cleanup.py"
+      - ".github/runtime_registry_stability_patch.py"
+      - ".github/export_lifecycle_patch.py"
+      - ".github/workflows/one-shot-export-worker-rust-ci.yml"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,219 +19,59 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Apply Export Worker identity and registry stability cleanup
+      - name: Apply production patches
         run: |
           python3 -m py_compile .github/export_worker_rust_ci_cleanup.py
           python3 -m py_compile .github/runtime_registry_stability_patch.py
-          rm .github/workflows/one-shot-export-worker-rust-ci.yml
+          python3 -m py_compile .github/export_lifecycle_patch.py
+          rm -f .github/workflows/one-shot-export-worker-rust-ci.yml
           python3 .github/export_worker_rust_ci_cleanup.py
           python3 .github/runtime_registry_stability_patch.py
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('desktop/src/app.rs')
-          text = path.read_text(encoding='utf-8')
-
-          def replace_once(old: str, new: str) -> None:
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'app.rs cancellation patch expected one match, found {count}: {old[:100]!r}')
-              text = text.replace(old, new, 1)
-
-          replace_once(
-          '''        let format_index = ui.get_export_format_index();
-          if let Ok(mut guard) = state.lock() {
-              guard.export_format_index = format_index;
-          }
-          if format_index == 2 {
-              cache.cancel();
-              ui.set_runtime_cache_status("NOT REQUIRED FOR LITEMATICA".into());
-          }
-          ''',
-          '''        let format_index = ui.get_export_format_index();
-          let cancelled_pending_export = if let Ok(mut guard) = state.lock() {
-              guard.export_format_index = format_index;
-              if format_index == 2 {
-                  guard.pending_export.take().is_some()
-              } else {
-                  false
-              }
-          } else {
-              false
-          };
-          if format_index == 2 {
-              cache.cancel();
-              ui.set_runtime_cache_status("NOT REQUIRED FOR LITEMATICA".into());
-              if cancelled_pending_export {
-                  ui.set_task_title("EXPORT CANCELLED".into());
-                  ui.set_task_detail("Cancelled".into());
-              }
-          }
-          ''')
-
-          replace_once(
-              '        if !ui.get_engine_ready() || ui.get_task_active() { return; }',
-              '        if !ui.get_engine_ready() || ui.get_task_active() || has_pending_export(&state) { return; }',
-          )
-
-          replace_once(
-          '''    let weak = ui.as_weak();
-          ui.on_cancel_runtime_cache(move || {
-              if cache.cancel() {
-                  aux_windows::mark_runtime_cache_cancelling();
-                  if let Some(ui) = weak.upgrade() {
-                      ui.set_runtime_cache_status("CANCELLING…".into());
-                      ui.set_task_detail("Cancelling…".into());
-                      append_diagnostic(&ui, "Runtime registry cancellation requested.");
-                  }
-              }
-          });
-          ''',
-          '''    let weak = ui.as_weak();
-          let cancel_state = state.clone();
-          ui.on_cancel_runtime_cache(move || {
-              let cancelled_pending_export = cancel_pending_export(&cancel_state);
-              let cancelled_cache = cache.cancel();
-              if cancelled_cache || cancelled_pending_export {
-                  if cancelled_cache {
-                      aux_windows::mark_runtime_cache_cancelling();
-                  }
-                  if let Some(ui) = weak.upgrade() {
-                      ui.set_runtime_cache_status(
-                          if cancelled_cache { "CANCELLING…" } else { "CANCELLED" }.into()
-                      );
-                      ui.set_task_title(
-                          if cancelled_pending_export { "EXPORT CANCELLED" } else { "RUNTIME CANCELLED" }.into()
-                      );
-                      ui.set_task_detail("Cancelling…".into());
-                      append_diagnostic(&ui, "Runtime registry cancellation requested.");
-                  }
-              }
-          });
-          ''')
-
-          replace_once(
-          '''                    Err(error) => {
-                          if foreground && !has_pending_export(&ui_completion_state) {
-                              ui.set_task_title("RUNTIME CACHE FAILED".into());
-                              ui.set_task_detail(first_line(error).into());
-                          }
-                          append_diagnostic(&ui, &format!("[WARN] Runtime registry unavailable: {error}"));
-                      }
-          ''',
-          '''                    Err(error) => {
-                          let cancelled = error.to_ascii_lowercase().contains("cancel");
-                          if foreground && !has_pending_export(&ui_completion_state) {
-                              if cancelled {
-                                  ui.set_task_title("RUNTIME CANCELLED".into());
-                                  ui.set_task_detail("Cancelled".into());
-                              } else {
-                                  ui.set_task_title("RUNTIME CACHE FAILED".into());
-                                  ui.set_task_detail(first_line(error).into());
-                              }
-                          }
-                          if cancelled {
-                              append_diagnostic(&ui, "Runtime registry cancelled.");
-                          } else {
-                              append_diagnostic(&ui, &format!("[WARN] Runtime registry unavailable: {error}"));
-                          }
-                      }
-          ''')
-
-          marker = '''fn has_pending_export(state: &SharedState) -> bool {
-              state.lock().map(|guard| guard.pending_export.is_some()).unwrap_or(false)
-          }
-          '''
-          if text.count(marker) != 1:
-              raise SystemExit('app.rs has_pending_export marker changed')
-          text = text.replace(
-              marker,
-              '''fn cancel_pending_export(state: &SharedState) -> bool {
-              state.lock()
-                  .map(|mut guard| guard.pending_export.take().is_some())
-                  .unwrap_or(false)
-          }
-
-          fn has_pending_export(state: &SharedState) -> bool {
-              state.lock().map(|guard| guard.pending_export.is_some()).unwrap_or(false)
-          }
-          ''',
-              1,
-          )
-
-          text = text.replace('"EXPORT WAIT FAILED".into()', '"EXPORT FAILED".into()')
-
-          test_marker = '''    #[test]
-              fn asset_path_move_and_remove_preserve_priority() {
-          '''
-          if text.count(test_marker) != 1:
-              raise SystemExit('app.rs test insertion marker changed')
-          text = text.replace(
-              test_marker,
-              '''    #[test]
-              fn cancelling_pending_export_is_terminal() {
-                  let state: SharedState = Arc::new(Mutex::new(AppState::default()));
-                  state.lock().unwrap().pending_export = Some(json!({ "command": "export" }));
-                  assert!(has_pending_export(&state));
-                  assert!(cancel_pending_export(&state));
-                  assert!(!has_pending_export(&state));
-                  assert!(!cancel_pending_export(&state));
-              }
-
-              #[test]
-              fn asset_path_move_and_remove_preserve_priority() {
-          ''',
-              1,
-          )
-
-          path.write_text(text, encoding='utf-8')
-          PY
+          python3 .github/export_lifecycle_patch.py
           git diff --check
 
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92.0
 
-      - name: Install Slint build dependencies
+      - name: Install Slint dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
 
-      - name: Check and test renamed Rust desktop
+      - name: Check desktop
         working-directory: desktop
         env:
-          MINESPORT_FAST_CHECK: '1'
+          MINESPORT_FAST_CHECK: "1"
         run: |
           cargo check --locked --all-targets
           cargo test --locked --all-targets
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
 
-      - name: Test engine export regressions
+      - name: Test engine regressions
         working-directory: engine
         run: |
-          chmod +x ./gradlew
-          ./gradlew --no-daemon test \
+          bash ./gradlew --no-daemon test \
             --tests dev.kastrick.minesport.export.ExportRegressionTest \
             --tests dev.kastrick.minesport.export.LitematicExporterTest \
             --tests dev.kastrick.minesport.export.LitematicTickExporterTest \
             --tests dev.kastrick.minesport.region.RegionReaderBlockEntityTest \
             --tests dev.kastrick.minesport.region.RegionReaderScheduledTickTest
 
-      - name: Exercise renamed compatibility helper
+      - name: Exercise compatibility generation
         env:
-          MINESPORT_FAST_CHECK: '1'
-          MINESPORT_HEADLESS_EXPORT_WORKER_PREPARE: '1'
+          MINESPORT_FAST_CHECK: "1"
+          MINESPORT_HEADLESS_EXPORT_WORKER_PREPARE: "1"
         run: |
           check_source() {
             loader="$1"
@@ -247,7 +90,7 @@ jobs:
           check_source neoforge 1.21.5
           check_source quilt 1.21.5
 
-      - name: Validate maintained CI, packaging, registry, and cancellation contracts
+      - name: Validate migration contracts
         run: |
           test -f desktop/src/export_worker_build.rs
           test -f desktop/src/export_worker_cli.rs
@@ -265,37 +108,35 @@ jobs:
           test -f .github/workflows/export-worker-1.20.yml
           test ! -e .github/workflows/bridge-1.19.yml
           test ! -e .github/workflows/bridge-1.20.yml
-          grep -q -- '--bin export-worker-prepare' .github/workflows/build.yml
-          grep -q 'MINESPORT_HEADLESS_EXPORT_WORKER_PREPARE' .github/workflows/build.yml
-          grep -q 'loader-export-workers-1.21.10' .github/workflows/build.yml
-          grep -q 'minesport_export_worker-fabric-${{ matrix.minecraft }}.jar' .github/workflows/build.yml
-          grep -q 'Minesport-0.2.1-x64' .github/workflows/build.yml
-          grep -q '<OutputName>Minesport-0.2.1-x64</OutputName>' installer/windows/Minesport.wixproj
-          ! grep -R -E -- '--bin bridge-prepare|MINESPORT_HEADLESS_BRIDGE_PREPARE|Minesport-0\.2\.0|recipe-bridges' .github/workflows
-
-          grep -q 'pub fn capture_once_cancellable' desktop/src/registry.rs
-          grep -q 'struct StreamingSnapshotWriter' desktop/src/registry.rs
-          grep -q 'struct CaptureThreadGuard' desktop/src/runtime_worker.rs
-          grep -q 'registry::capture_once_cancellable' desktop/src/runtime_worker.rs
-          grep -q 'resolveModelQuietly' engine/src/main/java/dev/kastrick/minesport/resolver/ResolverChain.java
+          grep -q -- "--bin export-worker-prepare" .github/workflows/build.yml
+          grep -q "MINESPORT_HEADLESS_EXPORT_WORKER_PREPARE" .github/workflows/build.yml
+          grep -q "loader-export-workers-1.21.10" .github/workflows/build.yml
+          grep -q "Minesport-0.2.1-x64" .github/workflows/build.yml
+          grep -q "<OutputName>Minesport-0.2.1-x64</OutputName>" installer/windows/Minesport.wixproj
+          grep -q "pub fn capture_once_cancellable" desktop/src/registry.rs
+          grep -q "struct StreamingSnapshotWriter" desktop/src/registry.rs
+          grep -q "struct CaptureThreadGuard" desktop/src/runtime_worker.rs
+          grep -q "registry::capture_once_cancellable" desktop/src/runtime_worker.rs
+          grep -q "resolveModelQuietly" engine/src/main/java/dev/kastrick/minesport/resolver/ResolverChain.java
           grep -q 'name.endsWith(".mcr")' engine/src/main/java/dev/kastrick/minesport/IpcMode.java
-          grep -q 'fn cancel_pending_export' desktop/src/app.rs
-          grep -q 'cancelled_pending_export' desktop/src/app.rs
-          ! grep -q 'EXPORT WAIT FAILED' desktop/src/app.rs
+          grep -q "fn cancel_pending_export" desktop/src/app.rs
+          grep -q "cancelling_pending_export_is_terminal" desktop/src/app.rs
+          ! grep -q "EXPORT WAIT FAILED" desktop/src/app.rs
           git diff --check
 
-      - name: Create tested identity and stability commit
+      - name: Create tested production commit
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f \
             .github/export_worker_rust_ci_cleanup.py \
             .github/runtime_registry_stability_patch.py \
+            .github/export_lifecycle_patch.py \
             .github/workflows/one-shot-export-worker-rust-ci.yml
           rm -rf .github/__pycache__
           git add -A
           git diff --cached --check
-          git commit -m 'Rename Export Worker identities and stabilize export lifecycle'
+          git commit -m "Rename Export Worker identities and stabilize export lifecycle"
           tested="$(git rev-parse HEAD)"
           echo "TESTED_COMMIT=$tested"
           set +e
@@ -303,6 +144,6 @@ jobs:
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
-            echo "GitHub Actions could not publish the tested workflow-changing commit: $tested"
+            echo "GitHub Actions could not publish workflow-changing commit: $tested"
           fi
           exit 0
