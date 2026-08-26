@@ -120,6 +120,139 @@ replace_once(
 )
 
 replace_once(
+    '''fn dispatch_pending_export(
+    weak: &slint::Weak<MainWindow>,
+    engine: &JavaEngine,
+    state: &SharedState,
+    registry_path: Option<PathBuf>,
+    cache_error: Option<String>,
+) {
+    let request = state.lock().ok().and_then(|mut guard| guard.pending_export.take());
+    let Some(mut request) = request else { return; };
+
+    if let Some(error) = cache_error.as_ref() {
+        let error = first_line(error).to_string();
+        let weak = weak.clone();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            ui.set_task_active(false);
+            ui.set_task_title("EXPORT WAIT FAILED".into());
+            ui.set_task_detail(format!("Runtime registry failed: {error}").into());
+            append_diagnostic(&ui, &format!("Queued export was not started because runtime preparation failed: {error}"));
+        });
+        return;
+    }
+
+    let Some(path) = registry_path else {
+        let weak = weak.clone();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            ui.set_task_active(false);
+            ui.set_task_title("EXPORT WAIT FAILED".into());
+            ui.set_task_detail("Runtime registry completed without a usable registry file".into());
+        });
+        return;
+    };
+    attach_registry(&mut request, &path);
+
+    let engine = engine.clone();
+    let weak = weak.clone();
+    thread::spawn(move || {
+        let send_result = engine.send_value(request);
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            append_diagnostic(&ui, "Runtime registry attached to queued export.");
+            match send_result {
+                Ok(()) => {
+                    ui.set_task_completing(false);
+                    ui.set_task_completion_detail("".into());
+                    ui.set_task_active(true);
+                    ui.set_task_progress(0.02);
+                    ui.set_task_title("EXPORT".into());
+                    ui.set_task_detail("Runtime ready · export started".into());
+                }
+                Err(error) => {
+                    ui.set_task_active(false);
+                    ui.set_task_title("EXPORT FAILED".into());
+                    ui.set_task_detail(error.to_string().into());
+                }
+            }
+        });
+    });
+}
+''',
+    '''fn dispatch_pending_export(
+    weak: &slint::Weak<MainWindow>,
+    engine: &JavaEngine,
+    state: &SharedState,
+    registry_path: Option<PathBuf>,
+    cache_error: Option<String>,
+) {
+    if let Some(error) = cache_error.as_ref() {
+        if !cancel_pending_export(state) { return; }
+        let error = first_line(error).to_string();
+        let weak = weak.clone();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            ui.set_task_active(false);
+            ui.set_task_title("EXPORT FAILED".into());
+            ui.set_task_detail(format!("Runtime registry failed: {error}").into());
+            append_diagnostic(&ui, &format!("Queued export was not started: {error}"));
+        });
+        return;
+    }
+
+    let Some(path) = registry_path else {
+        if !cancel_pending_export(state) { return; }
+        let weak = weak.clone();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            ui.set_task_active(false);
+            ui.set_task_title("EXPORT FAILED".into());
+            ui.set_task_detail("Runtime registry file is unavailable".into());
+        });
+        return;
+    };
+
+    // Cancel and dispatch share this lock. If Cancel wins, pending_export is
+    // removed and nothing is sent. If dispatch wins, send_value executes before
+    // the lock is released, so there is no taken-but-not-yet-sent ghost window.
+    let send_result = {
+        let mut guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                let weak = weak.clone();
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    ui.set_task_active(false);
+                    ui.set_task_title("EXPORT FAILED".into());
+                    ui.set_task_detail("Export state is unavailable".into());
+                });
+                return;
+            }
+        };
+        let Some(mut request) = guard.pending_export.take() else { return; };
+        attach_registry(&mut request, &path);
+        engine.send_value(request)
+    };
+
+    let weak = weak.clone();
+    let _ = weak.upgrade_in_event_loop(move |ui| match send_result {
+        Ok(()) => {
+            append_diagnostic(&ui, "Runtime registry attached to queued export.");
+            ui.set_task_completing(false);
+            ui.set_task_completion_detail("".into());
+            ui.set_task_active(true);
+            ui.set_task_progress(0.02);
+            ui.set_task_title("EXPORT".into());
+            ui.set_task_detail("Exporting…".into());
+        }
+        Err(error) => {
+            ui.set_task_active(false);
+            ui.set_task_title("EXPORT FAILED".into());
+            ui.set_task_detail(error.to_string().into());
+        }
+    });
+}
+''',
+    "queued export dispatch serialization",
+)
+
+replace_once(
     '''fn has_pending_export(state: &SharedState) -> bool {
     state.lock().map(|guard| guard.pending_export.is_some()).unwrap_or(false)
 }
@@ -164,6 +297,7 @@ for required in (
     "cancelled_pending_export",
     "cancelling_pending_export_is_terminal",
     "has_pending_export(&state) { return; }",
+    "Cancel and dispatch share this lock",
 ):
     if required not in text:
         raise SystemExit(f"missing lifecycle invariant: {required}")
