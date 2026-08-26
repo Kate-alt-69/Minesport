@@ -34,6 +34,17 @@ jobs:
           p.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
           python3 .github/world_cache_021_patch.py
+          git checkout HEAD -- desktop/Cargo.lock
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('desktop/Cargo.lock')
+          text = p.read_text(encoding='utf-8')
+          old = 'name = "minesport-desktop"\nversion = "0.2.0"'
+          new = 'name = "minesport-desktop"\nversion = "0.2.1"'
+          if text.count(old) != 1:
+              raise SystemExit(f'Cargo.lock Minesport package match count: {text.count(old)}')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Test Java engine
         working-directory: engine
         run: bash ./gradlew --no-daemon test
