@@ -129,7 +129,7 @@ where
     F: FnMut(Progress) + Send,
 {
     let family = BridgeFamily::parse(loader)
-        .ok_or_else(|| anyhow!("unsupported runtime Bridge loader {loader:?}"))?;
+        .ok_or_else(|| anyhow!("unsupported Export Worker loader {loader:?}"))?;
     let version = bridge_compat::normalize_version(version)
         .ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
     if !bridge_family::is_supported(family, &version) {
@@ -472,7 +472,7 @@ where
 
     if fast_bundled_fabric {
         let bridge = runtime::materialize_bundled_bridge()?;
-        let target = run_mods.join("minesport-bridge-fabric-0.2.0.jar");
+        let target = run_mods.join("minesport_export_worker-fabric-1.21.10.jar");
         link_or_copy(&bridge, &target)
             .with_context(|| format!("stage embedded Bridge {}", bridge.display()))?;
     }
@@ -695,9 +695,9 @@ fn start_direct_worker(
     for (key, value) in &manifest.environment_overrides {
         command.env(key, value);
     }
-    command.env("MINESPORT_BRIDGE_PORT", "25590");
-    command.env("MINESPORT_BRIDGE_MODE", "all");
-    command.env("MINESPORT_BRIDGE_WORKER", "1");
+    command.env("MINESPORT_EXPORT_WORKER_PORT", "25590");
+    command.env("MINESPORT_EXPORT_WORKER_MODE", "all");
+    command.env("MINESPORT_EXPORT_WORKER", "1");
     hide_console_window(&mut command);
     command.spawn().with_context(|| {
         format!(
@@ -848,9 +848,9 @@ fn start_gradle_worker(
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     sanitize_java_environment(&mut command, java_home);
-    command.env("MINESPORT_BRIDGE_PORT", "25590");
-    command.env("MINESPORT_BRIDGE_MODE", "all");
-    command.env("MINESPORT_BRIDGE_WORKER", "1");
+    command.env("MINESPORT_EXPORT_WORKER_PORT", "25590");
+    command.env("MINESPORT_EXPORT_WORKER_MODE", "all");
+    command.env("MINESPORT_EXPORT_WORKER", "1");
     // Inherited by JavaExec/runClient children as well as the wrapper JVM. It
     // reduces JVM/GC/common-pool thread fan-out without changing game/model data.
     command.env("JAVA_TOOL_OPTIONS", "-XX:ActiveProcessorCount=2");

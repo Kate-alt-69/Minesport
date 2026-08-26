@@ -2,10 +2,10 @@ license="All Rights Reserved"
 
 [[mods]]
 modId="minesport_bridge"
-version="0.2.0"
-displayName="Minesport Bridge"
+version="0.2.1"
+displayName="Minesport Export Worker"
 authors="Kastrick"
-description='''Minesport runtime-registry bridge for NeoForge. Captures registered block states, baked geometry, texture identifiers and light metadata through an isolated client worker, then exits.'''
+description='''Minesport runtime-model export worker for NeoForge. Captures registered block states, baked geometry, texture identifiers and light metadata through an isolated client worker, then exits.'''
 
 [[dependencies.minesport_bridge]]
 modId="neoforge"

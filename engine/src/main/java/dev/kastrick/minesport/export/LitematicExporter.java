@@ -295,7 +295,7 @@ public final class LitematicExporter {
         metadata.put("Name", displayName);
         metadata.put("Author", author == null ? "" : author);
         metadata.put("Description", description == null ? "" : description);
-        metadata.put("Software", "Minesport 0.2.0");
+        metadata.put("Software", "Minesport 0.2.1");
         metadata.put("RegionCount", 1);
         metadata.put("TimeCreated", now);
         metadata.put("TimeModified", now);

@@ -1,10 +1,10 @@
 #!/usr/bin/env pwsh
-# Minesport 0.2.0 smart build + optional packaging script.
+# Minesport 0.2.1 smart build + optional packaging script.
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AppVersion = '0.2.0'
-$BridgeVersion = '0.2.0'
+$AppVersion = '0.2.1'
+$WorkerMinecraftVersion = '1.21.10'
 $BuildNsisInstaller = $false
 $BuildInnoInstaller = $false
 $BuildMsiInstaller = $false
@@ -24,11 +24,11 @@ Default behavior:
   Then rebuilds ONLY components whose source/config fingerprint changed.
   Unchanged Fabric/Forge/NeoForge/Quilt Bridges and the Java engine are reused
   without invoking Gradle at all. The final Minesport.exe embeds all four
-  canonical Minecraft 1.21.10 loader Bridges.
+  canonical Minecraft 1.21.10 loader Export Workers.
 
 Fast development:
   --check                 Rust + Slint compile/error check only. Never runs Gradle.
-  --desktop-only          Reuse the already-built engine + all four loader Bridges
+  --desktop-only          Reuse the already-built engine + all four loader Export Workers
                           and run only the Rust/Slint desktop stage.
   --fresh                 Delete Minesport build outputs/state and rebuild everything.
                           Gradle/Cargo download caches are deliberately preserved.
@@ -77,17 +77,17 @@ if ($Fresh -and $DesktopOnly) {
 
 Set-Location $Root
 
-$bundledDir = Join-Path $Root 'dist\bundled-bridge'
+$bundledDir = Join-Path $Root 'dist\bundled-export-worker'
 $stateFile = Join-Path $Root 'dist\.minesport-build-state'
 $bridgeSpecs = @(
-    @{ Name = 'Fabric'; Slug = 'fabric'; Project = 'minesport-bridge-fabric'; Env = 'MINESPORT_BRIDGE_FABRIC_JAR' },
-    @{ Name = 'Forge'; Slug = 'forge'; Project = 'minesport-bridge-forge'; Env = 'MINESPORT_BRIDGE_FORGE_JAR' },
-    @{ Name = 'NeoForge'; Slug = 'neoforge'; Project = 'minesport-bridge-neoforge'; Env = 'MINESPORT_BRIDGE_NEOFORGE_JAR' },
-    @{ Name = 'Quilt'; Slug = 'quilt'; Project = 'minesport-bridge-quilt'; Env = 'MINESPORT_BRIDGE_QUILT_JAR' }
+    @{ Name = 'Fabric'; Slug = 'fabric'; Project = 'minesport-bridge-fabric'; Env = 'MINESPORT_EXPORT_WORKER_FABRIC_JAR' },
+    @{ Name = 'Forge'; Slug = 'forge'; Project = 'minesport-bridge-forge'; Env = 'MINESPORT_EXPORT_WORKER_FORGE_JAR' },
+    @{ Name = 'NeoForge'; Slug = 'neoforge'; Project = 'minesport-bridge-neoforge'; Env = 'MINESPORT_EXPORT_WORKER_NEOFORGE_JAR' },
+    @{ Name = 'Quilt'; Slug = 'quilt'; Project = 'minesport-bridge-quilt'; Env = 'MINESPORT_EXPORT_WORKER_QUILT_JAR' }
 )
 $bundledBridges = @{}
 foreach ($bridge in $bridgeSpecs) {
-    $bundledBridges[$bridge.Slug] = Join-Path $bundledDir "minesport-bridge-$($bridge.Slug)-$BridgeVersion.jar"
+    $bundledBridges[$bridge.Slug] = Join-Path $bundledDir "minesport_export_worker-$($bridge.Slug)-$WorkerMinecraftVersion.jar"
 }
 
 function Get-TrackedFiles([string]$Path) {
@@ -201,7 +201,7 @@ function Remove-BuildOutputs {
         (Join-Path $Root 'engine\.gradle'),
         (Join-Path $Root 'desktop\target'),
         (Join-Path $Root 'desktop\dist'),
-        (Join-Path $Root 'dist\bundled-bridge'),
+        (Join-Path $Root 'dist\bundled-export-worker'),
         (Join-Path $Root 'dist\source'),
         (Join-Path $Root 'dist\installer'),
         $stateFile
@@ -282,13 +282,13 @@ function Build-Bridge($bridge) {
         } else {
             & .\gradlew.bat --no-daemon --stacktrace build
         }
-        if ($LASTEXITCODE -ne 0) { throw "$($bridge.Name) Bridge build failed." }
+        if ($LASTEXITCODE -ne 0) { throw "$($bridge.Name) Export Worker build failed." }
         $bridgeJar = Get-ChildItem -Path 'build\libs\*.jar' -File |
             Where-Object { $_.Name -notmatch '(sources|javadoc)' } |
             Sort-Object Name |
             Select-Object -First 1
         if (-not $bridgeJar) {
-            throw "$($bridge.Name) Bridge JAR was not produced under $($bridge.Project)\build\libs."
+            throw "$($bridge.Name) Export Worker JAR was not produced under $($bridge.Project)\build\libs."
         }
         $bridgeJar = $bridgeJar.FullName
     } finally {
@@ -296,20 +296,20 @@ function Build-Bridge($bridge) {
     }
 
     Copy-Item -Force $bridgeJar $destination
-    if ((Get-Item $destination).Length -le 0) { throw "Staged $($bridge.Name) Bridge is empty: $destination" }
+    if ((Get-Item $destination).Length -le 0) { throw "Staged $($bridge.Name) Export Worker is empty: $destination" }
     $BuildState[$key] = $fingerprint
     Save-BuildState
-    Write-Host "     staged: dist\bundled-bridge\$(Split-Path -Leaf $destination)" -ForegroundColor Green
+    Write-Host "     staged: dist\bundled-export-worker\$(Split-Path -Leaf $destination)" -ForegroundColor Green
 }
 
 if (-not $DesktopOnly) {
-    Write-Host '[1/3] Bundled Minecraft 1.21.10 loader Bridges...' -ForegroundColor Yellow
+    Write-Host '[1/3] Bundled Minecraft 1.21.10 loader Export Workers...' -ForegroundColor Yellow
     foreach ($bridge in $bridgeSpecs) {
         Build-Bridge $bridge
     }
     Write-Host ''
 } else {
-    Write-Host '[1/3] Reusing bundled Minecraft loader Bridges...' -ForegroundColor Yellow
+    Write-Host '[1/3] Reusing bundled Minecraft loader Export Workers...' -ForegroundColor Yellow
     foreach ($bridge in $bridgeSpecs) {
         $jar = $bundledBridges[$bridge.Slug]
         if (-not (Test-Path $jar)) {
@@ -331,7 +331,7 @@ if (-not $DesktopOnly) {
         Where-Object { $_.Name -notmatch 'sources' } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
-    $existingEnginePath = if ($existingEngine) { $existingEngine.FullName } else { Join-Path $engineProject 'build\libs\minesport-engine-0.2.0.jar' }
+    $existingEnginePath = if ($existingEngine) { $existingEngine.FullName } else { Join-Path $engineProject 'build\libs\minesport-engine-0.2.1.jar' }
 
     if (Test-NeedsRebuild 'engine' $engineFingerprint $existingEnginePath $engineProject) {
         Write-Host '  -> changed/missing, building...' -ForegroundColor Yellow
@@ -397,13 +397,13 @@ $desktopFingerprint = Get-CompositeFingerprint @(
 )
 
 $previousEngineJar = $env:MINESPORT_ENGINE_JAR
-$previousLegacyBridgeJar = $env:MINESPORT_BRIDGE_JAR
+$previousLegacyBridgeJar = $env:MINESPORT_EXPORT_WORKER_JAR
 $previousBridgeEnv = @{}
 foreach ($bridge in $bridgeSpecs) {
     $previousBridgeEnv[$bridge.Env] = [Environment]::GetEnvironmentVariable($bridge.Env)
 }
 $env:MINESPORT_ENGINE_JAR = $engineJar
-$env:MINESPORT_BRIDGE_JAR = $bundledBridges['fabric']
+$env:MINESPORT_EXPORT_WORKER_JAR = $bundledBridges['fabric']
 foreach ($bridge in $bridgeSpecs) {
     [Environment]::SetEnvironmentVariable($bridge.Env, $bundledBridges[$bridge.Slug])
 }
@@ -443,7 +443,7 @@ try {
     }
 } finally {
     if ($null -eq $previousEngineJar) { Remove-Item Env:MINESPORT_ENGINE_JAR -ErrorAction SilentlyContinue } else { $env:MINESPORT_ENGINE_JAR = $previousEngineJar }
-    if ($null -eq $previousLegacyBridgeJar) { Remove-Item Env:MINESPORT_BRIDGE_JAR -ErrorAction SilentlyContinue } else { $env:MINESPORT_BRIDGE_JAR = $previousLegacyBridgeJar }
+    if ($null -eq $previousLegacyBridgeJar) { Remove-Item Env:MINESPORT_EXPORT_WORKER_JAR -ErrorAction SilentlyContinue } else { $env:MINESPORT_EXPORT_WORKER_JAR = $previousLegacyBridgeJar }
     foreach ($bridge in $bridgeSpecs) {
         [Environment]::SetEnvironmentVariable($bridge.Env, $previousBridgeEnv[$bridge.Env])
     }

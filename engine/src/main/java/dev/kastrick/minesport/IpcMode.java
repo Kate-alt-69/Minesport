@@ -21,7 +21,7 @@ public class IpcMode {
     private static final int MAX_CUSTOM_SELECTION = 5_000_000;
 
     public static void run() {
-        send("info", json -> json.addProperty("version", "0.2.0"));
+        send("info", json -> json.addProperty("version", "0.2.1"));
         log("Minesport engine ready (IPC mode)");
 
         try (var reader = new BufferedReader(new InputStreamReader(System.in))) {

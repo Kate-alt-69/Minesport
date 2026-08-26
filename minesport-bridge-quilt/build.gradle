@@ -48,3 +48,9 @@ java {
     targetCompatibility = JavaVersion.VERSION_21
     withSourcesJar()
 }
+
+// 0.2.1: the Minecraft target is part of the worker filename; the Minesport
+// release version remains mod metadata and must not be appended to the JAR name.
+tasks.withType(org.gradle.api.tasks.bundling.AbstractArchiveTask).configureEach {
+    archiveVersion = ''
+}

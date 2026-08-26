@@ -21,9 +21,9 @@ public class MinesportBridge implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        System.out.println("[MinesportBridge] Initializing 1.19 runtime registry worker...");
+        System.out.println("[MinesportExportWorker] Initializing 1.19 runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
-            System.out.println("[MinesportBridge] Client resources ready — starting registry/model dump");
+            System.out.println("[MinesportExportWorker] Client resources ready — starting registry/model dump");
             // CLIENT_STARTED already runs on Minecraft's client thread. Running
             // the dump here avoids bouncing every single block back through
             // client.execute(...) and waiting on a CompletableFuture.
@@ -33,10 +33,10 @@ public class MinesportBridge implements ClientModInitializer {
 
     private void runDump(Minecraft client) {
         try (BridgeSender sender = new BridgeSender()) {
-            String modeEnv = System.getenv("MINESPORT_BRIDGE_MODE");
+            String modeEnv = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             String mode = (modeEnv != null) ? modeEnv : "all";
 
-            String nsEnv = System.getenv("MINESPORT_BRIDGE_NS");
+            String nsEnv = System.getenv("MINESPORT_EXPORT_WORKER_NS");
             Set<String> targetNs = null;
             if (nsEnv != null && !nsEnv.isEmpty()) {
                 targetNs = new HashSet<>(Arrays.asList(nsEnv.split(",")));
@@ -65,7 +65,7 @@ public class MinesportBridge implements ClientModInitializer {
                 getLoadedMods()
             ));
 
-            System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " registered block types...");
+            System.out.println("[MinesportExportWorker] Dumping " + allBlocks.size() + " registered block types...");
             for (Block block : allBlocks) {
                 ResourceLocation id = Registry.BLOCK.getKey(block);
                 if (id == null) continue;
@@ -87,11 +87,10 @@ public class MinesportBridge implements ClientModInitializer {
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
-            System.out.println("[MinesportBridge] Registry/model dump complete. Exiting worker.");
-            Thread.sleep(250);
+            System.out.println("[MinesportExportWorker] Registry/model dump complete. Exiting worker.");
 
         } catch (Exception e) {
-            System.err.println("[MinesportBridge] Fatal: " + e.getMessage());
+            System.err.println("[MinesportExportWorker] Fatal: " + e.getMessage());
             e.printStackTrace();
         } finally {
             Minecraft.getInstance().stop();

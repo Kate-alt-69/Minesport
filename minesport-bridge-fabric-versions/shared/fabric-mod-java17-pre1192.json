@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minesport_bridge_fabric",
   "version": "${version}",
-  "name": "Minesport Bridge (Fabric)",
+  "name": "Minesport Export Worker (Fabric)",
   "description": "Dynamically prepared Minesport Fabric bridge for Minecraft ${minecraft_version}.",
   "authors": [
     "Kastrick"

@@ -43,7 +43,7 @@ fn main() -> Result<()> {
             "-source-only" | "--source-only" => source_only = true,
             "-h" | "--help" => {
                 println!(
-                    "Minesport Rust Bridge prepare helper\n\nUsage:\n  bridge-prepare --version <minecraft> [--loader fabric|forge|neoforge|quilt] [--output <directory>] [--source-only]\n\nOptions:\n  --version <minecraft>   Minecraft version to prepare\n  --loader <loader>       Bridge family (default: fabric)\n  --output <directory>    Optional directory for the compiled Bridge JAR\n  --source-only           Prepare patched source and print its workspace without compiling"
+                    "Minesport Rust Export Worker prepare helper\n\nUsage:\n  bridge-prepare --version <minecraft> [--loader fabric|forge|neoforge|quilt] [--output <directory>] [--source-only]\n\nOptions:\n  --version <minecraft>   Minecraft version to prepare\n  --loader <loader>       Export Worker loader (default: fabric)\n  --output <directory>    Optional directory for the compiled Export Worker JAR\n  --source-only           Prepare patched source and print its workspace without compiling"
                 );
                 return Ok(());
             }
@@ -52,7 +52,7 @@ fn main() -> Result<()> {
     }
 
     let family = BridgeFamily::parse(&loader)
-        .ok_or_else(|| anyhow!("unsupported Bridge loader {loader:?}"))?;
+        .ok_or_else(|| anyhow!("unsupported Export Worker loader {loader:?}"))?;
     let version = version.ok_or_else(|| anyhow!("--version is required"))?;
     let version = bridge_compat::normalize_version(&version)
         .ok_or_else(|| anyhow!("invalid Minecraft version"))?;
@@ -138,7 +138,7 @@ fn main() -> Result<()> {
 
 fn output_name(family: BridgeFamily, version: &str) -> String {
     format!(
-        "minesport-bridge-{}-{}.jar",
+        "minesport_export_worker-{}-{}.jar",
         family.label().to_ascii_lowercase(),
         safe(version)
     )
@@ -147,14 +147,14 @@ fn output_name(family: BridgeFamily, version: &str) -> String {
 fn copy_file(source: &Path, destination: &Path) -> Result<()> {
     fs::copy(source, destination).with_context(|| {
         format!(
-            "copy compiled Bridge {} to {}",
+            "copy compiled Export Worker {} to {}",
             source.display(),
             destination.display()
         )
     })?;
     if !destination.is_file() || fs::metadata(destination)?.len() == 0 {
         bail!(
-            "compiled compatibility Bridge is missing or empty: {}",
+            "compiled compatibility Export Worker is missing or empty: {}",
             destination.display()
         );
     }
@@ -194,7 +194,7 @@ mod tests {
     fn fabric_recipe_filename_contains_family() {
         assert_eq!(
             output_name(BridgeFamily::Fabric, "1.21.5"),
-            "minesport-bridge-fabric-1.21.5.jar"
+            "minesport_export_worker-fabric-1.21.5.jar"
         );
     }
 
@@ -202,15 +202,15 @@ mod tests {
     fn loader_recipe_filename_contains_family() {
         assert_eq!(
             output_name(BridgeFamily::Forge, "1.21.5"),
-            "minesport-bridge-forge-1.21.5.jar"
+            "minesport_export_worker-forge-1.21.5.jar"
         );
         assert_eq!(
             output_name(BridgeFamily::NeoForge, "1.21.7"),
-            "minesport-bridge-neoforge-1.21.7.jar"
+            "minesport_export_worker-neoforge-1.21.7.jar"
         );
         assert_eq!(
             output_name(BridgeFamily::Quilt, "1.21.6"),
-            "minesport-bridge-quilt-1.21.6.jar"
+            "minesport_export_worker-quilt-1.21.6.jar"
         );
     }
 }

@@ -22,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-const VERSION: &str = "0.2.0";
+const VERSION: &str = "0.2.1";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum BlockRequestPurpose {

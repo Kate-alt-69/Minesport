@@ -116,7 +116,7 @@ pub enum CaptureNotice {
     Complete { path: PathBuf, blocks: usize },
 }
 
-/// Receive one complete `MINESPORT_BRIDGE_MODE=all` registry dump and persist
+/// Receive one complete `MINESPORT_EXPORT_WORKER_MODE=all` registry dump and persist
 /// it as schema-4 `registry.data`. The Bridge wire protocol remains newline
 /// JSON; only the persistent hot-path cache is binary.
 pub fn capture_once<F>(

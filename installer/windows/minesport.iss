@@ -1,5 +1,5 @@
 #define MyAppName "Minesport"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.2.1"
 #define MyAppPublisher "Kastrick"
 #ifndef SourceDir
   #define SourceDir "..\.."
@@ -30,7 +30,7 @@ RestartApplications=no
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
 Name: "blender"; Description: "Install Blender 5.2 LTS (downloads from blender.org)"; GroupDescription: "Optional integrations:"; Flags: unchecked
-Name: "translator"; Description: "Install the Minesport 0.2.0 Blender translator for detected Blender 4.3+ profiles"; GroupDescription: "Optional integrations:"; Flags: unchecked
+Name: "translator"; Description: "Install the Minesport 0.2.1 Blender translator for detected Blender 4.3+ profiles"; GroupDescription: "Optional integrations:"; Flags: unchecked
 
 [Dirs]
 Name: "{app}\tools"
@@ -46,7 +46,7 @@ Name: "{autodesktop}\Minesport"; Filename: "{app}\minesport.exe"; WorkingDir: "{
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\install-blender.ps1"""; StatusMsg: "Installing Blender 5.2 LTS..."; Flags: waituntilterminated; Tasks: blender
-Filename: "{app}\minesport.exe"; Parameters: "--install-blender-translator"; StatusMsg: "Installing Minesport 0.2.0 Blender translator..."; Flags: waituntilterminated runhidden runascurrentuser; Tasks: translator
+Filename: "{app}\minesport.exe"; Parameters: "--install-blender-translator"; StatusMsg: "Installing Minesport 0.2.1 Blender translator..."; Flags: waituntilterminated runhidden runascurrentuser; Tasks: translator
 
 [UninstallDelete]
 ; Remove bridge-data left by older pre-embedded installs.

@@ -3,7 +3,7 @@
 !endif
 
 !define APP_NAME "Minesport"
-!define APP_VERSION "0.2.0"
+!define APP_VERSION "0.2.1"
 !define APP_PUBLISHER "Kastrick"
 !define APP_EXE "minesport.exe"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Minesport"
@@ -18,7 +18,7 @@ SetCompressor /SOLID lzma
 CRCCheck force
 BrandingText "${APP_PUBLISHER}"
 
-VIProductVersion "0.2.0.0"
+VIProductVersion "0.2.1.0"
 VIAddVersionKey /LANG=1033 "ProductName" "${APP_NAME}"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=1033 "CompanyName" "${APP_PUBLISHER}"
@@ -105,10 +105,10 @@ Section /o "Install Minesport Blender translator" SEC_TRANSLATOR
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install Minesport 0.2.0 with embedded Fabric, Forge, NeoForge and Quilt runtime Bridges."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install Minesport 0.2.1 with embedded Fabric, Forge, NeoForge and Quilt runtime Bridges."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "Create a Minesport shortcut on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_BLENDER} "Download and install Blender 5.2 LTS from the official Blender Foundation mirror."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_TRANSLATOR} "Install the Minesport 0.2.0 Blender translator into detected Blender 4.3+ profiles."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_TRANSLATOR} "Install the Minesport 0.2.1 Blender translator into detected Blender 4.3+ profiles."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"

@@ -2,15 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="0.2.0"
-BRIDGE_VERSION="0.2.0"
+VERSION="0.2.1"
+WORKER_MC_VERSION="1.21.10"
 BUILD_DEB=false
 BUILD_APPIMAGE=false
 DESKTOP_ONLY=false
 FRESH=false
 CHECK_ONLY=false
 STATE_FILE="$ROOT/dist/.minesport-build-state"
-BUNDLED_DIR="$ROOT/dist/bundled-bridge"
+BUNDLED_DIR="$ROOT/dist/bundled-export-worker"
 
 show_help() {
   cat <<'EOF'
@@ -21,12 +21,12 @@ Usage:
 
 Default:
   Runs a fast Rust/Slint check when reusable artifacts exist, then rebuilds
-  only source trees whose SHA-256 fingerprint changed. Unchanged loader Bridge
+  only source trees whose SHA-256 fingerprint changed. Unchanged loader Export Worker
   projects and the Java engine skip Gradle entirely.
 
 Fast development:
   --check                    Rust + Slint error check only; never runs Gradle
-  --desktop-only             Reuse existing engine + all four loader Bridges
+  --desktop-only             Reuse existing engine + all four loader Export Workers
   --fresh                    Remove build outputs/state and rebuild everything
                              while preserving Gradle/Cargo/JDK caches
 
@@ -82,10 +82,10 @@ if [[ "$OS_NAME" != "Linux" ]] && { $BUILD_DEB || $BUILD_APPIMAGE; }; then
   exit 2
 fi
 
-FABRIC_BRIDGE="$BUNDLED_DIR/minesport-bridge-fabric-${BRIDGE_VERSION}.jar"
-FORGE_BRIDGE="$BUNDLED_DIR/minesport-bridge-forge-${BRIDGE_VERSION}.jar"
-NEOFORGE_BRIDGE="$BUNDLED_DIR/minesport-bridge-neoforge-${BRIDGE_VERSION}.jar"
-QUILT_BRIDGE="$BUNDLED_DIR/minesport-bridge-quilt-${BRIDGE_VERSION}.jar"
+FABRIC_BRIDGE="$BUNDLED_DIR/minesport_export_worker-fabric-${WORKER_MC_VERSION}.jar"
+FORGE_BRIDGE="$BUNDLED_DIR/minesport_export_worker-forge-${WORKER_MC_VERSION}.jar"
+NEOFORGE_BRIDGE="$BUNDLED_DIR/minesport_export_worker-neoforge-${WORKER_MC_VERSION}.jar"
+QUILT_BRIDGE="$BUNDLED_DIR/minesport_export_worker-quilt-${WORKER_MC_VERSION}.jar"
 
 tracked_files() {
   local root="$1"
@@ -176,7 +176,7 @@ remove_build_outputs() {
     "$ROOT/engine/.gradle" \
     "$ROOT/desktop/target" \
     "$ROOT/desktop/dist" \
-    "$ROOT/dist/bundled-bridge" \
+    "$ROOT/dist/bundled-export-worker" \
     "$ROOT/dist/source" \
     "$ROOT/dist/installer" \
     "$STATE_FILE"
@@ -271,13 +271,13 @@ build_bridge() {
   )
   local jar
   jar="$(find "$project_path/build/libs" -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-dev.jar' | sort | head -n1)"
-  [[ -n "$jar" && -f "$jar" ]] || { echo "ERROR: $name Bridge jar not found." >&2; exit 1; }
+  [[ -n "$jar" && -f "$jar" ]] || { echo "ERROR: $name Export Worker jar not found." >&2; exit 1; }
   cp -f "$jar" "$output"
   state_set "$key" "$fingerprint"
   printf '     staged: %s\n' "${output#$ROOT/}"
 }
 
-printf '%s\n' '[1/3] Bundled Minecraft 1.21.10 loader Bridges...'
+printf '%s\n' '[1/3] Bundled Minecraft 1.21.10 loader Export Workers...'
 build_bridge Fabric fabric minesport-bridge-fabric "$FABRIC_BRIDGE"
 build_bridge Forge forge minesport-bridge-forge "$FORGE_BRIDGE"
 build_bridge NeoForge neoforge minesport-bridge-neoforge "$NEOFORGE_BRIDGE"
@@ -311,11 +311,11 @@ fi
 printf '     engine: %s\n\n' "${ENGINE_JAR#$ROOT/}"
 
 export MINESPORT_ENGINE_JAR="$ENGINE_JAR"
-export MINESPORT_BRIDGE_JAR="$FABRIC_BRIDGE"
-export MINESPORT_BRIDGE_FABRIC_JAR="$FABRIC_BRIDGE"
-export MINESPORT_BRIDGE_FORGE_JAR="$FORGE_BRIDGE"
-export MINESPORT_BRIDGE_NEOFORGE_JAR="$NEOFORGE_BRIDGE"
-export MINESPORT_BRIDGE_QUILT_JAR="$QUILT_BRIDGE"
+export MINESPORT_EXPORT_WORKER_JAR="$FABRIC_BRIDGE"
+export MINESPORT_EXPORT_WORKER_FABRIC_JAR="$FABRIC_BRIDGE"
+export MINESPORT_EXPORT_WORKER_FORGE_JAR="$FORGE_BRIDGE"
+export MINESPORT_EXPORT_WORKER_NEOFORGE_JAR="$NEOFORGE_BRIDGE"
+export MINESPORT_EXPORT_WORKER_QUILT_JAR="$QUILT_BRIDGE"
 
 printf '%s\n' '[3/3] Rust + Slint desktop...'
 (

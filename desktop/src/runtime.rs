@@ -8,14 +8,14 @@ use std::{
 const VENDOR_DIR: &str = "kastrick's_software";
 const APP_DIR: &str = "minesport";
 const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
-const FABRIC_BRIDGE_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge-fabric.jar"));
-const FORGE_BRIDGE_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge-forge.jar"));
-const NEOFORGE_BRIDGE_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge-neoforge.jar"));
-const QUILT_BRIDGE_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/minesport-bridge-quilt.jar"));
+const FABRIC_EXPORT_WORKER_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-fabric.jar"));
+const FORGE_EXPORT_WORKER_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-forge.jar"));
+const NEOFORGE_EXPORT_WORKER_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-neoforge.jar"));
+const QUILT_EXPORT_WORKER_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-quilt.jar"));
 static GENERATED_CACHE_USE: RwLock<()> = RwLock::new(());
 
 pub fn materialize_engine() -> Result<PathBuf> {
@@ -27,40 +27,40 @@ pub fn materialize_engine() -> Result<PathBuf> {
 }
 
 /// Backward-compatible name for callers that historically meant the Fabric
-/// Bridge when they asked for the single bundled Bridge.
+/// Export Worker when they asked for the legacy single bundled Bridge.
 pub fn materialize_bundled_bridge() -> Result<PathBuf> {
     materialize_bundled_fabric_bridge()
 }
 
 pub fn materialize_bundled_fabric_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
-        "minesport-bridge-fabric-0.2.0.jar",
+        "minesport_export_worker-fabric-1.21.10.jar",
         ".minesport-bridge-fabric-0.2.0.tmp",
-        FABRIC_BRIDGE_BYTES,
+        FABRIC_EXPORT_WORKER_BYTES,
     )
 }
 
 pub fn materialize_bundled_forge_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
-        "minesport-bridge-forge-0.2.0.jar",
+        "minesport_export_worker-forge-1.21.10.jar",
         ".minesport-bridge-forge-0.2.0.tmp",
-        FORGE_BRIDGE_BYTES,
+        FORGE_EXPORT_WORKER_BYTES,
     )
 }
 
 pub fn materialize_bundled_neoforge_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
-        "minesport-bridge-neoforge-0.2.0.jar",
+        "minesport_export_worker-neoforge-1.21.10.jar",
         ".minesport-bridge-neoforge-0.2.0.tmp",
-        NEOFORGE_BRIDGE_BYTES,
+        NEOFORGE_EXPORT_WORKER_BYTES,
     )
 }
 
 pub fn materialize_bundled_quilt_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
-        "minesport-bridge-quilt-0.2.0.jar",
+        "minesport_export_worker-quilt-1.21.10.jar",
         ".minesport-bridge-quilt-0.2.0.tmp",
-        QUILT_BRIDGE_BYTES,
+        QUILT_EXPORT_WORKER_BYTES,
     )
 }
 
@@ -328,9 +328,9 @@ mod tests {
     #[test]
     fn embedded_runtime_assets_are_present() {
         assert!(!ENGINE_BYTES.is_empty());
-        assert!(!FABRIC_BRIDGE_BYTES.is_empty());
-        assert!(!FORGE_BRIDGE_BYTES.is_empty());
-        assert!(!NEOFORGE_BRIDGE_BYTES.is_empty());
-        assert!(!QUILT_BRIDGE_BYTES.is_empty());
+        assert!(!FABRIC_EXPORT_WORKER_BYTES.is_empty());
+        assert!(!FORGE_EXPORT_WORKER_BYTES.is_empty());
+        assert!(!NEOFORGE_EXPORT_WORKER_BYTES.is_empty());
+        assert!(!QUILT_EXPORT_WORKER_BYTES.is_empty());
     }
 }

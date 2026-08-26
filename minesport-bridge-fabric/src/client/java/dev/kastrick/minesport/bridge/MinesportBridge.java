@@ -24,16 +24,16 @@ public class MinesportBridge implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        System.out.println("[MinesportBridge] Initializing runtime registry worker...");
+        System.out.println("[MinesportExportWorker] Initializing runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
             hideWorkerWindow(client);
-            System.out.println("[MinesportBridge] Client resources ready — starting registry/model dump");
+            System.out.println("[MinesportExportWorker] Client resources ready — starting registry/model dump");
             runDump(client);
         });
     }
 
     private void hideWorkerWindow(Minecraft client) {
-        if (!"1".equals(System.getenv("MINESPORT_BRIDGE_WORKER"))) return;
+        if (!"1".equals(System.getenv("MINESPORT_EXPORT_WORKER"))) return;
         try {
             Object window = client.getWindow();
             long handle = findWindowHandle(window);
@@ -57,10 +57,10 @@ public class MinesportBridge implements ClientModInitializer {
 
     private void runDump(Minecraft client) {
         try (BridgeSender sender = new BridgeSender()) {
-            String modeEnv = System.getenv("MINESPORT_BRIDGE_MODE");
+            String modeEnv = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             String mode = (modeEnv != null) ? modeEnv : "all";
 
-            String nsEnv = System.getenv("MINESPORT_BRIDGE_NS");
+            String nsEnv = System.getenv("MINESPORT_EXPORT_WORKER_NS");
             Set<String> targetNs = null;
             if (nsEnv != null && !nsEnv.isEmpty()) {
                 targetNs = new HashSet<>(Arrays.asList(nsEnv.split(",")));
@@ -90,7 +90,7 @@ public class MinesportBridge implements ClientModInitializer {
             ));
             sender.flush();
 
-            System.out.println("[MinesportBridge] Dumping " + allBlocks.size() + " registered block types from baked client models...");
+            System.out.println("[MinesportExportWorker] Dumping " + allBlocks.size() + " registered block types from baked client models...");
             for (int start = 0; start < allBlocks.size(); start += EXTRACTION_BATCH_SIZE) {
                 int end = Math.min(start + EXTRACTION_BATCH_SIZE, allBlocks.size());
                 List<Block> batch = new ArrayList<>(allBlocks.subList(start, end));
@@ -117,15 +117,14 @@ public class MinesportBridge implements ClientModInitializer {
                 }
 
                 sender.flush();
-                System.out.println("[MinesportBridge] Baked model extraction " + end + "/" + allBlocks.size());
+                System.out.println("[MinesportExportWorker] Baked model extraction " + end + "/" + allBlocks.size());
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
             sender.flush();
-            System.out.println("[MinesportBridge] Registry/model dump complete. Exiting worker.");
-            Thread.sleep(250);
+            System.out.println("[MinesportExportWorker] Registry/model dump complete. Exiting worker.");
         } catch (Exception e) {
-            System.err.println("[MinesportBridge] Fatal: " + e.getMessage());
+            System.err.println("[MinesportExportWorker] Fatal: " + e.getMessage());
             e.printStackTrace();
         } finally {
             Minecraft.getInstance().stop();

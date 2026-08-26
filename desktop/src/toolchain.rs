@@ -162,7 +162,7 @@ fn download_file(url: &str, destination: &Path) -> Result<()> {
 }
 
 fn download_file_once(agent: &ureq::Agent, url: &str, destination: &Path) -> Result<()> {
-    let response = agent.get(url).set("User-Agent", "Minesport-Rust-Toolchain/0.2.0").call()
+    let response = agent.get(url).set("User-Agent", "Minesport-Rust-Toolchain/0.2.1").call()
         .map_err(|error| anyhow!("JDK download request failed: {error}"))?;
     let mut reader = response.into_reader();
     let mut output = File::create(destination).with_context(|| format!("create {}", destination.display()))?;
@@ -197,7 +197,7 @@ fn http_get_bytes(url: &str, limit: u64, timeout: Duration) -> Result<Vec<u8>> {
 fn http_get_bytes_once(agent: &ureq::Agent, url: &str, limit: u64) -> std::result::Result<Vec<u8>, HttpAttemptError> {
     let response = match agent
         .get(url)
-        .set("User-Agent", "Minesport-Rust-Toolchain/0.2.0")
+        .set("User-Agent", "Minesport-Rust-Toolchain/0.2.1")
         .call()
     {
         Ok(response) => response,

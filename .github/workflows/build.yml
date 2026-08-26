@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/bundled-bridge
+          mkdir -p dist/bundled-export-worker
           build_bridge() {
             local label="$1"
             local project="$2"
@@ -51,19 +51,19 @@ jobs:
             (cd "$project" && ./gradlew --no-daemon --stacktrace build)
             jar="$(find "$project/build/libs" -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' -print -quit)"
             test -n "$jar"
-            cp "$jar" "dist/bundled-bridge/minesport-bridge-${slug}-0.2.0.jar"
-            test -s "dist/bundled-bridge/minesport-bridge-${slug}-0.2.0.jar"
+            cp "$jar" "dist/bundled-export-worker/minesport-bridge-${slug}-0.2.0.jar"
+            test -s "dist/bundled-export-worker/minesport-bridge-${slug}-0.2.0.jar"
             echo "::endgroup::"
           }
           build_bridge Fabric minesport-bridge-fabric fabric
           build_bridge Forge minesport-bridge-forge forge
           build_bridge NeoForge minesport-bridge-neoforge neoforge
           build_bridge Quilt minesport-bridge-quilt quilt
-          ls -lh dist/bundled-bridge
+          ls -lh dist/bundled-export-worker
       - uses: actions/upload-artifact@v7
         with:
           name: loader-bridges-1.21.10
-          path: dist/bundled-bridge/*.jar
+          path: dist/bundled-export-worker/*.jar
           if-no-files-found: error
           retention-days: 7
 
@@ -108,7 +108,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: loader-bridges-1.21.10
-          path: dist/bundled-bridge
+          path: dist/bundled-export-worker
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92.0
@@ -223,7 +223,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: loader-bridges-1.21.10
-          path: dist/bundled-bridge
+          path: dist/bundled-export-worker
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92.0

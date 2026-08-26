@@ -9,30 +9,30 @@ use std::{
     time::Duration,
 };
 
-const BUNDLED_BRIDGES: &[(&str, &str, &str, &str)] = &[
+const BUNDLED_EXPORT_WORKERS: &[(&str, &str, &str, &str)] = &[
     (
         "Fabric",
-        "MINESPORT_BRIDGE_FABRIC_JAR",
-        "minesport-bridge-fabric-0.2.0.jar",
-        "minesport-bridge-fabric.jar",
+        "MINESPORT_EXPORT_WORKER_FABRIC_JAR",
+        "minesport_export_worker-fabric-1.21.10.jar",
+        "minesport_export_worker-fabric.jar",
     ),
     (
         "Forge",
-        "MINESPORT_BRIDGE_FORGE_JAR",
-        "minesport-bridge-forge-0.2.0.jar",
-        "minesport-bridge-forge.jar",
+        "MINESPORT_EXPORT_WORKER_FORGE_JAR",
+        "minesport_export_worker-forge-1.21.10.jar",
+        "minesport_export_worker-forge.jar",
     ),
     (
         "NeoForge",
-        "MINESPORT_BRIDGE_NEOFORGE_JAR",
-        "minesport-bridge-neoforge-0.2.0.jar",
-        "minesport-bridge-neoforge.jar",
+        "MINESPORT_EXPORT_WORKER_NEOFORGE_JAR",
+        "minesport_export_worker-neoforge-1.21.10.jar",
+        "minesport_export_worker-neoforge.jar",
     ),
     (
         "Quilt",
-        "MINESPORT_BRIDGE_QUILT_JAR",
-        "minesport-bridge-quilt-0.2.0.jar",
-        "minesport-bridge-quilt.jar",
+        "MINESPORT_EXPORT_WORKER_QUILT_JAR",
+        "minesport_export_worker-quilt-1.21.10.jar",
+        "minesport_export_worker-quilt.jar",
     ),
 ];
 
@@ -78,7 +78,7 @@ fn find_engine_jar() -> Option<PathBuf> {
     candidates.pop()
 }
 
-fn find_bridge_jar(env_name: &str, staged_name: &str) -> Option<PathBuf> {
+fn find_export_worker_jar(env_name: &str, staged_name: &str) -> Option<PathBuf> {
     if let Ok(path) = env::var(env_name) {
         let path = PathBuf::from(path);
         if path.is_file() {
@@ -88,8 +88,8 @@ fn find_bridge_jar(env_name: &str, staged_name: &str) -> Option<PathBuf> {
 
     // Keep the old single-Bridge override usable as a Fabric-only alias for
     // developer environments while the canonical contract uses loader names.
-    if env_name == "MINESPORT_BRIDGE_FABRIC_JAR" {
-        if let Ok(path) = env::var("MINESPORT_BRIDGE_JAR") {
+    if env_name == "MINESPORT_EXPORT_WORKER_FABRIC_JAR" {
+        if let Ok(path) = env::var("MINESPORT_EXPORT_WORKER_JAR") {
             let path = PathBuf::from(path);
             if path.is_file() {
                 return Some(path);
@@ -99,7 +99,7 @@ fn find_bridge_jar(env_name: &str, staged_name: &str) -> Option<PathBuf> {
 
     let staged = repo_root()
         .join("dist")
-        .join("bundled-bridge")
+        .join("bundled-export-worker")
         .join(staged_name);
     staged.is_file().then_some(staged)
 }
@@ -597,7 +597,7 @@ fn validate_bridge_recipes(root: &Path, out: &Path) {
 fn write_placeholder_runtime_assets(out: &Path, label: &[u8]) {
     fs::write(out.join("minesport-engine.jar"), label)
         .expect("write placeholder engine payload");
-    for (_, _, _, embedded_name) in BUNDLED_BRIDGES {
+    for (_, _, _, embedded_name) in BUNDLED_EXPORT_WORKERS {
         fs::write(out.join(embedded_name), label)
             .unwrap_or_else(|error| panic!("write placeholder {embedded_name} payload: {error}"));
     }
@@ -608,7 +608,7 @@ fn main() {
     let root = repo_root();
     let ui = manifest.join("ui").join("workbench-v3.slint");
     let engine_libs = root.join("engine").join("build").join("libs");
-    let bridge_staged = root.join("dist").join("bundled-bridge");
+    let bridge_staged = root.join("dist").join("bundled-export-worker");
     let bridge_versions = root.join("minesport-bridge-fabric-versions");
     let blender_addon = manifest
         .join("assets")
@@ -617,8 +617,8 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", ui.display());
     println!("cargo:rerun-if-env-changed=MINESPORT_ENGINE_JAR");
-    println!("cargo:rerun-if-env-changed=MINESPORT_BRIDGE_JAR");
-    for (_, env_name, staged_name, _) in BUNDLED_BRIDGES {
+    println!("cargo:rerun-if-env-changed=MINESPORT_EXPORT_WORKER_JAR");
+    for (_, env_name, staged_name, _) in BUNDLED_EXPORT_WORKERS {
         println!("cargo:rerun-if-env-changed={env_name}");
         println!(
             "cargo:rerun-if-changed={}",
@@ -657,14 +657,14 @@ fn main() {
     fs::copy(&engine, out.join("minesport-engine.jar"))
         .expect("embed Minesport engine JAR into Rust desktop build");
 
-    for (loader, env_name, staged_name, embedded_name) in BUNDLED_BRIDGES {
-        let bridge = find_bridge_jar(env_name, staged_name).unwrap_or_else(|| {
+    for (loader, env_name, staged_name, embedded_name) in BUNDLED_EXPORT_WORKERS {
+        let bridge = find_export_worker_jar(env_name, staged_name).unwrap_or_else(|| {
             panic!(
-                "Minesport {loader} Bridge JAR not found. Build and stage dist/bundled-bridge/{staged_name} first or set {env_name}."
+                "Minesport {loader} Export Worker JAR not found. Build and stage dist/bundled-export-worker/{staged_name} first or set {env_name}."
             )
         });
         fs::copy(&bridge, out.join(embedded_name)).unwrap_or_else(|error| {
-            panic!("embed canonical Minesport {loader} Bridge JAR into Rust desktop build: {error}")
+            panic!("embed canonical Minesport {loader} Export Worker JAR into Rust desktop build: {error}")
         });
     }
 }

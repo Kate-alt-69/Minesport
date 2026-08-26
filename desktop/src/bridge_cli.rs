@@ -2,32 +2,32 @@ use crate::{bridge_build, bridge_compat, bridge_family::{self, BridgeFamily}, br
 use anyhow::{Context, Result, anyhow, bail};
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
-const VERSION: &str = "0.2.0";
+const VERSION: &str = "0.2.1";
 
 pub fn handle() -> Result<bool> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
-        [flag, version] if flag == "--build-bridge" => {
+        [flag, version] if flag == "--build-export-worker" || flag == "--build-bridge" => {
             let jar = ensure_bridge(BridgeFamily::Fabric, version)?;
-            println!("Bridge ready: {}", jar.display());
+            println!("Export Worker ready: {}", jar.display());
             Ok(true)
         }
-        [flag, loader_flag, loader, version] if flag == "--build-bridge" && loader_flag == "--loader" => {
+        [flag, loader_flag, loader, version] if (flag == "--build-export-worker" || flag == "--build-bridge") && loader_flag == "--loader" => {
             let family = BridgeFamily::parse(loader)
-                .ok_or_else(|| anyhow!("unsupported Bridge loader {loader:?}; expected fabric, forge, neoforge or quilt"))?;
+                .ok_or_else(|| anyhow!("unsupported Export Worker loader {loader:?}; expected fabric, forge, neoforge or quilt"))?;
             let jar = ensure_bridge(family, version)?;
-            println!("{} Bridge ready: {}", family.label(), jar.display());
+            println!("{} Export Worker ready: {}", family.label(), jar.display());
             Ok(true)
         }
-        [flag, ..] if flag == "--build-bridge" => {
-            bail!("usage: minesport --build-bridge [--loader fabric|forge|neoforge|quilt] <minecraft-version>")
+        [flag, ..] if flag == "--build-export-worker" || flag == "--build-bridge" => {
+            bail!("usage: minesport --build-export-worker [--loader fabric|forge|neoforge|quilt] <minecraft-version>")
         }
-        [flag] if flag == "--build-bridges-detected" => {
+        [flag] if flag == "--build-export-workers-detected" || flag == "--build-bridges-detected" => {
             build_detected_bridges()?;
             Ok(true)
         }
-        [flag, ..] if flag == "--build-bridges-detected" => {
-            bail!("usage: minesport --build-bridges-detected")
+        [flag, ..] if flag == "--build-export-workers-detected" || flag == "--build-bridges-detected" => {
+            bail!("usage: minesport --build-export-workers-detected")
         }
         [flag] if flag == "-h" || flag == "--help" => {
             print_help();
@@ -59,7 +59,7 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
 
     let destination = compiled_bridge_path(family, &version);
     if destination.is_file() {
-        println!("{} · Minecraft {version} · cached Bridge reused", family.label());
+        println!("{} · Minecraft {version} · cached Export Worker reused", family.label());
         return Ok(destination);
     }
 
@@ -100,7 +100,7 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
     let java_home = toolchain::ensure_jdk(build_java, |update| {
         print_progress(update.percent, "JDK", &update.message);
     })?;
-    println!("Building {} compatibility Bridge with {}", family.label(), java_home.display());
+    println!("Building {} compatibility Export Worker with {}", family.label(), java_home.display());
     let built = bridge_build::compile_bridge(&workspace, &java_home, true)?;
 
     if let Some(parent) = destination.parent() {
@@ -115,7 +115,7 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
     fs::rename(&temporary, &destination)
         .with_context(|| format!("install compiled Bridge {}", destination.display()))?;
 
-    println!("[100%] {} Bridge compiled · {}", family.label(), destination.display());
+    println!("[100%] {} Export Worker compiled · {}", family.label(), destination.display());
     Ok(destination)
 }
 
@@ -165,7 +165,7 @@ fn build_detected_bridges() -> Result<()> {
         };
         println!("\n{} · Minecraft {version}", family.label());
         if let Err(error) = ensure_bridge(family, &version) {
-            eprintln!("{} Bridge preparation failed for {version}: {error:#}", family.label());
+            eprintln!("{} Export Worker preparation failed for {version}: {error:#}", family.label());
             failures.push(format!("{} {version}: {error}", family.label()));
         }
     }
@@ -174,7 +174,7 @@ fn build_detected_bridges() -> Result<()> {
         Ok(())
     } else {
         bail!(
-            "{} Bridge build(s) failed: {}",
+            "{} Export Worker build(s) failed: {}",
             failures.len(),
             failures.join("; ")
         )
@@ -187,7 +187,7 @@ fn compiled_bridge_path(family: BridgeFamily, version: &str) -> PathBuf {
         .join("compiled")
         .join(family.label().to_ascii_lowercase())
         .join(safe_version(version))
-        .join(format!("minesport-bridge-{}-0.2.0.jar", family.label().to_ascii_lowercase()))
+        .join(format!("minesport_export_worker-{}-{}.jar", family.label().to_ascii_lowercase(), safe_version(version)))
 }
 
 fn safe_version(value: &str) -> String {
@@ -226,6 +226,6 @@ fn display_or<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 
 fn print_help() {
     println!(
-        "Minesport {VERSION}\nRust + Slint desktop by Kastrick\n\nUsage:\n  minesport                            Open the desktop app\n  minesport --build-bridge VERSION     Prepare/cache the Fabric Bridge for VERSION\n  minesport --build-bridge --loader LOADER VERSION\n                                       Prepare/cache Fabric, Forge, NeoForge or Quilt Bridge\n  minesport --build-bridges-detected   Prepare Bridges for detected mod-loader instances\n  minesport --install-blender-translator\n                                       Install/repair the bundled Blender translator\n  minesport --version                  Print version\n  minesport --help                     Show this help\n\nEach loader family owns a canonical Minecraft 1.21.10 Bridge. Older supported\nversions are generated from that family baseline by embedded patch recipes."
+        "Minesport {VERSION}\nRust + Slint desktop by Kastrick\n\nUsage:\n  minesport                            Open the desktop app\n  minesport --build-export-worker VERSION     Prepare/cache the Fabric Export Worker for VERSION\n  minesport --build-export-worker --loader LOADER VERSION\n                                       Prepare/cache Fabric, Forge, NeoForge or Quilt Export Worker\n  minesport --build-export-workers-detected   Prepare Export Workers for detected mod-loader instances\n  minesport --install-blender-translator\n                                       Install/repair the bundled Blender translator\n  minesport --version                  Print version\n  minesport --help                     Show this help\n\nEach loader family owns a canonical Minecraft 1.21.10 Export Worker. Older supported\nversions are generated from that family baseline by embedded patch recipes."
     );
 }

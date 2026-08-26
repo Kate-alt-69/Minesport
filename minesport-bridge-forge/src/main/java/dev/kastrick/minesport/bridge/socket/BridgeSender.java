@@ -27,7 +27,8 @@ public class BridgeSender implements Closeable {
 
     public BridgeSender() throws IOException {
         int port = DEFAULT_PORT;
-        String envPort = System.getenv("MINESPORT_BRIDGE_PORT");
+        String envPort = System.getenv("MINESPORT_EXPORT_WORKER_PORT");
+        if (envPort == null) envPort = System.getenv("MINESPORT_BRIDGE_PORT");
         if (envPort != null) {
             try { port = Integer.parseInt(envPort); } catch (NumberFormatException ignored) {}
         }
@@ -41,7 +42,7 @@ public class BridgeSender implements Closeable {
             BUFFER_BYTES
         );
 
-        System.out.println("[MinesportBridge] Connected to Minesport on port " + port);
+        System.out.println("[MinesportExportWorker] Connected to Minesport on port " + port);
     }
 
     /** Send any object as one JSON line with a "type" discriminator. */

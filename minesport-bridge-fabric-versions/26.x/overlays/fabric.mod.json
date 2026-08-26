@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minesport_bridge_fabric",
   "version": "${version}",
-  "name": "Minesport Bridge (Fabric)",
+  "name": "Minesport Export Worker (Fabric)",
   "description": "Dynamic Fabric runtime geometry/texture bridge for Minesport 26.x exports.",
   "authors": [
     "Kastrick"

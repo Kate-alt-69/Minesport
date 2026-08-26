@@ -40,7 +40,7 @@ public final class MinesportBridge implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        System.out.println("[MinesportBridge] Initializing 26.x runtime registry worker...");
+        System.out.println("[MinesportExportWorker] Initializing 26.x runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
             hideWorkerWindow(client);
             // The worker exists only to capture the runtime registry, so keep
@@ -53,7 +53,7 @@ public final class MinesportBridge implements ClientModInitializer {
     }
 
     private void hideWorkerWindow(Minecraft client) {
-        if (!"1".equals(System.getenv("MINESPORT_BRIDGE_WORKER"))) return;
+        if (!"1".equals(System.getenv("MINESPORT_EXPORT_WORKER"))) return;
         try {
             Object window = invokeFirstNoArg(client, "getWindow", "window");
             if (window == null) return;
@@ -81,13 +81,13 @@ public final class MinesportBridge implements ClientModInitializer {
 
     private void runDump(Minecraft client) {
         try (BridgeSender sender = new BridgeSender()) {
-            String mode = System.getenv("MINESPORT_BRIDGE_MODE");
+            String mode = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             if (mode == null || mode.isBlank()) {
                 mode = "all";
             }
 
             Set<String> targetNamespaces = null;
-            String namespaceEnv = System.getenv("MINESPORT_BRIDGE_NS");
+            String namespaceEnv = System.getenv("MINESPORT_EXPORT_WORKER_NS");
             if (namespaceEnv != null && !namespaceEnv.isBlank()) {
                 targetNamespaces = new HashSet<>(Arrays.asList(namespaceEnv.split(",")));
             }
@@ -116,7 +116,7 @@ public final class MinesportBridge implements ClientModInitializer {
             ));
             sender.flush();
 
-            System.out.println("[MinesportBridge] Dumping " + blocks.size() + " registered block types from baked client models...");
+            System.out.println("[MinesportExportWorker] Dumping " + blocks.size() + " registered block types from baked client models...");
             for (int start = 0; start < blocks.size(); start += EXTRACTION_BATCH_SIZE) {
                 int end = Math.min(start + EXTRACTION_BATCH_SIZE, blocks.size());
                 List<Block> batch = new ArrayList<>(blocks.subList(start, end));
@@ -149,14 +149,14 @@ public final class MinesportBridge implements ClientModInitializer {
                 }
 
                 sender.flush();
-                System.out.println("[MinesportBridge] Baked model extraction " + end + "/" + blocks.size());
+                System.out.println("[MinesportExportWorker] Baked model extraction " + end + "/" + blocks.size());
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", blocks.size()));
             sender.flush();
-            System.out.println("[MinesportBridge] Registry/model dump complete.");
+            System.out.println("[MinesportExportWorker] Registry/model dump complete.");
         } catch (Exception exception) {
-            System.err.println("[MinesportBridge] Fatal: " + exception.getMessage());
+            System.err.println("[MinesportExportWorker] Fatal: " + exception.getMessage());
             exception.printStackTrace();
         } finally {
             client.execute(client::stop);

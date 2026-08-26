@@ -33,7 +33,7 @@ public final class MinesportBridge implements ClientModInitializer {
     }
 
     private void hideWorkerWindow(Minecraft client) {
-        if (!"1".equals(System.getenv("MINESPORT_BRIDGE_WORKER"))) return;
+        if (!"1".equals(System.getenv("MINESPORT_EXPORT_WORKER"))) return;
         try {
             Object window = client.getWindow();
             long handle = findWindowHandle(window);
@@ -57,10 +57,10 @@ public final class MinesportBridge implements ClientModInitializer {
 
     private void runDump(Minecraft client) {
         try (BridgeSender sender = new BridgeSender()) {
-            String modeEnv = System.getenv("MINESPORT_BRIDGE_MODE");
+            String modeEnv = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             String mode = modeEnv != null ? modeEnv : "all";
 
-            String nsEnv = System.getenv("MINESPORT_BRIDGE_NS");
+            String nsEnv = System.getenv("MINESPORT_EXPORT_WORKER_NS");
             Set<String> targetNs = null;
             if (nsEnv != null && !nsEnv.isEmpty()) {
                 targetNs = new HashSet<>(Arrays.asList(nsEnv.split(",")));
@@ -117,7 +117,6 @@ public final class MinesportBridge implements ClientModInitializer {
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
             sender.flush();
             System.out.println("[MinesportBridge/Quilt] Registry/model dump complete. Exiting worker.");
-            Thread.sleep(250);
         } catch (Exception error) {
             System.err.println("[MinesportBridge/Quilt] Fatal: " + error.getMessage());
             error.printStackTrace();

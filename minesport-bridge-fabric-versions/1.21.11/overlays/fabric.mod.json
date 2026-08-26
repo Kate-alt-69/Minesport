@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minesport_bridge",
   "version": "${version}",
-  "name": "Minesport Bridge",
+  "name": "Minesport Export Worker",
   "description": "Dynamically prepared Minesport bridge for Minecraft ${minecraft_version}.",
   "authors": ["Kastrick"],
   "environment": "client",

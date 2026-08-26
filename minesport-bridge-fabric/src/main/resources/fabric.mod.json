@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "minesport_bridge_fabric",
   "version": "${version}",
-  "name": "Minesport Bridge (Fabric)",
-  "description": "Minesport runtime-registry bridge for Fabric — captures registered block states, baked geometry, texture identifiers and light metadata through an isolated client worker, then exits.",
+  "name": "Minesport Export Worker (Fabric)",
+  "description": "Minesport runtime-model export worker for Fabric — captures registered block states, baked geometry, texture identifiers and light metadata through an isolated client worker, then exits.",
   "authors": ["Kastrick"],
   "environment": "client",
   "entrypoints": {

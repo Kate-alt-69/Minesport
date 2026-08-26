@@ -1,4 +1,4 @@
-name: Minesport Loader Bridges
+name: Minesport Export Workers
 
 on:
   push:
@@ -19,12 +19,12 @@ on:
       - 'desktop/src/bridge_java.rs'
       - 'desktop/src/toolchain.rs'
       - 'desktop/build.rs'
-      - '.github/workflows/bridge-loaders.yml'
+      - '.github/workflows/export-worker-loaders.yml'
   workflow_dispatch:
 
 jobs:
   canonical-1-21-10:
-    name: ${{ matrix.name }} Bridge · Minecraft 1.21.10
+    name: ${{ matrix.name }} Export Worker · Minecraft 1.21.10
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -49,20 +49,20 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v6
-      - name: Build canonical bridge
+      - name: Build canonical Export Worker
         working-directory: ${{ matrix.project }}
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon --console=plain build
-      - name: Verify bridge JAR
+      - name: Verify Export Worker JAR
         working-directory: ${{ matrix.project }}
         run: |
           test -n "$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)"
           find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print
-      - name: Upload bridge JAR
+      - name: Upload Export Worker JAR
         uses: actions/upload-artifact@v7
         with:
-          name: minesport-bridge-${{ matrix.slug }}-1.21.10
+          name: minesport-export-worker-${{ matrix.slug }}-1.21.10
           path: |
             ${{ matrix.project }}/build/libs/*.jar
             !${{ matrix.project }}/build/libs/*-sources.jar
@@ -71,7 +71,7 @@ jobs:
           retention-days: 14
 
   compatibility-floor-1-21-5:
-    name: ${{ matrix.name }} Bridge · PATCH floor 1.21.5
+    name: ${{ matrix.name }} Export Worker · PATCH floor 1.21.5
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -81,16 +81,16 @@ jobs:
         include:
           - name: Fabric
             slug: fabric
-            jar: minesport-bridge-fabric-1.21.5.jar
+            jar: minesport_export_worker-fabric-1.21.5.jar
           - name: Forge
             slug: forge
-            jar: minesport-bridge-forge-1.21.5.jar
+            jar: minesport_export_worker-forge-1.21.5.jar
           - name: NeoForge
             slug: neoforge
-            jar: minesport-bridge-neoforge-1.21.5.jar
+            jar: minesport_export_worker-neoforge-1.21.5.jar
           - name: Quilt
             slug: quilt
-            jar: minesport-bridge-quilt-1.21.5.jar
+            jar: minesport_export_worker-quilt-1.21.5.jar
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
@@ -107,7 +107,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
-      - name: Generate and compile 1.21.5 Bridge with Rust patcher
+      - name: Generate and compile 1.21.5 Export Worker with Rust patcher
         env:
           MINESPORT_HEADLESS_BRIDGE_PREPARE: '1'
         run: |
@@ -116,10 +116,10 @@ jobs:
             --version '1.21.5' \
             --output dist/loader-floor
           test -s 'dist/loader-floor/${{ matrix.jar }}'
-      - name: Upload 1.21.5 Bridge
+      - name: Upload 1.21.5 Export Worker
         uses: actions/upload-artifact@v7
         with:
-          name: minesport-bridge-${{ matrix.slug }}-1.21.5
+          name: minesport-export-worker-${{ matrix.slug }}-1.21.5
           path: dist/loader-floor/${{ matrix.jar }}
           if-no-files-found: error
           retention-days: 14

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${MINESPORT_VERSION:-0.2.0}"
+VERSION="${MINESPORT_VERSION:-0.2.1}"
 ARCH_RAW="$(uname -m)"
 case "$ARCH_RAW" in
   x86_64) DEB_ARCH=amd64 ;;

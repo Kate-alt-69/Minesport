@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "minesport_bridge",
   "version": "${version}",
-  "name": "Minesport Bridge",
-  "description": "Minesport runtime-registry bridge for Quilt — captures registered block states, baked geometry, texture identifiers and light metadata through an isolated client worker, then exits.",
+  "name": "Minesport Export Worker",
+  "description": "Minesport runtime-model export worker for Quilt — captures registered block states, baked geometry, texture identifiers and light metadata through an isolated client worker, then exits.",
   "authors": ["Kastrick"],
   "environment": "client",
   "entrypoints": {

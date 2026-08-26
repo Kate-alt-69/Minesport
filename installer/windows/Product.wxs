@@ -4,7 +4,7 @@
   <Package
       Name="Minesport"
       Language="1033"
-      Version="0.2.0"
+      Version="0.2.1"
       Manufacturer="Kastrick"
       UpgradeCode="28E176EA-1E29-4EA0-B22A-BB77A9865AA8"
       InstallerVersion="500"
@@ -41,7 +41,7 @@
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
 
-    <Feature Id="CoreFeature" Title="Minesport 0.2.0" Level="1" AllowAbsent="no">
+    <Feature Id="CoreFeature" Title="Minesport 0.2.1" Level="1" AllowAbsent="no">
       <ComponentRef Id="MainExecutable" />
     </Feature>
 
@@ -49,7 +49,7 @@
       <ComponentRef Id="BlenderInstallerHelper" />
     </Feature>
 
-    <Feature Id="TranslatorFeature" Title="Minesport 0.2.0 Blender translator" Description="Installs the Minesport 0.2.0 translator into detected Blender 4.3+ profiles." Level="2">
+    <Feature Id="TranslatorFeature" Title="Minesport 0.2.1 Blender translator" Description="Installs the Minesport 0.2.1 translator into detected Blender 4.3+ profiles." Level="2">
       <ComponentRef Id="MainExecutable" />
     </Feature>
 

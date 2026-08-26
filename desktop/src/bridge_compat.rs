@@ -278,6 +278,17 @@ where
         set_property(&safe_join(workspace, Path::new("gradle.properties"))?, "fabric_version", &fabric_api)?;
     }
 
+    set_property(
+        &safe_join(workspace, Path::new("gradle.properties"))?,
+        "mod_version",
+        "0.2.1",
+    )?;
+    set_property(
+        &safe_join(workspace, Path::new("gradle.properties"))?,
+        "archives_base_name",
+        &format!("minesport_export_worker-fabric-{version}"),
+    )?;
+
     let metadata = serde_json::json!({
         "minecraft": version.clone(),
         "profile": profile_id.clone(),
