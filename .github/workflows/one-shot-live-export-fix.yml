@@ -22,9 +22,13 @@ jobs:
 
       - name: Apply source patches
         run: |
-          python3 -m py_compile .github/export_lifecycle_patch.py .github/live_export_fix.py
+          python3 -m py_compile \
+            .github/export_lifecycle_patch.py \
+            .github/live_export_fix.py \
+            .github/flatter_request_fix.py
           python3 .github/export_lifecycle_patch.py
           python3 .github/live_export_fix.py
+          python3 .github/flatter_request_fix.py
           git diff --check
 
       - uses: dtolnay/rust-toolchain@master
@@ -49,7 +53,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "22"
 
       - name: Test engine
         working-directory: engine
