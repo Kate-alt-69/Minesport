@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/export_worker_021_patch.py'
+      - '.github/export_worker_021_fix.py'
       - '.github/workflows/one-shot-export-worker-021.yml'
 
 permissions:
@@ -19,7 +20,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply Export Worker migration
-        run: python3 .github/export_worker_021_patch.py
+        run: |
+          python3 .github/export_worker_021_patch.py
+          python3 .github/export_worker_021_fix.py
 
       - uses: actions/setup-java@v5
         with:
@@ -85,15 +88,20 @@ jobs:
           grep -q 'bundled-export-worker' build.ps1
           grep -q 'bundled-export-worker' build.sh
           grep -q 'minesport_export_worker-fabric-1.21.10.jar' desktop/src/runtime.rs
+          grep -q 'minesport_export_worker-fabric-1.21.5.jar' desktop/src/bin/bridge-prepare.rs
+          grep -q -- '--build-export-worker' desktop/src/bridge_cli.rs
           ! grep -q 'Thread.sleep(250)' minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java
           test -f .github/workflows/export-worker-loaders.yml
           test ! -f .github/workflows/bridge-loaders.yml
+          grep -q "minesport-bridge-fabric/\\*\\*" .github/workflows/export-worker-loaders.yml
+          ! grep -q "minesport-export-worker-fabric/\\*\\*" .github/workflows/export-worker-loaders.yml
+          grep -q 'minesport_export_worker-fabric-1.21.5.jar' .github/workflows/export-worker-loaders.yml
 
       - name: Publish tested 0.2.1 Export Worker migration
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f .github/export_worker_021_patch.py .github/workflows/one-shot-export-worker-021.yml
+          rm -f .github/export_worker_021_patch.py .github/export_worker_021_fix.py .github/workflows/one-shot-export-worker-021.yml
           rm -f .github/world_cache_021_patch.py .github/workflows/one-shot-world-cache-021.yml
           git add -A
           git diff --cached --check
