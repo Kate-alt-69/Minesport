@@ -1,10 +1,11 @@
-name: One Shot Export Worker Rust and CI Identity
+name: One Shot Export Worker Rust and Registry Stability
 
 on:
   push:
     branches: [main]
     paths:
       - '.github/export_worker_rust_ci_cleanup.py'
+      - '.github/runtime_registry_stability_patch.py'
       - '.github/workflows/one-shot-export-worker-rust-ci.yml'
 
 permissions:
@@ -13,16 +14,19 @@ permissions:
 jobs:
   integrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Apply Export Worker Rust and CI cleanup
+      - name: Apply Export Worker identity and registry stability cleanup
         run: |
           python3 -m py_compile .github/export_worker_rust_ci_cleanup.py
+          python3 -m py_compile .github/runtime_registry_stability_patch.py
+          rm .github/workflows/one-shot-export-worker-rust-ci.yml
           python3 .github/export_worker_rust_ci_cleanup.py
+          python3 .github/runtime_registry_stability_patch.py
           git diff --check
 
       - uses: dtolnay/rust-toolchain@master
@@ -43,6 +47,22 @@ jobs:
         run: |
           cargo check --locked --all-targets
           cargo test --locked --all-targets
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Test engine export regressions
+        working-directory: engine
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon test \
+            --tests dev.kastrick.minesport.export.ExportRegressionTest \
+            --tests dev.kastrick.minesport.export.LitematicExporterTest \
+            --tests dev.kastrick.minesport.export.LitematicTickExporterTest \
+            --tests dev.kastrick.minesport.region.RegionReaderBlockEntityTest \
+            --tests dev.kastrick.minesport.region.RegionReaderScheduledTickTest
 
       - name: Exercise renamed compatibility helper
         env:
@@ -66,7 +86,7 @@ jobs:
           check_source neoforge 1.21.5
           check_source quilt 1.21.5
 
-      - name: Validate maintained CI and packaging contracts
+      - name: Validate maintained CI, packaging, and registry contracts
         run: |
           test -f desktop/src/export_worker_build.rs
           test -f desktop/src/export_worker_cli.rs
@@ -91,17 +111,27 @@ jobs:
           grep -q 'Minesport-0.2.1-x64' .github/workflows/build.yml
           grep -q '<OutputName>Minesport-0.2.1-x64</OutputName>' installer/windows/Minesport.wixproj
           ! grep -R -E -- '--bin bridge-prepare|MINESPORT_HEADLESS_BRIDGE_PREPARE|Minesport-0\.2\.0|recipe-bridges' .github/workflows
+
+          grep -q 'pub fn capture_once_cancellable' desktop/src/registry.rs
+          grep -q 'struct StreamingSnapshotWriter' desktop/src/registry.rs
+          grep -q 'struct CaptureThreadGuard' desktop/src/runtime_worker.rs
+          grep -q 'registry::capture_once_cancellable' desktop/src/runtime_worker.rs
+          grep -q 'resolveModelQuietly' engine/src/main/java/dev/kastrick/minesport/resolver/ResolverChain.java
+          grep -q 'name.endsWith(".mcr")' engine/src/main/java/dev/kastrick/minesport/IpcMode.java
           git diff --check
 
-      - name: Create tested Rust and CI cleanup commit
+      - name: Create tested identity and stability commit
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f .github/export_worker_rust_ci_cleanup.py .github/workflows/one-shot-export-worker-rust-ci.yml
+          rm -f \
+            .github/export_worker_rust_ci_cleanup.py \
+            .github/runtime_registry_stability_patch.py \
+            .github/workflows/one-shot-export-worker-rust-ci.yml
           rm -rf .github/__pycache__
           git add -A
           git diff --cached --check
-          git commit -m 'Rename Export Worker Rust and CI identities'
+          git commit -m 'Rename Export Worker identities and stabilize runtime registry'
           tested="$(git rev-parse HEAD)"
           echo "TESTED_COMMIT=$tested"
           set +e
@@ -109,6 +139,6 @@ jobs:
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
-            echo "GitHub Actions cannot publish workflow-changing commits; tested object uploaded as $tested"
+            echo "GitHub Actions could not publish the tested workflow-changing commit: $tested"
           fi
           exit 0
