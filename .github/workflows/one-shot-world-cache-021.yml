@@ -22,7 +22,18 @@ jobs:
           distribution: temurin
           java-version: '22'
       - name: Apply 0.2.1 world cache patch
-        run: python3 .github/world_cache_021_patch.py
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/world_cache_021_patch.py')
+          text = p.read_text(encoding='utf-8')
+          old = """    if count != 1:\n        raise SystemExit(f'{path}: expected exactly one match, found {count}: {old[:100]!r}')\n    target.write_text(text.replace(old, new, 1), encoding='utf-8')"""
+          new = """    if count == 0:\n        raise SystemExit(f'{path}: expected a match, found 0: {old[:100]!r}')\n    if count > 1 and not (path == 'desktop/src/app.rs' and old.strip() == 'add_bubble_fields(&ui, &mut request);'):\n        raise SystemExit(f'{path}: expected exactly one match, found {count}: {old[:100]!r}')\n    target.write_text(text.replace(old, new, 1), encoding='utf-8')"""
+          if old not in text:
+              raise SystemExit('replace_once helper shape changed')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python3 .github/world_cache_021_patch.py
       - name: Test Java engine
         working-directory: engine
         run: bash ./gradlew --no-daemon test
@@ -49,6 +60,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -- .github/world_cache_021_patch.py
           git rm .github/world_cache_021_patch.py .github/workflows/one-shot-world-cache-021.yml
           git add -A
           git commit -m 'Start 0.2.1 world chunk cache'
