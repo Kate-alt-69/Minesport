@@ -7,8 +7,8 @@
     {"op": "replace", "file": "src/main/resources/META-INF/mods.toml", "from": "loaderVersion=\"[60,)\"", "to": "loaderVersion=\"[55,)\""},
     {"op": "replace", "file": "src/main/resources/META-INF/mods.toml", "from": "versionRange=\"[60.1.0,)\"", "to": "versionRange=\"[55.1.0,)\""},
     {"op": "replace", "file": "src/main/resources/META-INF/mods.toml", "from": "versionRange=\"[1.21.10,1.21.11)\"", "to": "versionRange=\"[1.21.5,1.21.6)\""},
-    {"op": "replace", "file": "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", "from": "import net.minecraftforge.event.TickEvent;", "to": "import net.minecraftforge.event.TickEvent;\nimport net.minecraftforge.common.MinecraftForge;"},
-    {"op": "replace", "file": "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", "from": "TickEvent.ClientTickEvent.Post.BUS.addListener(MinesportBridge::onClientTick);", "to": "MinecraftForge.EVENT_BUS.addListener(MinesportBridge::onClientTick);"},
-    {"op": "replace", "file": "src/main/java/dev/kastrick/minesport/bridge/MinesportBridge.java", "from": "net.minecraft.SharedConstants.getCurrentVersion().id()", "to": "net.minecraft.SharedConstants.getCurrentVersion().getId()"}
+    {"op": "replace", "file": "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", "from": "import net.minecraftforge.event.TickEvent;", "to": "import net.minecraftforge.event.TickEvent;\nimport net.minecraftforge.common.MinecraftForge;"},
+    {"op": "replace", "file": "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", "from": "TickEvent.ClientTickEvent.Post.BUS.addListener(MinesportExportWorker::onClientTick);", "to": "MinecraftForge.EVENT_BUS.addListener(MinesportExportWorker::onClientTick);"},
+    {"op": "replace", "file": "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", "from": "net.minecraft.SharedConstants.getCurrentVersion().id()", "to": "net.minecraft.SharedConstants.getCurrentVersion().getId()"}
   ]
 }

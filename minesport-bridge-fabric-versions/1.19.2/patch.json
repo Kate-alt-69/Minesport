@@ -9,7 +9,7 @@
     {"op": "replace", "file": "gradle/wrapper/gradle-wrapper.properties", "from": "gradle-8.14-bin.zip", "to": "gradle-${gradle_version}-bin.zip"},
     {"op": "overlay", "source": "minesport-bridge-fabric-versions/shared/build-java17-modernloom.gradle", "target": "build.gradle"},
     {"op": "overlay", "source": "minesport-bridge-fabric-versions/shared/fabric-mod-java17.json", "target": "src/main/resources/fabric.mod.json"},
-    {"op": "overlay", "source": "minesport-bridge-fabric-versions/1.19.0-1.19.2/overlays/MinesportBridge.java", "target": "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java"},
+    {"op": "overlay", "source": "minesport-bridge-fabric-versions/1.19.0-1.19.2/overlays/MinesportExportWorker.java", "target": "src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"},
     {"op": "overlay", "source": "minesport-bridge-fabric-versions/1.19.0-1.19.2/overlays/BlockGeometryExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"}
   ]
 }

@@ -39,7 +39,7 @@ Values may contain `${minecraft_version}`, `${loader_version}`, `${fabric_api_ve
 ```json
 {
   "op": "rename_at",
-  "file": "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java",
+  "file": "src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java",
   "line": 52,
   "column": 67,
   "from": "id()",

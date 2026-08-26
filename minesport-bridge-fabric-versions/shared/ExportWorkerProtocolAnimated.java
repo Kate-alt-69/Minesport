@@ -9,8 +9,8 @@ import java.util.Map;
  * are legacy/optional because the runtime model cache resolves images through
  * Minesport's normal resource-pack/mod/vanilla/Piston chain.
  */
-public final class BridgeProtocol {
-    private BridgeProtocol() {}
+public final class ExportWorkerProtocol {
+    private ExportWorkerProtocol() {}
 
     public static final String TYPE_HELLO       = "hello";
     public static final String TYPE_BLOCK_ENTRY = "block";

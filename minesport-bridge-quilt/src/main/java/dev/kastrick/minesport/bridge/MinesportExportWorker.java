@@ -1,49 +1,38 @@
 package dev.kastrick.minesport.bridge;
 
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.*;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.*;
 import dev.kastrick.minesport.bridge.registry.BlockGeometryExtractor;
-import dev.kastrick.minesport.bridge.socket.BridgeSender;
+import dev.kastrick.minesport.bridge.socket.ExportWorkerSender;
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.ModContainer;
-import net.neoforged.fml.ModList;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.fml.common.Mod;
-import net.neoforged.neoforge.client.event.lifecycle.ClientStartedEvent;
 import org.lwjgl.glfw.GLFW;
+import org.quiltmc.loader.api.QuiltLoader;
 
 import java.lang.reflect.Method;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGHT;
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_BLOCK_ENTRY;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_BLOCK_LIGHT;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_DONE;
 
-@Mod(value = MinesportBridge.MODID, dist = Dist.CLIENT)
-@EventBusSubscriber(modid = MinesportBridge.MODID, value = Dist.CLIENT)
-public final class MinesportBridge {
-    public static final String MODID = "minesport_bridge";
+public final class MinesportExportWorker implements ClientModInitializer {
     private static final int EXTRACTION_BATCH_SIZE = 256;
-    private static final AtomicBoolean STARTED = new AtomicBoolean(false);
 
-    public MinesportBridge(ModContainer container) {
+    @Override
+    public void onInitializeClient() {
+        System.out.println("[MinesportExportWorker/Quilt] Initializing runtime registry worker...");
+        ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
+            hideWorkerWindow(client);
+            System.out.println("[MinesportExportWorker/Quilt] Client resources ready — starting registry/model dump");
+            runDump(client);
+        });
     }
 
-    @SubscribeEvent
-    static void onClientStarted(ClientStartedEvent event) {
-        if (!STARTED.compareAndSet(false, true)) return;
-        Minecraft client = Minecraft.getInstance();
-        hideWorkerWindow(client);
-        System.out.println("[MinesportBridge/NeoForge] Client resources ready — starting registry/model dump");
-        runDump(client);
-    }
-
-    private static void hideWorkerWindow(Minecraft client) {
+    private void hideWorkerWindow(Minecraft client) {
         if (!"1".equals(System.getenv("MINESPORT_EXPORT_WORKER"))) return;
         try {
             Object window = client.getWindow();
@@ -53,7 +42,7 @@ public final class MinesportBridge {
         }
     }
 
-    private static long findWindowHandle(Object window) {
+    private long findWindowHandle(Object window) {
         if (window == null) return 0L;
         for (String methodName : List.of("handle", "getWindow", "getHandle")) {
             try {
@@ -66,8 +55,8 @@ public final class MinesportBridge {
         return 0L;
     }
 
-    private static void runDump(Minecraft client) {
-        try (BridgeSender sender = new BridgeSender()) {
+    private void runDump(Minecraft client) {
+        try (ExportWorkerSender sender = new ExportWorkerSender()) {
             String modeEnv = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             String mode = modeEnv != null ? modeEnv : "all";
 
@@ -97,7 +86,7 @@ public final class MinesportBridge {
             ));
             sender.flush();
 
-            System.out.println("[MinesportBridge/NeoForge] Dumping " + allBlocks.size() + " registered block types from baked client models...");
+            System.out.println("[MinesportExportWorker/Quilt] Dumping " + allBlocks.size() + " registered block types from baked client models...");
             for (int start = 0; start < allBlocks.size(); start += EXTRACTION_BATCH_SIZE) {
                 int end = Math.min(start + EXTRACTION_BATCH_SIZE, allBlocks.size());
                 List<Block> batch = new ArrayList<>(allBlocks.subList(start, end));
@@ -111,7 +100,7 @@ public final class MinesportBridge {
                     String vanillaMapping = polymerPresent ? tryGetPolymerMapping(block) : null;
                     String loaderType = vanillaMapping != null
                         ? "polymer"
-                        : (id.getNamespace().equals("minecraft") ? "vanilla" : "neoforge");
+                        : (id.getNamespace().equals("minecraft") ? "vanilla" : "quilt");
                     List<BlockVariant> variants = index < extracted.size() ? extracted.get(index) : List.of();
                     sender.send(TYPE_BLOCK_ENTRY, new BlockEntry(blockId, vanillaMapping, loaderType, variants));
 
@@ -122,21 +111,21 @@ public final class MinesportBridge {
                 }
 
                 sender.flush();
-                System.out.println("[MinesportBridge/NeoForge] Baked model extraction " + end + "/" + allBlocks.size());
+                System.out.println("[MinesportExportWorker/Quilt] Baked model extraction " + end + "/" + allBlocks.size());
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
             sender.flush();
-            System.out.println("[MinesportBridge/NeoForge] Registry/model dump complete. Exiting worker.");
+            System.out.println("[MinesportExportWorker/Quilt] Registry/model dump complete. Exiting worker.");
         } catch (Exception error) {
-            System.err.println("[MinesportBridge/NeoForge] Fatal: " + error.getMessage());
+            System.err.println("[MinesportExportWorker/Quilt] Fatal: " + error.getMessage());
             error.printStackTrace();
         } finally {
             Minecraft.getInstance().stop();
         }
     }
 
-    private static List<List<BlockVariant>> extractBatchSafe(Minecraft client, List<Block> blocks) {
+    private List<List<BlockVariant>> extractBatchSafe(Minecraft client, List<Block> blocks) {
         var result = new ArrayList<List<BlockVariant>>(blocks.size());
         for (Block block : blocks) {
             try {
@@ -148,7 +137,7 @@ public final class MinesportBridge {
         return result;
     }
 
-    private static List<LightState> extractLightStates(Block block) {
+    private List<LightState> extractLightStates(Block block) {
         var result = new ArrayList<LightState>();
         for (var state : block.getStateDefinition().getPossibleStates()) {
             int level;
@@ -165,22 +154,17 @@ public final class MinesportBridge {
         return result;
     }
 
-    private static boolean isPolymerPresent() {
-        ModList mods = ModList.get();
-        return mods != null && mods.isLoaded("polymer");
+    private boolean isPolymerPresent() {
+        return QuiltLoader.isModLoaded("polymer");
     }
 
-    private static String loaderVersion() {
-        ModList mods = ModList.get();
-        if (mods == null) return "?";
-        return mods.getMods().stream()
-            .filter(mod -> mod.getModId().equals("neoforge"))
-            .map(mod -> mod.getVersion().toString())
-            .findFirst()
+    private String loaderVersion() {
+        return QuiltLoader.getModContainer("quilt_loader")
+            .map(container -> container.metadata().version().raw())
             .orElse("?");
     }
 
-    private static String tryGetPolymerMapping(Block block) {
+    private String tryGetPolymerMapping(Block block) {
         try {
             Class<?> polymerBlock = Class.forName("eu.pb4.polymer.core.api.block.PolymerBlock");
             if (!polymerBlock.isInstance(block)) return null;
@@ -209,12 +193,10 @@ public final class MinesportBridge {
         }
     }
 
-    private static List<String> getLoadedMods() {
+    private List<String> getLoadedMods() {
         var result = new ArrayList<String>();
-        ModList mods = ModList.get();
-        if (mods != null) {
-            mods.getMods().forEach(mod -> result.add(mod.getModId() + "@" + mod.getVersion()));
-        }
+        QuiltLoader.getAllMods().forEach(mod ->
+            result.add(mod.metadata().id() + "@" + mod.metadata().version().raw()));
         Collections.sort(result);
         return result;
     }

@@ -9,6 +9,6 @@
     {"op": "replace", "file": "gradle/wrapper/gradle-wrapper.properties", "from": "gradle-8.14-bin.zip", "to": "gradle-${gradle_version}-bin.zip"},
     {"op": "overlay", "source": "minesport-bridge-fabric-versions/shared/build-java21.gradle", "target": "build.gradle"},
     {"op": "overlay", "source": "minesport-bridge-fabric-versions/shared/fabric-mod-java21.json", "target": "src/main/resources/fabric.mod.json"},
-    {"op": "replace", "file": "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java", "from": "net.minecraft.SharedConstants.getCurrentVersion().id()", "to": "net.minecraft.SharedConstants.getCurrentVersion().getId()"}
+    {"op": "replace", "file": "src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", "from": "net.minecraft.SharedConstants.getCurrentVersion().id()", "to": "net.minecraft.SharedConstants.getCurrentVersion().getId()"}
   ]
 }

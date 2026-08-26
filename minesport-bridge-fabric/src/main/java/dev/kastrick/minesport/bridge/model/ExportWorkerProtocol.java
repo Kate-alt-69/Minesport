@@ -4,10 +4,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Wire format sent from bridge mod → Minesport engine over local socket.
+ * Wire format sent from the Minesport Export Worker → Minesport engine over local socket.
  * Serialized as newline-delimited JSON (one object per line).
  */
-public class BridgeProtocol {
+public class ExportWorkerProtocol {
 
     // ── Message types (field "type") ──────────────────────────────────────────
 

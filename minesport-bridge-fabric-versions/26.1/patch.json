@@ -10,9 +10,9 @@
     {"op": "replace_tree", "root": "src", "extensions": [".java"], "from": "net.minecraft.resources.ResourceLocation", "to": "net.minecraft.resources.Identifier"},
     {"op": "replace_tree", "root": "src", "extensions": [".java"], "from": "ResourceLocation", "to": "Identifier"},
     {"op": "overlay", "source": "minesport-bridge-fabric-versions/26.x/overlays/build.gradle", "target": "build.gradle"},
-    {"op": "overlay", "source": "minesport-bridge-fabric-versions/26.x/overlays/MinesportBridge.java", "target": "src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java"},
+    {"op": "overlay", "source": "minesport-bridge-fabric-versions/26.x/overlays/MinesportExportWorker.java", "target": "src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"},
     {"op": "overlay", "source": "minesport-bridge-fabric-versions/26.x/overlays/BlockGeometryExtractor.java", "target": "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"},
-    {"op": "overlay", "source": "minesport-bridge-fabric-versions/shared/BridgeProtocolAnimated.java", "target": "src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java"},
+    {"op": "overlay", "source": "minesport-bridge-fabric-versions/shared/ExportWorkerProtocolAnimated.java", "target": "src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java"},
     {"op": "overlay", "source": "minesport-bridge-fabric-versions/26.x/overlays/fabric.mod.json", "target": "src/main/resources/fabric.mod.json"}
   ]
 }

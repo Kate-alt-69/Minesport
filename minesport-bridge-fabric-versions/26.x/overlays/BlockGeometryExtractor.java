@@ -1,7 +1,7 @@
 package dev.kastrick.minesport.bridge.registry;
 
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.BakedQuadData;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockVariant;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.BakedQuadData;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.BlockVariant;
 
 import net.fabricmc.fabric.api.client.renderer.v1.Renderer;
 import net.fabricmc.fabric.api.client.renderer.v1.mesh.MutableMesh;

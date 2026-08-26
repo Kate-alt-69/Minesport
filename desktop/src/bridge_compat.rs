@@ -25,11 +25,11 @@ static BRIDGE_SOURCE_FILES: &[(&str, &[u8])] = &[
     ("gradlew.bat", include_bytes!("../../minesport-bridge-fabric/gradlew.bat")),
     ("gradle/wrapper/gradle-wrapper.jar", include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.jar")),
     ("gradle/wrapper/gradle-wrapper.properties", include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.properties")),
-    ("src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java", include_bytes!("../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/MinesportBridge.java")),
+    ("src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", include_bytes!("../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java")),
     ("src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", include_bytes!("../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java")),
     ("src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java")),
-    ("src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/model/BridgeProtocol.java")),
-    ("src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/socket/BridgeSender.java")),
+    ("src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java")),
+    ("src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java")),
     ("src/main/resources/fabric.mod.json", include_bytes!("../../minesport-bridge-fabric/src/main/resources/fabric.mod.json")),
 ];
 

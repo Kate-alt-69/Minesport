@@ -2,9 +2,9 @@ package dev.kastrick.minesport.bridge.socket;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockEntry;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockLightEntry;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.Hello;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.BlockEntry;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.BlockLightEntry;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.Hello;
 
 import java.io.*;
 import java.net.Socket;
@@ -16,7 +16,7 @@ import java.util.Map;
  * JSON. Messages stay line framed for compatibility, but transport is buffered
  * so a full baked-model dump does not force one kernel/socket flush per block.
  */
-public class BridgeSender implements Closeable {
+public class ExportWorkerSender implements Closeable {
 
     private static final int DEFAULT_PORT = 25590;
     private static final int BUFFER_BYTES = 1 << 20;
@@ -25,7 +25,7 @@ public class BridgeSender implements Closeable {
     private final Socket socket;
     private final BufferedWriter writer;
 
-    public BridgeSender() throws IOException {
+    public ExportWorkerSender() throws IOException {
         int port = DEFAULT_PORT;
         String envPort = System.getenv("MINESPORT_EXPORT_WORKER_PORT");
         if (envPort == null) envPort = System.getenv("MINESPORT_BRIDGE_PORT");

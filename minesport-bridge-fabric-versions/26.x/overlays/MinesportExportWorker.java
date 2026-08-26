@@ -1,12 +1,12 @@
 package dev.kastrick.minesport.bridge;
 
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockEntry;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockLightEntry;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.BlockVariant;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.Hello;
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.LightState;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.BlockEntry;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.BlockLightEntry;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.BlockVariant;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.Hello;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.LightState;
 import dev.kastrick.minesport.bridge.registry.BlockGeometryExtractor;
-import dev.kastrick.minesport.bridge.socket.BridgeSender;
+import dev.kastrick.minesport.bridge.socket.ExportWorkerSender;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -31,11 +31,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGHT;
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_BLOCK_ENTRY;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_BLOCK_LIGHT;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_DONE;
 
-public final class MinesportBridge implements ClientModInitializer {
+public final class MinesportExportWorker implements ClientModInitializer {
     private static final int EXTRACTION_BATCH_SIZE = 128;
 
     @Override
@@ -80,7 +80,7 @@ public final class MinesportBridge implements ClientModInitializer {
     }
 
     private void runDump(Minecraft client) {
-        try (BridgeSender sender = new BridgeSender()) {
+        try (ExportWorkerSender sender = new ExportWorkerSender()) {
             String mode = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             if (mode == null || mode.isBlank()) {
                 mode = "all";

@@ -20,8 +20,8 @@ static GENERATED_CACHE_USE: RwLock<()> = RwLock::new(());
 
 pub fn materialize_engine() -> Result<PathBuf> {
     materialize_runtime_asset(
-        "minesport-engine-0.2.0.jar",
-        ".minesport-engine-0.2.0.tmp",
+        "minesport-engine-0.2.1.jar",
+        ".minesport-engine-0.2.1.tmp",
         ENGINE_BYTES,
     )
 }
@@ -35,7 +35,7 @@ pub fn materialize_bundled_bridge() -> Result<PathBuf> {
 pub fn materialize_bundled_fabric_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
         "minesport_export_worker-fabric-1.21.10.jar",
-        ".minesport-bridge-fabric-0.2.0.tmp",
+        ".minesport_export_worker-fabric-1.21.10.tmp",
         FABRIC_EXPORT_WORKER_BYTES,
     )
 }
@@ -43,7 +43,7 @@ pub fn materialize_bundled_fabric_bridge() -> Result<PathBuf> {
 pub fn materialize_bundled_forge_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
         "minesport_export_worker-forge-1.21.10.jar",
-        ".minesport-bridge-forge-0.2.0.tmp",
+        ".minesport_export_worker-forge-1.21.10.tmp",
         FORGE_EXPORT_WORKER_BYTES,
     )
 }
@@ -51,7 +51,7 @@ pub fn materialize_bundled_forge_bridge() -> Result<PathBuf> {
 pub fn materialize_bundled_neoforge_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
         "minesport_export_worker-neoforge-1.21.10.jar",
-        ".minesport-bridge-neoforge-0.2.0.tmp",
+        ".minesport_export_worker-neoforge-1.21.10.tmp",
         NEOFORGE_EXPORT_WORKER_BYTES,
     )
 }
@@ -59,7 +59,7 @@ pub fn materialize_bundled_neoforge_bridge() -> Result<PathBuf> {
 pub fn materialize_bundled_quilt_bridge() -> Result<PathBuf> {
     materialize_runtime_asset(
         "minesport_export_worker-quilt-1.21.10.jar",
-        ".minesport-bridge-quilt-0.2.0.tmp",
+        ".minesport_export_worker-quilt-1.21.10.tmp",
         QUILT_EXPORT_WORKER_BYTES,
     )
 }

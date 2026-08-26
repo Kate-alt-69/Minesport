@@ -10,7 +10,7 @@
   "environment": "client",
   "entrypoints": {
     "client": [
-      "dev.kastrick.minesport.bridge.MinesportBridge"
+      "dev.kastrick.minesport.bridge.MinesportExportWorker"
     ]
   },
   "depends": {

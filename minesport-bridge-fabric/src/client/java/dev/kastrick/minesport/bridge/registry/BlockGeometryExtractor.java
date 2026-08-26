@@ -1,6 +1,6 @@
 package dev.kastrick.minesport.bridge.registry;
 
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.*;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.*;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.BlockModelPart;

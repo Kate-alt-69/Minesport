@@ -1,8 +1,8 @@
 package dev.kastrick.minesport.bridge;
 
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.*;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.*;
 import dev.kastrick.minesport.bridge.registry.BlockGeometryExtractor;
-import dev.kastrick.minesport.bridge.socket.BridgeSender;
+import dev.kastrick.minesport.bridge.socket.ExportWorkerSender;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.minecraft.client.Minecraft;
@@ -13,11 +13,11 @@ import net.minecraft.world.level.block.Block;
 import java.lang.reflect.Method;
 import java.util.*;
 
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGHT;
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_BLOCK_ENTRY;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_BLOCK_LIGHT;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_DONE;
 
-public class MinesportBridge implements ClientModInitializer {
+public class MinesportExportWorker implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
@@ -32,7 +32,7 @@ public class MinesportBridge implements ClientModInitializer {
     }
 
     private void runDump(Minecraft client) {
-        try (BridgeSender sender = new BridgeSender()) {
+        try (ExportWorkerSender sender = new ExportWorkerSender()) {
             String modeEnv = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             String mode = (modeEnv != null) ? modeEnv : "all";
 

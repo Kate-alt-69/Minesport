@@ -1,8 +1,8 @@
 package dev.kastrick.minesport.bridge;
 
-import dev.kastrick.minesport.bridge.model.BridgeProtocol.*;
+import dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.*;
 import dev.kastrick.minesport.bridge.registry.BlockGeometryExtractor;
-import dev.kastrick.minesport.bridge.socket.BridgeSender;
+import dev.kastrick.minesport.bridge.socket.ExportWorkerSender;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -17,25 +17,25 @@ import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_ENTRY;
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_BLOCK_LIGHT;
-import static dev.kastrick.minesport.bridge.model.BridgeProtocol.TYPE_DONE;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_BLOCK_ENTRY;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_BLOCK_LIGHT;
+import static dev.kastrick.minesport.bridge.model.ExportWorkerProtocol.TYPE_DONE;
 
-@Mod(MinesportBridge.MODID)
-public final class MinesportBridge {
+@Mod(MinesportExportWorker.MODID)
+public final class MinesportExportWorker {
     public static final String MODID = "minesport_bridge";
     private static final int EXTRACTION_BATCH_SIZE = 256;
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
 
-    public MinesportBridge(FMLJavaModLoadingContext context) {
-        TickEvent.ClientTickEvent.Post.BUS.addListener(MinesportBridge::onClientTick);
+    public MinesportExportWorker(FMLJavaModLoadingContext context) {
+        TickEvent.ClientTickEvent.Post.BUS.addListener(MinesportExportWorker::onClientTick);
     }
 
     private static void onClientTick(TickEvent.ClientTickEvent.Post event) {
         if (!STARTED.compareAndSet(false, true)) return;
         Minecraft client = Minecraft.getInstance();
         hideWorkerWindow(client);
-        System.out.println("[MinesportBridge/Forge] Client resources ready — starting registry/model dump");
+        System.out.println("[MinesportExportWorker/Forge] Client resources ready — starting registry/model dump");
         runDump(client);
     }
 
@@ -63,7 +63,7 @@ public final class MinesportBridge {
     }
 
     private static void runDump(Minecraft client) {
-        try (BridgeSender sender = new BridgeSender()) {
+        try (ExportWorkerSender sender = new ExportWorkerSender()) {
             String modeEnv = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             String mode = modeEnv != null ? modeEnv : "all";
 
@@ -93,7 +93,7 @@ public final class MinesportBridge {
             ));
             sender.flush();
 
-            System.out.println("[MinesportBridge/Forge] Dumping " + allBlocks.size() + " registered block types from baked client models...");
+            System.out.println("[MinesportExportWorker/Forge] Dumping " + allBlocks.size() + " registered block types from baked client models...");
             for (int start = 0; start < allBlocks.size(); start += EXTRACTION_BATCH_SIZE) {
                 int end = Math.min(start + EXTRACTION_BATCH_SIZE, allBlocks.size());
                 List<Block> batch = new ArrayList<>(allBlocks.subList(start, end));
@@ -118,14 +118,14 @@ public final class MinesportBridge {
                 }
 
                 sender.flush();
-                System.out.println("[MinesportBridge/Forge] Baked model extraction " + end + "/" + allBlocks.size());
+                System.out.println("[MinesportExportWorker/Forge] Baked model extraction " + end + "/" + allBlocks.size());
             }
 
             sender.sendRaw(Map.of("type", TYPE_DONE, "blocks", allBlocks.size()));
             sender.flush();
-            System.out.println("[MinesportBridge/Forge] Registry/model dump complete. Exiting worker.");
+            System.out.println("[MinesportExportWorker/Forge] Registry/model dump complete. Exiting worker.");
         } catch (Exception error) {
-            System.err.println("[MinesportBridge/Forge] Fatal: " + error.getMessage());
+            System.err.println("[MinesportExportWorker/Forge] Fatal: " + error.getMessage());
             error.printStackTrace();
         } finally {
             Minecraft.getInstance().stop();
