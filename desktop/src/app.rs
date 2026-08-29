@@ -24,13 +24,6 @@ use std::{
 
 const VERSION: &str = "0.2.1";
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum BlockRequestPurpose {
-    #[default]
-    Preflight,
-    Preview,
-}
-
 #[derive(Debug, Clone, Copy)]
 enum PreviewCameraAction {
     Orbit { dx: f32, dy: f32 },
@@ -59,7 +52,6 @@ struct AppState {
     resource_packs: Vec<PathBuf>,
     data_packs: Vec<PathBuf>,
     pending_export: Option<Value>,
-    block_request_purpose: BlockRequestPurpose,
     selected_world: Option<PathBuf>,
     selected_mods_path: Option<PathBuf>,
     selected_version: Option<String>,
@@ -375,7 +367,12 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
             if let Err(error) = heightmap_cache::invalidate(&world) {
                 diagnostics::append(&format!("Could not invalidate heightmap cache: {error:#}"));
             }
-            let result = engine.send_value(json!({ "command": "heightmap", "worldPath": world, "scale": 1 }));
+            let result = engine.send_value(json!({
+                "command": "heightmap",
+                "worldPath": world,
+                "scale": 1,
+                "clientPurpose": "heightmap"
+            }));
             if let Err(error) = result {
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_map_loading(false);
@@ -525,7 +522,12 @@ fn activate_world(
         });
 
         if !cache_hit {
-            if let Err(error) = engine.send_value(json!({ "command": "heightmap", "worldPath": display, "scale": 1 })) {
+            if let Err(error) = engine.send_value(json!({
+                "command": "heightmap",
+                "worldPath": display,
+                "scale": 1,
+                "clientPurpose": "heightmap"
+            })) {
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     ui.set_map_loading(false);
                     ui.set_task_title("MAP FAILED".into());
@@ -625,6 +627,7 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
             "modLoader": loader,
             "outputPath": output,
             "format": format,
+            "clientPurpose": "export",
             "minX": ui.get_min_x(), "minY": ui.get_min_y(), "minZ": ui.get_min_z(),
             "maxX": ui.get_max_x(), "maxY": ui.get_max_y(), "maxZ": ui.get_max_z(),
             "exportMode": export_mode,
@@ -752,9 +755,8 @@ fn wire_preflight(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         let Some(ui) = weak.upgrade() else { return; };
         let world = PathBuf::from(ui.get_world_path().to_string());
         if !world.join("level.dat").is_file() { return; }
-        if let Ok(mut guard) = state.lock() { guard.block_request_purpose = BlockRequestPurpose::Preflight; }
 
-        let mut request = block_list_request(&ui, &world, &state);
+        let mut request = block_list_request(&ui, &world, &state, "preflight");
         add_bubble_fields(&ui, &mut request);
         ui.set_task_active(true);
         ui.set_task_progress(0.05);
@@ -778,11 +780,10 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         if !world.join("level.dat").is_file() { return; }
         viewer_selection::reset();
         if let Ok(mut guard) = open_state.lock() {
-            guard.block_request_purpose = BlockRequestPurpose::Preview;
             guard.preview_pick_map = None;
         }
 
-        let mut request = block_list_request(&ui, &world, &open_state);
+        let mut request = block_list_request(&ui, &world, &open_state, "preview");
         add_bubble_fields(&ui, &mut request);
         ui.set_preview_loading(true);
         ui.set_preview_available(false);
@@ -1023,13 +1024,14 @@ fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: P
     });
 }
 
-fn block_list_request(ui: &MainWindow, world: &Path, state: &SharedState) -> Value {
+fn block_list_request(ui: &MainWindow, world: &Path, state: &SharedState, purpose: &str) -> Value {
     let (_, loader, mods_path) = selected_runtime_context(state, ui, world);
     json!({
         "command": "listBlocks",
         "worldPath": world,
         "modsPath": mods_path,
         "modLoader": loader,
+        "clientPurpose": purpose,
         "minX": ui.get_min_x(), "minY": ui.get_min_y(), "minZ": ui.get_min_z(),
         "maxX": ui.get_max_x(), "maxY": ui.get_max_y(), "maxZ": ui.get_max_z()
     })
@@ -1751,15 +1753,22 @@ fn pump_engine_events(weak: slint::Weak<MainWindow>, events: Receiver<EngineEven
 
 fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: SharedState) {
     if response.kind == "heightmap" {
+        if !response_world_matches_current(&response, &state) {
+            let requested = response.client_world_path.clone();
+            let _ = weak.clone().upgrade_in_event_loop(move |ui| {
+                append_diagnostic(&ui, &format!("Ignored stale heightmap response for previous world: {requested}"));
+            });
+            return;
+        }
+        let requested_world = PathBuf::from(response.client_world_path.clone());
         let decoded = decode_heightmap_payload(&response.image);
         let bounds = (response.min_x, response.min_z, response.max_x, response.max_z, response.scale);
-        let selected_world = state.lock().ok().and_then(|guard| guard.selected_world.clone());
-        let cache_note = match (&selected_world, &decoded) {
-            (Some(world), Ok((_, png))) => match heightmap_cache::save(world, png, bounds.0, bounds.1, bounds.2, bounds.3, bounds.4) {
+        let cache_note = match &decoded {
+            Ok((_, png)) => match heightmap_cache::save(&requested_world, png, bounds.0, bounds.1, bounds.2, bounds.3, bounds.4) {
                 Ok(()) => Some("2D map cached for the next launch".to_string()),
                 Err(error) => Some(format!("[WARN] Could not cache 2D map: {error:#}")),
             },
-            _ => None,
+            Err(_) => None,
         };
         let _ = weak.clone().upgrade_in_event_loop(move |ui| {
             ui.set_map_loading(false);
@@ -1790,12 +1799,21 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
     }
 
     if response.kind == "blocksReady" {
-        let purpose = state.lock().map(|guard| guard.block_request_purpose).unwrap_or_default();
         let path = PathBuf::from(response.file.clone());
+        if !response_world_matches_current(&response, &state) {
+            let requested = response.client_world_path.clone();
+            let purpose = response.client_purpose.clone();
+            let _ = fs::remove_file(&path);
+            let _ = weak.clone().upgrade_in_event_loop(move |ui| {
+                append_diagnostic(&ui, &format!("Ignored stale {purpose} block-list response for previous world: {requested}"));
+            });
+            return;
+        }
         let count = response.count;
+        let purpose = response.client_purpose.clone();
         let weak = weak.clone();
-        match purpose {
-            BlockRequestPurpose::Preflight => {
+        match purpose.as_str() {
+            "preflight" => {
                 thread::spawn(move || {
                     let summary = analyze_preflight(&path);
                     let _ = fs::remove_file(&path);
@@ -1816,7 +1834,7 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                     });
                 });
             }
-            BlockRequestPurpose::Preview => {
+            "preview" => {
                 let preview_state = state.clone();
                 thread::spawn(move || {
                     let rendered = preview::render_file(&path);
@@ -1852,6 +1870,13 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                     });
                 });
             }
+            other => {
+                let _ = fs::remove_file(&path);
+                let other = other.to_string();
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    append_diagnostic(&ui, &format!("Discarded block-list response with unknown client purpose: {other}"));
+                });
+            }
         }
         return;
     }
@@ -1868,6 +1893,8 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         }
         "progress" => {
             ui.set_task_active(true);
+            // Percent 0 is the engine's indeterminate sentinel. Keep the
+            // last real value so phase announcements cannot rewind the bar.
             if response.percent > 0 {
                 let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
                 ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
@@ -1901,6 +1928,16 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         }
         other => append_diagnostic(&ui, &format!("IPC <- {other}")),
     });
+}
+
+fn response_world_matches_current(response: &Response, state: &SharedState) -> bool {
+    if response.client_world_path.trim().is_empty() {
+        return false;
+    }
+    let response_world = Path::new(&response.client_world_path);
+    state.lock().ok()
+        .and_then(|guard| guard.selected_world.clone())
+        .is_some_and(|selected| same_asset_path(&selected, response_world))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2251,6 +2288,28 @@ mod tests {
             Path::new("mods-a"),
             true,
         ));
+    }
+
+    #[test]
+    fn response_world_identity_rejects_previous_selection() {
+        let state: SharedState = Arc::new(Mutex::new(AppState::default()));
+        state.lock().unwrap().selected_world = Some(PathBuf::from("world-b"));
+        let current = Response { client_world_path: "world-b".into(), ..Response::default() };
+        let stale = Response { client_world_path: "world-a".into(), ..Response::default() };
+        let missing = Response::default();
+        assert!(response_world_matches_current(&current, &state));
+        assert!(!response_world_matches_current(&stale, &state));
+        assert!(!response_world_matches_current(&missing, &state));
+    }
+
+    #[test]
+    fn block_list_request_carries_its_own_action_identity() {
+        let state: SharedState = Arc::new(Mutex::new(AppState::default()));
+        let ui = MainWindow::new().unwrap();
+        let preview = block_list_request(&ui, Path::new("world"), &state, "preview");
+        let preflight = block_list_request(&ui, Path::new("world"), &state, "preflight");
+        assert_eq!(preview.get("clientPurpose").and_then(Value::as_str), Some("preview"));
+        assert_eq!(preflight.get("clientPurpose").and_then(Value::as_str), Some("preflight"));
     }
 
     #[test]
