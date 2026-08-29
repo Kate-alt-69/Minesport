@@ -119,8 +119,8 @@ public class HeightmapGenerator {
 
     /** Generate a top-down PNG image of the world as a base64 string. */
     public static String generateBase64Png(File regionDir, int scale) throws IOException {
-        File[] mcaFiles = regionDir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).endsWith(".mca"));
-        if (mcaFiles == null || mcaFiles.length == 0) return null;
+        File[] regionFiles = regionDir.listFiles((d, n) -> isRegionFile(n));
+        if (regionFiles == null || regionFiles.length == 0) return null;
 
         int minRX = Integer.MAX_VALUE, minRZ = Integer.MAX_VALUE;
         int maxRX = Integer.MIN_VALUE, maxRZ = Integer.MIN_VALUE;
@@ -128,7 +128,7 @@ public class HeightmapGenerator {
         record RC(int x, int z, File file) {}
         List<RC> regions = new ArrayList<>();
 
-        for (File f : mcaFiles) {
+        for (File f : regionFiles) {
             String[] parts = f.getName().split("\\.");
             if (parts.length < 4) continue;
             try {
@@ -180,6 +180,11 @@ public class HeightmapGenerator {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageIO.write(img, "PNG", baos);
         return java.util.Base64.getEncoder().encodeToString(baos.toByteArray());
+    }
+
+    private static boolean isRegionFile(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".mca") || lower.endsWith(".mcr");
     }
 
     private static void paintRegion(
