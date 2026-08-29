@@ -71,9 +71,10 @@ fn materialize_runtime_asset(name: &str, temporary_name: &str, bytes: &[u8]) -> 
     let root = data_root().join("runtime");
     fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
     let destination = root.join(name);
-    let write = match fs::metadata(&destination) {
-        Ok(metadata) => metadata.len() != bytes.len() as u64,
-        Err(_) => true,
+    let write = match fs::read(&destination) {
+        Ok(existing) => existing.as_slice() != bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => return Err(error).with_context(|| format!("read {}", destination.display())),
     };
     if write {
         let temporary = root.join(temporary_name);
