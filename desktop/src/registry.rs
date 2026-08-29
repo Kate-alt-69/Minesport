@@ -142,8 +142,8 @@ where
 }
 
 /// Receive one complete `MINESPORT_EXPORT_WORKER_MODE=all` registry dump and persist
-/// it as schema-4 `registry.data`. The listener is nonblocking so cancellation
-/// can terminate a capture even when Minecraft never connects.
+/// it as schema-4 `registry.data`. Both accept and connected reads are bounded
+/// so cancellation can always unwind the capture thread.
 pub fn capture_once_cancellable<F>(
     address: &str,
     cache_root: &Path,
@@ -179,6 +179,9 @@ where
             Err(error) => return Err(error).context("accept Minecraft runtime registry worker"),
         }
     };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .context("set runtime registry socket read timeout")?;
     notice(CaptureNotice::Connected(peer.to_string()));
 
     let mut snapshot = Snapshot {
@@ -195,7 +198,18 @@ where
             bail!("runtime cache cancelled during registry capture");
         }
         line.clear();
-        let bytes = reader.read_until(b'\n', &mut line).context("read runtime registry packet")?;
+        let bytes = match reader.read_until(b'\n', &mut line) {
+            Ok(bytes) => bytes,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error).context("read runtime registry packet"),
+        };
         if bytes == 0 { break; }
         if line.len() > MAX_MESSAGE_BYTES {
             bail!("runtime registry packet exceeded {} bytes", MAX_MESSAGE_BYTES);
