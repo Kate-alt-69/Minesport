@@ -1,6 +1,7 @@
 use crate::{bridge_build, bridge_compat, bridge_family::{self, BridgeFamily}, bridge_java, launcher, runtime, toolchain};
 use anyhow::{Context, Result, anyhow, bail};
-use std::{collections::BTreeSet, env, fs, path::PathBuf};
+use sha2::{Digest, Sha256};
+use std::{collections::BTreeSet, env, fs, io::Read, path::{Path, PathBuf}};
 
 const VERSION: &str = "0.2.1";
 
@@ -58,9 +59,18 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
     }
 
     let destination = compiled_bridge_path(family, &version);
-    if destination.is_file() {
+    let fingerprint_path = compiled_bridge_fingerprint_path(&destination);
+    let expected_fingerprint = compiled_bridge_fingerprint(family, &version)?;
+    if destination.is_file()
+        && fs::read_to_string(&fingerprint_path)
+            .ok()
+            .is_some_and(|value| value.trim() == expected_fingerprint)
+    {
         println!("{} · Minecraft {version} · cached Export Worker reused", family.label());
         return Ok(destination);
+    }
+    if destination.is_file() {
+        println!("{} · Minecraft {version} · cached Export Worker is stale; rebuilding", family.label());
     }
 
     if family == BridgeFamily::Fabric {
@@ -114,6 +124,8 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
     let _ = fs::remove_file(&destination);
     fs::rename(&temporary, &destination)
         .with_context(|| format!("install compiled Bridge {}", destination.display()))?;
+    fs::write(&fingerprint_path, format!("{expected_fingerprint}\n"))
+        .with_context(|| format!("write Export Worker fingerprint {}", fingerprint_path.display()))?;
 
     println!("[100%] {} Export Worker compiled · {}", family.label(), destination.display());
     Ok(destination)
@@ -188,6 +200,32 @@ fn compiled_bridge_path(family: BridgeFamily, version: &str) -> PathBuf {
         .join(family.label().to_ascii_lowercase())
         .join(safe_version(version))
         .join(format!("minesport_export_worker-{}-{}.jar", family.label().to_ascii_lowercase(), safe_version(version)))
+}
+
+fn compiled_bridge_fingerprint_path(jar: &Path) -> PathBuf {
+    jar.with_extension("fingerprint")
+}
+
+fn compiled_bridge_fingerprint(family: BridgeFamily, version: &str) -> Result<String> {
+    let executable = env::current_exe().context("resolve current Minesport executable for Export Worker cache fingerprint")?;
+    let mut file = fs::File::open(&executable)
+        .with_context(|| format!("open {} for Export Worker cache fingerprint", executable.display()))?;
+    let mut hash = Sha256::new();
+    hash.update(b"minesport-export-worker-cache-v2\n");
+    hash.update(VERSION.as_bytes());
+    hash.update(b"\n");
+    hash.update(family.label().as_bytes());
+    hash.update(b"\n");
+    hash.update(version.as_bytes());
+    hash.update(b"\n");
+    let mut buffer = vec![0u8; 256 * 1024];
+    loop {
+        let count = file.read(&mut buffer)
+            .with_context(|| format!("read {} for Export Worker cache fingerprint", executable.display()))?;
+        if count == 0 { break; }
+        hash.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 fn safe_version(value: &str) -> String {
