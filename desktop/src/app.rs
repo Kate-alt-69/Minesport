@@ -133,7 +133,12 @@ pub fn run() -> Result<()> {
     });
 
     ui.run().context("run Minesport Slint event loop")?;
-    cache.cancel();
+    if cache.is_running() {
+        let _ = cache.cancel();
+        if !cache.wait_for_idle(Duration::from_secs(15)) {
+            diagnostics::append("Runtime cache did not stop within the 15-second desktop shutdown window");
+        }
+    }
     if let Err(error) = settings::save(&collect_settings(&ui, &state)) {
         diagnostics::append(&format!("Could not save Minesport desktop settings: {error:#}"));
         eprintln!("Could not save Minesport desktop settings: {error:#}");
@@ -776,6 +781,22 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     let open_state = state.clone();
     ui.on_open_3d(move || {
         let Some(ui) = weak.upgrade() else { return; };
+        if !ui.get_engine_ready() {
+            ui.set_preview_focus_label("3D preview is waiting for the Minesport engine".into());
+            append_diagnostic(&ui, "3D preview blocked: backend is not ready.");
+            return;
+        }
+        if has_pending_export(&open_state) {
+            ui.set_preview_focus_label("3D preview is unavailable while an export waits for runtime preparation".into());
+            append_diagnostic(&ui, "3D preview blocked: an export is queued for runtime preparation.");
+            return;
+        }
+        if ui.get_task_active() {
+            let active = ui.get_task_title().to_string();
+            ui.set_preview_focus_label(format!("3D preview is unavailable while {active} is active").into());
+            append_diagnostic(&ui, &format!("3D preview blocked while another operation is active: {active}"));
+            return;
+        }
         let world = PathBuf::from(ui.get_world_path().to_string());
         if !world.join("level.dat").is_file() { return; }
         viewer_selection::reset();
@@ -1881,6 +1902,27 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         return;
     }
 
+    if response_has_stale_world_target(&response, &state) {
+        let kind = response.kind.clone();
+        let purpose = response.client_purpose.clone();
+        let requested = response.client_world_path.clone();
+        let message = response.message.clone();
+        let terminal = matches!(kind.as_str(), "done" | "error");
+        let _ = weak.clone().upgrade_in_event_loop(move |ui| {
+            if terminal {
+                ui.set_task_completing(false);
+                ui.set_task_active(false);
+                let detail = if kind == "done" {
+                    format!("Background {purpose} for previous world completed: {requested}")
+                } else {
+                    format!("Background {purpose} for previous world failed: {requested} · {message}")
+                };
+                append_diagnostic(&ui, &detail);
+            }
+        });
+        return;
+    }
+
     let _ = weak.clone().upgrade_in_event_loop(move |ui| match response.kind.as_str() {
         "workerInfo" => append_diagnostic(&ui, &format!("[backend] {}", response.message)),
         "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
@@ -1938,6 +1980,10 @@ fn response_world_matches_current(response: &Response, state: &SharedState) -> b
     state.lock().ok()
         .and_then(|guard| guard.selected_world.clone())
         .is_some_and(|selected| same_asset_path(&selected, response_world))
+}
+
+fn response_has_stale_world_target(response: &Response, state: &SharedState) -> bool {
+    !response.client_world_path.trim().is_empty() && !response_world_matches_current(response, state)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2300,6 +2346,9 @@ mod tests {
         assert!(response_world_matches_current(&current, &state));
         assert!(!response_world_matches_current(&stale, &state));
         assert!(!response_world_matches_current(&missing, &state));
+        assert!(!response_has_stale_world_target(&current, &state));
+        assert!(response_has_stale_world_target(&stale, &state));
+        assert!(!response_has_stale_world_target(&missing, &state));
     }
 
     #[test]
