@@ -49,9 +49,9 @@ public class BlockState {
             }
         }
 
-        if (!variants.isEmpty()) {
-            return chooseWeighted(variants.values().iterator().next(), seed);
-        }
+        // Fail closed when no variant actually matches. Falling back to the
+        // first declared variant hides upstream state-decoding problems and
+        // produces plausible-but-wrong geometry.
         return List.of();
     }
 
