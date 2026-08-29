@@ -19,6 +19,7 @@ public class RegionReader {
 
     private static final int SECTOR_SIZE = 4096;
     private static final long MAX_EXTERNAL_COMPRESSED_BYTES = 64L * 1024L * 1024L;
+    private static final int MAX_DECOMPRESSED_CHUNK_BYTES = 128 * 1024 * 1024;
 
     public record RegionContents(
         List<BlockData> blocks,
@@ -510,20 +511,23 @@ public class RegionReader {
         try {
             return switch (type) {
                 case 1 -> {
-                    var baos = new ByteArrayOutputStream();
                     try (var gzip = new GZIPInputStream(new ByteArrayInputStream(data))) {
-                        gzip.transferTo(baos);
+                        yield readBounded(gzip);
                     }
-                    yield baos.toByteArray();
                 }
                 case 2 -> {
-                    var baos = new ByteArrayOutputStream();
                     try (var inf = new InflaterInputStream(new ByteArrayInputStream(data))) {
-                        inf.transferTo(baos);
+                        yield readBounded(inf);
                     }
-                    yield baos.toByteArray();
                 }
-                case 3 -> data;
+                case 3 -> {
+                    if (data.length > MAX_DECOMPRESSED_CHUNK_BYTES) {
+                        throw new IOException(
+                            "Uncompressed chunk payload exceeds " + MAX_DECOMPRESSED_CHUNK_BYTES + " bytes"
+                        );
+                    }
+                    yield data;
+                }
                 default -> {
                     System.err.println("[WARN] Unknown compression type: " + type);
                     yield null;
@@ -533,6 +537,25 @@ public class RegionReader {
             System.err.println("[WARN] Decompression failed: " + e.getMessage());
             return null;
         }
+    }
+
+    private static byte[] readBounded(InputStream input) throws IOException {
+        var output = new ByteArrayOutputStream(Math.min(1 << 20, MAX_DECOMPRESSED_CHUNK_BYTES));
+        byte[] buffer = new byte[64 * 1024];
+        int total = 0;
+        while (true) {
+            int read = input.read(buffer);
+            if (read < 0) break;
+            if (read == 0) continue;
+            if (total > MAX_DECOMPRESSED_CHUNK_BYTES - read) {
+                throw new IOException(
+                    "Decompressed chunk payload exceeds " + MAX_DECOMPRESSED_CHUNK_BYTES + " bytes"
+                );
+            }
+            output.write(buffer, 0, read);
+            total += read;
+        }
+        return output.toByteArray();
     }
 
     @FunctionalInterface
