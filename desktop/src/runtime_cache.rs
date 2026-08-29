@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-type Listener = Box<dyn Fn(RuntimeCacheEvent) + Send + 'static>;
+type Listener = Arc<Mutex<Box<dyn Fn(RuntimeCacheEvent) + Send + 'static>>>;
 
 #[derive(Debug, Clone)]
 pub enum RuntimeCacheEvent {
@@ -89,7 +89,7 @@ impl RuntimeCacheManager {
                     ("mods_path", mods_path.display().to_string()),
                 ],
             );
-            state.listeners.push(Box::new(listener));
+            state.listeners.push(wrap_listener(listener));
             return Ok(false);
         }
 
@@ -114,7 +114,7 @@ impl RuntimeCacheManager {
         state.mods_path = mods_path.clone();
         state.cancel = Some(cancel.clone());
         state.listeners.clear();
-        state.listeners.push(Box::new(listener));
+        state.listeners.push(wrap_listener(listener));
         state.operation = Some(operation);
         drop(state);
 
@@ -237,13 +237,13 @@ impl RuntimeCacheManager {
     }
 
     fn emit(&self, event: RuntimeCacheEvent) {
-        let state = match self.state.lock() {
-            Ok(state) => state,
+        // Clone lightweight listener handles while holding state, then invoke
+        // user callbacks only after the manager mutex has been released.
+        let listeners = match self.state.lock() {
+            Ok(state) => state.listeners.clone(),
             Err(_) => return,
         };
-        for listener in &state.listeners {
-            listener(event.clone());
-        }
+        notify_listeners(&listeners, &event);
     }
 
     fn finish(&self, result: Result<CacheResult, String>) {
@@ -286,8 +286,21 @@ impl RuntimeCacheManager {
         let event = RuntimeCacheEvent::Complete(
             result.map_err(|error| first_line(&error).to_string())
         );
-        for listener in listeners {
-            listener(event.clone());
+        notify_listeners(&listeners, &event);
+    }
+}
+
+fn wrap_listener<F>(listener: F) -> Listener
+where
+    F: Fn(RuntimeCacheEvent) + Send + 'static,
+{
+    Arc::new(Mutex::new(Box::new(listener)))
+}
+
+fn notify_listeners(listeners: &[Listener], event: &RuntimeCacheEvent) {
+    for listener in listeners {
+        if let Ok(callback) = listener.lock() {
+            callback(event.clone());
         }
     }
 }
@@ -374,5 +387,26 @@ mod tests {
     fn listener_error_is_single_line_but_operation_error_can_stay_detailed() {
         assert_eq!(first_line("download failed\nstack\ntrace"), "download failed");
         assert_eq!(first_line("cancelled"), "cancelled");
+    }
+
+    #[test]
+    fn emit_releases_manager_lock_before_listener_runs() {
+        let manager = RuntimeCacheManager::default();
+        let observed = Arc::new(AtomicBool::new(false));
+        let observed_listener = observed.clone();
+        let manager_listener = manager.clone();
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.listeners.push(wrap_listener(move |_| {
+                // This would deadlock if emit still held manager.state.
+                let _ = manager_listener.is_running();
+                observed_listener.store(true, Ordering::Relaxed);
+            }));
+        }
+        manager.emit(RuntimeCacheEvent::Progress(Progress {
+            percent: 1,
+            message: "test".into(),
+        }));
+        assert!(observed.load(Ordering::Relaxed));
     }
 }
