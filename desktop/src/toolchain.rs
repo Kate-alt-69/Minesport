@@ -8,11 +8,16 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
+    process::{Child, Command},
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    thread,
+    time::{Duration, Instant},
 };
 
 const DOWNLOAD_ATTEMPTS: usize = 3;
+const NETWORK_READ_SLICE: Duration = Duration::from_secs(10);
+const JDK_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
 
 enum HttpAttemptError {
     Retryable(anyhow::Error),
@@ -25,24 +30,41 @@ pub struct ToolchainProgress {
     pub message: String,
 }
 
-pub fn ensure_jdk<F>(required: u32, mut progress: F) -> Result<PathBuf>
+pub fn ensure_jdk<F>(required: u32, progress: F) -> Result<PathBuf>
 where
     F: FnMut(ToolchainProgress),
 {
+    ensure_jdk_cancellable(required, Arc::new(AtomicBool::new(false)), progress)
+}
+
+pub fn ensure_jdk_cancellable<F>(
+    required: u32,
+    cancel: Arc<AtomicBool>,
+    mut progress: F,
+) -> Result<PathBuf>
+where
+    F: FnMut(ToolchainProgress),
+{
+    check_cancelled(&cancel, "checking JDK")?;
     progress(ToolchainProgress { percent: 40, message: format!("Checking for JDK {required}…") });
     if let Some(home) = find_installed_jdk(required) {
+        check_cancelled(&cancel, "checking installed JDK")?;
         progress(ToolchainProgress { percent: 44, message: format!("Using installed JDK {} · {}", javac_major(&javac_path(&home)), home.display()) });
         return Ok(home);
     }
 
+    check_cancelled(&cancel, "checking JDK cache")?;
     progress(ToolchainProgress { percent: 44, message: format!("JDK {required} not installed · checking Minesport toolchain cache") });
     if let Some(home) = find_cached_jdk(required) {
+        check_cancelled(&cancel, "checking cached JDK")?;
         progress(ToolchainProgress { percent: 47, message: format!("Using cached JDK {required} · {}", home.display()) });
         return Ok(home);
     }
 
+    check_cancelled(&cancel, "preparing JDK download")?;
     progress(ToolchainProgress { percent: 47, message: format!("Downloading verified JDK {required}…") });
-    let home = download_adoptium_jdk(required, &mut progress)?;
+    let home = download_adoptium_jdk(required, cancel.clone(), &mut progress)?;
+    check_cancelled(&cancel, "finishing JDK preparation")?;
     progress(ToolchainProgress { percent: 54, message: format!("JDK {required} ready · {}", home.display()) });
     Ok(home)
 }
@@ -85,10 +107,15 @@ fn find_cached_jdk(required: u32) -> Option<PathBuf> {
     find_jdk_home_under(&root, required)
 }
 
-fn download_adoptium_jdk<F>(required: u32, progress: &mut F) -> Result<PathBuf>
+fn download_adoptium_jdk<F>(
+    required: u32,
+    cancel: Arc<AtomicBool>,
+    progress: &mut F,
+) -> Result<PathBuf>
 where
     F: FnMut(ToolchainProgress),
 {
+    check_cancelled(&cancel, "resolving JDK package")?;
     let os_name = if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "mac" } else if cfg!(target_os = "linux") { "linux" } else { bail!("automatic JDK download is unsupported on this operating system") };
     let arch = match env::consts::ARCH {
         "x86_64" => "x64",
@@ -98,7 +125,13 @@ where
     let endpoint = format!(
         "https://api.adoptium.net/v3/assets/latest/{required}/hotspot?architecture={arch}&image_type=jdk&jvm_impl=hotspot&os={os_name}&vendor=eclipse"
     );
-    let metadata = http_get_bytes(&endpoint, 8 * 1024 * 1024, Duration::from_secs(120))?;
+    let metadata = http_get_bytes(
+        &endpoint,
+        8 * 1024 * 1024,
+        Duration::from_secs(120),
+        cancel.clone(),
+    )?;
+    check_cancelled(&cancel, "reading JDK package metadata")?;
 
     #[derive(Deserialize)]
     struct Asset { binary: Binary }
@@ -114,6 +147,7 @@ where
     let package = assets.into_iter().next().ok_or_else(|| anyhow!("Adoptium did not return a JDK {required} package"))?.binary.package;
     if package.link.is_empty() { bail!("Adoptium JDK {required} package does not contain a download link"); }
 
+    check_cancelled(&cancel, "preparing JDK cache")?;
     let root = toolchain_root().join(format!("jdk-{required}"));
     if root.exists() { fs::remove_dir_all(&root).with_context(|| format!("reset {}", root.display()))?; }
     fs::create_dir_all(&root)?;
@@ -122,37 +156,47 @@ where
     let archive = root.join(archive_name);
 
     progress(ToolchainProgress { percent: 48, message: format!("Downloading Eclipse Temurin JDK {required}…") });
-    download_file(&package.link, &archive)?;
+    download_file(&package.link, &archive, cancel.clone())?;
+    check_cancelled(&cancel, "verifying JDK download")?;
     if !package.checksum.trim().is_empty() {
-        verify_sha256(&archive, package.checksum.trim())?;
+        verify_sha256_cancellable(&archive, package.checksum.trim(), &cancel)?;
     }
+    check_cancelled(&cancel, "extracting JDK")?;
     progress(ToolchainProgress { percent: 51, message: format!("Verified JDK {required} · extracting…") });
 
     let extraction = root.join("runtime");
     fs::create_dir_all(&extraction)?;
-    extract_archive(&archive, &extraction)?;
+    extract_archive_cancellable(&archive, &extraction, cancel.clone())?;
+    check_cancelled(&cancel, "finishing JDK extraction")?;
     let _ = fs::remove_file(&archive);
     let home = find_jdk_home_under(&extraction, required)
         .ok_or_else(|| anyhow!("downloaded JDK {required} did not contain a compatible javac"))?;
     Ok(home)
 }
 
-fn download_file(url: &str, destination: &Path) -> Result<()> {
+fn download_file(url: &str, destination: &Path, cancel: Arc<AtomicBool>) -> Result<()> {
     if !url.starts_with("https://") { bail!("JDK download URL must use HTTPS"); }
     if let Some(parent) = destination.parent() { fs::create_dir_all(parent)?; }
 
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
-        .timeout_read(Duration::from_secs(180))
+        .timeout_read(NETWORK_READ_SLICE)
         .build();
     let mut last_error = None;
     for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        check_cancelled(&cancel, "downloading JDK")?;
         let _ = fs::remove_file(destination);
-        match download_file_once(&agent, url, destination) {
+        match download_file_once(&agent, url, destination, &cancel) {
             Ok(()) => return Ok(()),
             Err(error) => {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = fs::remove_file(destination);
+                    return Err(cancelled_error("downloading JDK"));
+                }
                 last_error = Some(error);
-                if attempt < DOWNLOAD_ATTEMPTS { std::thread::sleep(Duration::from_millis(500 * attempt as u64)); }
+                if attempt < DOWNLOAD_ATTEMPTS {
+                    sleep_cancellable(Duration::from_millis(500 * attempt as u64), &cancel, "retrying JDK download")?;
+                }
             }
         }
     }
@@ -161,40 +205,74 @@ fn download_file(url: &str, destination: &Path) -> Result<()> {
     Err(anyhow!("download {url} failed after {DOWNLOAD_ATTEMPTS} attempts: {error:#}"))
 }
 
-fn download_file_once(agent: &ureq::Agent, url: &str, destination: &Path) -> Result<()> {
+fn download_file_once(
+    agent: &ureq::Agent,
+    url: &str,
+    destination: &Path,
+    cancel: &Arc<AtomicBool>,
+) -> Result<()> {
+    check_cancelled(cancel, "starting JDK download")?;
     let response = agent.get(url).set("User-Agent", "Minesport-Rust-Toolchain/0.2.1").call()
         .map_err(|error| anyhow!("JDK download request failed: {error}"))?;
     let mut reader = response.into_reader();
     let mut output = File::create(destination).with_context(|| format!("create {}", destination.display()))?;
-    std::io::copy(&mut reader, &mut output).with_context(|| format!("download into {}", destination.display()))?;
+    let mut buffer = [0u8; 128 * 1024];
+    loop {
+        check_cancelled(cancel, "downloading JDK")?;
+        let read = reader.read(&mut buffer).with_context(|| format!("download into {}", destination.display()))?;
+        if read == 0 { break; }
+        output.write_all(&buffer[..read]).with_context(|| format!("write {}", destination.display()))?;
+    }
     output.flush()?;
     Ok(())
 }
 
-fn http_get_bytes(url: &str, limit: u64, timeout: Duration) -> Result<Vec<u8>> {
+fn http_get_bytes(
+    url: &str,
+    limit: u64,
+    timeout: Duration,
+    cancel: Arc<AtomicBool>,
+) -> Result<Vec<u8>> {
     if !url.starts_with("https://") { bail!("HTTP metadata URL must use HTTPS: {url}"); }
+    let read_timeout = timeout.min(NETWORK_READ_SLICE);
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(20))
-        .timeout_read(timeout)
+        .timeout_read(read_timeout)
         .build();
+    let deadline = Instant::now() + timeout;
     let mut last_error = None;
     for attempt in 1..=DOWNLOAD_ATTEMPTS {
-        match http_get_bytes_once(&agent, url, limit) {
+        check_cancelled(&cancel, "fetching JDK metadata")?;
+        if Instant::now() >= deadline {
+            break;
+        }
+        match http_get_bytes_once(&agent, url, limit, &cancel) {
             Ok(data) => return Ok(data),
             Err(HttpAttemptError::Permanent(error)) => return Err(error),
             Err(HttpAttemptError::Retryable(error)) => {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(cancelled_error("fetching JDK metadata"));
+                }
                 last_error = Some(error);
-                if attempt < DOWNLOAD_ATTEMPTS {
-                    std::thread::sleep(Duration::from_millis(400 * attempt as u64));
+                if attempt < DOWNLOAD_ATTEMPTS && Instant::now() < deadline {
+                    sleep_cancellable(Duration::from_millis(400 * attempt as u64), &cancel, "retrying JDK metadata request")?;
                 }
             }
         }
     }
-    let error = last_error.unwrap_or_else(|| anyhow!("unknown HTTP failure"));
+    let error = last_error.unwrap_or_else(|| anyhow!("JDK metadata request timed out"));
     Err(anyhow!("HTTP request failed for {url} after {DOWNLOAD_ATTEMPTS} attempts: {error:#}"))
 }
 
-fn http_get_bytes_once(agent: &ureq::Agent, url: &str, limit: u64) -> std::result::Result<Vec<u8>, HttpAttemptError> {
+fn http_get_bytes_once(
+    agent: &ureq::Agent,
+    url: &str,
+    limit: u64,
+    cancel: &Arc<AtomicBool>,
+) -> std::result::Result<Vec<u8>, HttpAttemptError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(HttpAttemptError::Permanent(cancelled_error("fetching JDK metadata")));
+    }
     let response = match agent
         .get(url)
         .set("User-Agent", "Minesport-Rust-Toolchain/0.2.1")
@@ -212,13 +290,22 @@ fn http_get_bytes_once(agent: &ureq::Agent, url: &str, limit: u64) -> std::resul
             return Err(HttpAttemptError::Retryable(anyhow!("HTTP request failed for {url}: {error}")));
         }
     };
-    let mut reader = response.into_reader().take(limit + 1);
+    let mut reader = response.into_reader();
     let mut data = Vec::new();
-    if let Err(error) = reader.read_to_end(&mut data) {
-        return Err(HttpAttemptError::Retryable(anyhow!("read HTTP response for {url}: {error}")));
-    }
-    if data.len() as u64 > limit {
-        return Err(HttpAttemptError::Permanent(anyhow!("HTTP response exceeded {limit} bytes: {url}")));
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(HttpAttemptError::Permanent(cancelled_error("fetching JDK metadata")));
+        }
+        let read = match reader.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) => return Err(HttpAttemptError::Retryable(anyhow!("read HTTP response for {url}: {error}"))),
+        };
+        if read == 0 { break; }
+        if data.len().saturating_add(read) as u64 > limit {
+            return Err(HttpAttemptError::Permanent(anyhow!("HTTP response exceeded {limit} bytes: {url}")));
+        }
+        data.extend_from_slice(&buffer[..read]);
     }
     Ok(data)
 }
@@ -228,10 +315,15 @@ fn retryable_http_status(code: u16) -> bool {
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
+    verify_sha256_cancellable(path, expected, &Arc::new(AtomicBool::new(false)))
+}
+
+fn verify_sha256_cancellable(path: &Path, expected: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
     let mut file = File::open(path)?;
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 128 * 1024];
     loop {
+        check_cancelled(cancel, "verifying JDK checksum")?;
         let read = file.read(&mut buffer)?;
         if read == 0 { break; }
         digest.update(&buffer[..read]);
@@ -243,8 +335,13 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
-    if cfg!(windows) {
+fn extract_archive_cancellable(
+    archive: &Path,
+    destination: &Path,
+    cancel: Arc<AtomicBool>,
+) -> Result<()> {
+    check_cancelled(&cancel, "starting JDK extraction")?;
+    let mut command = if cfg!(windows) {
         let mut command = Command::new("powershell.exe");
         command
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
@@ -252,16 +349,70 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
             .arg(archive)
             .arg(destination);
         hide_console_window(&mut command);
-        let status = command.status().context("launch PowerShell Expand-Archive for JDK")?;
-        if !status.success() { bail!("PowerShell failed to extract downloaded JDK: {status}"); }
-        return Ok(());
-    }
+        command
+    } else {
+        let mut command = Command::new("tar");
+        command.arg("-xzf").arg(archive).arg("-C").arg(destination);
+        command
+    };
 
-    let status = Command::new("tar")
-        .arg("-xzf").arg(archive)
-        .arg("-C").arg(destination)
-        .status().context("launch tar for downloaded JDK")?;
-    if !status.success() { bail!("tar failed to extract downloaded JDK: {status}"); }
+    let mut child = command.spawn().with_context(|| {
+        if cfg!(windows) {
+            "launch PowerShell Expand-Archive for JDK"
+        } else {
+            "launch tar for downloaded JDK"
+        }
+    })?;
+    let started = Instant::now();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            terminate_child(&mut child);
+            return Err(cancelled_error("extracting JDK"));
+        }
+        if started.elapsed() >= JDK_EXTRACTION_TIMEOUT {
+            terminate_child(&mut child);
+            bail!("JDK extraction timed out after {} seconds", JDK_EXTRACTION_TIMEOUT.as_secs());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(());
+                }
+                if cfg!(windows) {
+                    bail!("PowerShell failed to extract downloaded JDK: {status}");
+                }
+                bail!("tar failed to extract downloaded JDK: {status}");
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(error) => return Err(error).context("poll JDK extraction process"),
+        }
+    }
+}
+
+fn terminate_child(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+fn check_cancelled(cancel: &Arc<AtomicBool>, stage: &str) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(cancelled_error(stage));
+    }
+    Ok(())
+}
+
+fn cancelled_error(stage: &str) -> anyhow::Error {
+    anyhow!("JDK preparation cancelled while {stage}")
+}
+
+fn sleep_cancellable(duration: Duration, cancel: &Arc<AtomicBool>, stage: &str) -> Result<()> {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        check_cancelled(cancel, stage)?;
+        thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
+    }
     Ok(())
 }
 
@@ -354,5 +505,29 @@ mod tests {
     #[test]
     fn metadata_download_attempt_count_matches_legacy_hardening() {
         assert_eq!(DOWNLOAD_ATTEMPTS, 3);
+    }
+
+    #[test]
+    fn pre_cancelled_jdk_request_stops_before_detection_or_network() {
+        let cancel = Arc::new(AtomicBool::new(true));
+        let error = ensure_jdk_cancellable(999, cancel, |_| {}).unwrap_err().to_string();
+        assert!(error.to_ascii_lowercase().contains("cancel"));
+    }
+
+    #[test]
+    fn extraction_has_a_hard_timeout() {
+        assert!(JDK_EXTRACTION_TIMEOUT <= Duration::from_secs(5 * 60));
+        assert!(NETWORK_READ_SLICE <= Duration::from_secs(10));
+    }
+
+    #[test]
+    fn legacy_checksum_wrapper_still_verifies_files() {
+        let root = std::env::temp_dir().join(format!("minesport-sha-test-{}", std::process::id()));
+        fs::write(&root, b"abc").unwrap();
+        assert!(verify_sha256(
+            &root,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        ).is_ok());
+        let _ = fs::remove_file(root);
     }
 }
