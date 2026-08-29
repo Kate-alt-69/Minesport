@@ -147,15 +147,9 @@ pub fn bridge_data_root() -> PathBuf {
     if let Some(root) = env_path("MINESPORT_BRIDGE_DATA") {
         return root;
     }
-    if cfg!(windows) {
-        if let Some(program_files) = env_path("ProgramFiles") {
-            return program_files
-                .join(VENDOR_DIR)
-                .join(APP_DIR)
-                .join("bridge-data");
-        }
-    }
-    data_root().join("bridge-data")
+    // Export Workers and compatibility build products are regenerable cache
+    // data. Never require write access to Program Files for normal operation.
+    cache_root().join("bridge-data")
 }
 
 pub(crate) fn acquire_generated_cache_lease() -> Result<RwLockReadGuard<'static, ()>> {
@@ -333,5 +327,12 @@ mod tests {
         assert!(!FORGE_EXPORT_WORKER_BYTES.is_empty());
         assert!(!NEOFORGE_EXPORT_WORKER_BYTES.is_empty());
         assert!(!QUILT_EXPORT_WORKER_BYTES.is_empty());
+    }
+
+    #[test]
+    fn bridge_data_defaults_to_user_cache() {
+        if env::var_os("MINESPORT_BRIDGE_DATA").is_none() {
+            assert_eq!(bridge_data_root(), cache_root().join("bridge-data"));
+        }
     }
 }
