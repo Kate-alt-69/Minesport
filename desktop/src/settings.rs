@@ -1,7 +1,12 @@
 use crate::runtime;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -49,6 +54,7 @@ impl Default for DesktopSettings {
 
 pub fn load() -> DesktopSettings {
     let path = settings_path();
+    let _ = restore_backup_if_needed(&path);
     let Ok(bytes) = fs::read(&path) else { return DesktopSettings::default(); };
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
@@ -58,16 +64,68 @@ pub fn save(settings: &DesktopSettings) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create settings directory {}", parent.display()))?;
     }
+    restore_backup_if_needed(&path)?;
     let bytes = serde_json::to_vec_pretty(settings).context("encode Rust desktop settings")?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
-    let _ = fs::remove_file(&path);
-    fs::rename(&temporary, &path).with_context(|| format!("install {}", path.display()))?;
-    Ok(())
+    crash_safe_replace(&path, &bytes)
 }
 
 fn settings_path() -> PathBuf {
     runtime::data_root().join("settings").join("desktop.json")
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    path.with_extension("json.bak")
+}
+
+fn restore_backup_if_needed(path: &Path) -> Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    let backup = backup_path(path);
+    if backup.is_file() {
+        fs::rename(&backup, path)
+            .with_context(|| format!("restore settings {} from {}", path.display(), backup.display()))?;
+    }
+    Ok(())
+}
+
+fn crash_safe_replace(path: &Path, bytes: &[u8]) -> Result<()> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = path.with_extension(format!("json.{}.{}.tmp", std::process::id(), stamp));
+    let backup = backup_path(path);
+
+    {
+        let mut file = File::create(&temporary)
+            .with_context(|| format!("create {}", temporary.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("write {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync {}", temporary.display()))?;
+    }
+
+    let had_previous = path.is_file();
+    if had_previous {
+        let _ = fs::remove_file(&backup);
+        fs::rename(path, &backup)
+            .with_context(|| format!("stage previous settings {}", path.display()))?;
+    }
+
+    match fs::rename(&temporary, path) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            if had_previous && backup.is_file() {
+                let _ = fs::rename(&backup, path);
+            }
+            Err(error).with_context(|| format!("install {}", path.display()))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -82,5 +140,19 @@ mod tests {
         assert_eq!(value.flatter_cell_index, 3);
         assert!(value.blender_export);
         assert!(!value.blender_translator_prompted);
+    }
+
+    #[test]
+    fn backup_restore_recovers_interrupted_publication() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("minesport-settings-backup-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        let backup = backup_path(&path);
+        fs::write(&backup, b"{\"export_name\":\"Recovered\"}").unwrap();
+        restore_backup_if_needed(&path).unwrap();
+        assert!(path.is_file());
+        assert!(!backup.exists());
+        let _ = fs::remove_dir_all(root);
     }
 }
