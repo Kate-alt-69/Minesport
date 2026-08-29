@@ -1096,7 +1096,9 @@ fn start_runtime_cache_job(
                     percent,
                     move || { let _ = cancel_cache.cancel(); },
                 );
-                ui.set_task_active(false);
+                if foreground {
+                    ui.set_task_active(false);
+                }
             });
         }
         RuntimeCacheEvent::Complete(result) => {
@@ -1115,7 +1117,9 @@ fn start_runtime_cache_job(
                 aux_windows::close_runtime_cache(&ui);
                 ui.set_runtime_cache_busy(false);
                 ui.set_runtime_cache_status(status.into());
-                ui.set_task_active(false);
+                if foreground {
+                    ui.set_task_active(false);
+                }
                 match &result {
                     Ok(cache_result) => {
                         if foreground && !has_pending_export(&ui_completion_state) {
@@ -1151,8 +1155,8 @@ fn start_runtime_cache_job(
     let _ = weak.upgrade_in_event_loop(move |ui| {
         ui.set_runtime_cache_busy(true);
         ui.set_runtime_cache_status(if force { "REBUILDING" } else { "STARTING" }.into());
-        ui.set_task_active(false);
         if foreground {
+            ui.set_task_active(false);
             ui.set_task_title("RUNTIME CACHE".into());
             ui.set_task_detail(format!("Minecraft {version}").into());
         }
