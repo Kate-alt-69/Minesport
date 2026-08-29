@@ -527,15 +527,29 @@ fn activate_world(
 
         if !geometry_export {
             let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_runtime_cache_busy(false);
                 ui.set_runtime_cache_status("NOT REQUIRED FOR LITEMATICA".into());
             });
         } else if runtime_registry_supported(&loader, &version, &mods_path) {
-            let _ = start_runtime_cache_job(
-                weak.clone(), cache, engine, state, version, loader, mods_path, false, false,
-            );
+            let running = cache.is_running_for_loader(&version, &loader, &mods_path);
+            let ready = cache.ready_path_for_loader(&version, &loader, &mods_path).is_some();
+            let status = if running {
+                "PREPARING"
+            } else if ready {
+                "READY"
+            } else {
+                "ON DEMAND · starts with Export"
+            };
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_runtime_cache_busy(running);
+                ui.set_runtime_cache_status(status.into());
+            });
         } else {
             let detail = runtime_registry_unavailable_reason(&loader, &version, &mods_path);
-            let _ = weak.upgrade_in_event_loop(move |ui| ui.set_runtime_cache_status(detail.into()));
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_runtime_cache_busy(false);
+                ui.set_runtime_cache_status(detail.into());
+            });
         }
     });
 }
