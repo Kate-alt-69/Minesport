@@ -269,9 +269,14 @@ fn find_jdk_home_under(root: &Path, required: u32) -> Option<PathBuf> {
     if valid_jdk_home(root, required) { return Some(root.to_path_buf()); }
     let mut stack = vec![root.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let entries = fs::read_dir(&current).ok()?;
-        for entry in entries.flatten() {
-            if !entry.file_type().ok()?.is_dir() { continue; }
+        let Ok(entries) = fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() { continue; }
             let path = entry.path();
             if valid_jdk_home(&path, required) { return Some(path); }
             stack.push(path);
