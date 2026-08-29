@@ -143,7 +143,8 @@ where
 
 /// Receive one complete `MINESPORT_EXPORT_WORKER_MODE=all` registry dump and persist
 /// it as schema-4 `registry.data`. Both accept and connected reads are bounded
-/// so cancellation can always unwind the capture thread.
+/// so cancellation can always unwind the capture thread. Protocol errors fail
+/// closed so a partial registry is never published as reusable cache data.
 pub fn capture_once_cancellable<F>(
     address: &str,
     cache_root: &Path,
@@ -189,6 +190,7 @@ where
         ..Snapshot::default()
     };
     let mut complete = false;
+    let mut hello_seen = false;
     let mut total_blocks = 0usize;
     let mut reader = BufReader::new(stream);
     let mut line = Vec::with_capacity(64 * 1024);
@@ -217,28 +219,63 @@ where
         while matches!(line.last(), Some(b'\n' | b'\r')) { line.pop(); }
         if line.is_empty() { continue; }
 
-        let message: WireMessage = match serde_json::from_slice(&line) {
-            Ok(value) => value,
-            Err(error) => {
-                notice(CaptureNotice::WorkerMessage(format!("Ignoring malformed registry packet: {error}")));
-                continue;
-            }
-        };
+        let message: WireMessage = serde_json::from_slice(&line)
+            .context("parse runtime registry packet")?;
 
         match message.kind.as_str() {
             "hello" => {
+                if hello_seen {
+                    bail!("runtime registry protocol sent more than one hello packet");
+                }
+                if message.mc_version.trim().is_empty() {
+                    bail!("runtime registry hello had no Minecraft version");
+                }
+                if message.total_blocks > MAX_BLOCKS {
+                    bail!(
+                        "runtime registry announced {} blocks, exceeding limit {}",
+                        message.total_blocks,
+                        MAX_BLOCKS
+                    );
+                }
+                if message.loaded_mods.len() > MAX_LOADED_MODS {
+                    bail!(
+                        "runtime registry announced {} loaded mods, exceeding limit {}",
+                        message.loaded_mods.len(),
+                        MAX_LOADED_MODS
+                    );
+                }
                 snapshot.minecraft_version = message.mc_version.trim().to_string();
                 snapshot.loader_version = message.loader_version.trim().to_string();
                 snapshot.loaded_mods = message.loaded_mods;
-                total_blocks = message.total_blocks.min(MAX_BLOCKS);
+                total_blocks = message.total_blocks;
+                hello_seen = true;
             }
             "block" => {
+                if !hello_seen {
+                    bail!("runtime registry block packet arrived before hello");
+                }
                 let block_id = message.block_id.trim();
-                if block_id.is_empty() { continue; }
-                let entry = snapshot.blocks.entry(block_id.to_string()).or_default();
-                entry.vanilla_mapping = message.vanilla_mapping.trim().to_string();
-                entry.loader_type = message.loader_type.trim().to_string();
-                entry.variants = sanitize_variants(message.variants);
+                if block_id.is_empty() {
+                    bail!("runtime registry block packet had an empty block ID");
+                }
+                if snapshot.blocks.contains_key(block_id) {
+                    bail!("runtime registry sent duplicate block entry {block_id}");
+                }
+                snapshot.blocks.insert(
+                    block_id.to_string(),
+                    RuntimeBlock {
+                        vanilla_mapping: message.vanilla_mapping.trim().to_string(),
+                        loader_type: message.loader_type.trim().to_string(),
+                        variants: sanitize_variants(message.variants),
+                        lights: Vec::new(),
+                    },
+                );
+                if snapshot.blocks.len() > total_blocks {
+                    bail!(
+                        "runtime registry received more block entries ({}) than hello announced ({total_blocks})",
+                        snapshot.blocks.len()
+                    );
+                }
                 if snapshot.blocks.len() % 128 == 0 {
                     notice(CaptureNotice::Progress {
                         blocks: snapshot.blocks.len(),
@@ -247,25 +284,51 @@ where
                 }
             }
             "block_light" => {
+                if !hello_seen {
+                    bail!("runtime registry light packet arrived before hello");
+                }
                 let block_id = message.block_id.trim();
-                if block_id.is_empty() { continue; }
-                snapshot.blocks.entry(block_id.to_string()).or_default().lights = sanitize_lights(message.states);
+                if block_id.is_empty() {
+                    bail!("runtime registry light packet had an empty block ID");
+                }
+                let entry = snapshot
+                    .blocks
+                    .get_mut(block_id)
+                    .ok_or_else(|| anyhow::anyhow!("runtime registry light packet referenced unknown block {block_id}"))?;
+                entry.lights = sanitize_lights(message.states);
             }
-            "texture" => {}
-            "error" => {
-                if !message.message.trim().is_empty() {
-                    notice(CaptureNotice::WorkerMessage(message.message));
+            "texture" => {
+                if !hello_seen {
+                    bail!("runtime registry texture packet arrived before hello");
                 }
             }
-            "done" => complete = true,
-            _ => {}
+            "error" => {
+                let detail = message.message.trim();
+                if detail.is_empty() {
+                    bail!("runtime Export Worker reported an unspecified protocol error");
+                }
+                bail!("runtime Export Worker reported an error: {detail}");
+            }
+            "done" => {
+                if !hello_seen {
+                    bail!("runtime registry done packet arrived before hello");
+                }
+                complete = true;
+            }
+            other => bail!("runtime registry sent unknown packet type {other:?}"),
         }
     }
 
     if !complete { bail!("runtime worker disconnected before completing its registry dump"); }
-    if snapshot.minecraft_version.trim().is_empty() { bail!("runtime registry dump had no Minecraft version"); }
+    if !hello_seen { bail!("runtime registry dump completed without a hello packet"); }
     if snapshot.minecraft_version.trim() != version {
         bail!("runtime registry version {} does not match requested {}", snapshot.minecraft_version, version);
+    }
+    if snapshot.blocks.len() != total_blocks {
+        bail!(
+            "runtime registry completed with {} block entries but hello announced {total_blocks}",
+            snapshot.blocks.len()
+        );
     }
 
     snapshot.captured_at = unix_timestamp_string();
