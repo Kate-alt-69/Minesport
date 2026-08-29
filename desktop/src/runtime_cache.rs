@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
     thread,
+    time::{Duration, Instant},
 };
 
 type Listener = Arc<Mutex<Box<dyn Fn(RuntimeCacheEvent) + Send + 'static>>>;
@@ -158,6 +159,27 @@ impl RuntimeCacheManager {
             return true;
         }
         false
+    }
+
+    /// Wait for an in-flight runtime worker to fully unwind after cancellation.
+    /// This deliberately polls the manager state instead of blocking the worker
+    /// callback thread or holding the state mutex while cleanup runs.
+    pub fn wait_for_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if !self.is_running() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                diagnostics::Logger::new("RUNTIME").child("REGISTRY").warn(
+                    "RuntimeRegistryShutdownWaitTimedOut",
+                    "runtime registry worker did not stop before shutdown timeout",
+                    &[("timeout_ms", timeout.as_millis().to_string())],
+                );
+                return false;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -341,6 +363,15 @@ mod tests {
         let manager = RuntimeCacheManager::default();
         assert!(!manager.is_running());
         assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
+        assert!(manager.wait_for_idle(Duration::from_millis(0)));
+    }
+
+    #[test]
+    fn wait_for_idle_times_out_for_a_stuck_running_state() {
+        let manager = RuntimeCacheManager::default();
+        manager.state.lock().unwrap().running = true;
+        assert!(!manager.wait_for_idle(Duration::from_millis(5)));
+        manager.state.lock().unwrap().running = false;
     }
 
     #[test]
