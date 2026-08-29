@@ -142,8 +142,17 @@ public class WorldCopier {
                 "entities/" + file.getName()
             );
         }
+        int externalCount = copySelectedExternalChunks(
+            source,
+            destination,
+            minX, minZ,
+            maxX, maxZ,
+            log,
+            "entities/"
+        );
         if (log != null) {
-            log.accept("Selected entity regions: " + files.length);
+            log.accept("Selected entity regions: " + files.length
+                + (externalCount > 0 ? " · external chunks: " + externalCount : ""));
         }
         return true;
     }
@@ -157,7 +166,8 @@ public class WorldCopier {
     }
 
     private static boolean isRegionFile(String name) {
-        return name.endsWith(".mca") || name.endsWith(".mcr");
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".mca") || lower.endsWith(".mcr");
     }
 
     private static File[] selectedRegionFiles(
@@ -195,6 +205,57 @@ public class WorldCopier {
             long selectionMaxZ = Math.max((long) minZ, (long) maxZ);
             return regionMaxX >= selectionMinX && regionMinX <= selectionMaxX
                 && regionMaxZ >= selectionMinZ && regionMinZ <= selectionMaxZ;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private static int copySelectedExternalChunks(
+        File source,
+        Path destination,
+        int minX, int minZ,
+        int maxX, int maxZ,
+        Consumer<String> log,
+        String labelPrefix
+    ) throws IOException {
+        File[] external = source.listFiles(file ->
+            file.isFile() && externalChunkIntersects(file.getName(), minX, minZ, maxX, maxZ)
+        );
+        if (external == null || external.length == 0) return 0;
+        Arrays.sort(external, Comparator.comparing(File::getName));
+        for (File file : external) {
+            copyFile(
+                file.toPath(),
+                destination.resolve(file.getName()),
+                log,
+                labelPrefix + file.getName()
+            );
+        }
+        return external.length;
+    }
+
+    private static boolean externalChunkIntersects(
+        String name,
+        int minX, int minZ,
+        int maxX, int maxZ
+    ) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (!lower.startsWith("c.") || !lower.endsWith(".mcc")) return false;
+        String[] parts = name.split("\\.");
+        if (parts.length != 4) return false;
+        try {
+            long chunkX = Long.parseLong(parts[1]);
+            long chunkZ = Long.parseLong(parts[2]);
+            long chunkMinX = chunkX * 16L;
+            long chunkMinZ = chunkZ * 16L;
+            long chunkMaxX = chunkMinX + 15L;
+            long chunkMaxZ = chunkMinZ + 15L;
+            long selectionMinX = Math.min((long) minX, (long) maxX);
+            long selectionMaxX = Math.max((long) minX, (long) maxX);
+            long selectionMinZ = Math.min((long) minZ, (long) maxZ);
+            long selectionMaxZ = Math.max((long) minZ, (long) maxZ);
+            return chunkMaxX >= selectionMinX && chunkMinX <= selectionMaxX
+                && chunkMaxZ >= selectionMinZ && chunkMinZ <= selectionMaxZ;
         } catch (NumberFormatException ignored) {
             return false;
         }
@@ -243,9 +304,18 @@ public class WorldCopier {
                 "region/" + file.getName()
             );
         }
+        int externalCount = copySelectedExternalChunks(
+            sourceRegion,
+            destination,
+            minX, minZ,
+            maxX, maxZ,
+            log,
+            "region/"
+        );
 
         if (log != null) {
-            log.accept("Selected block regions: " + files.length);
+            log.accept("Selected block regions: " + files.length
+                + (externalCount > 0 ? " · external chunks: " + externalCount : ""));
         }
     }
 
