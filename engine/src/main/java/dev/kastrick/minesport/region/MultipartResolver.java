@@ -1,6 +1,7 @@
 package dev.kastrick.minesport.region;
 
 import dev.kastrick.minesport.export.ExportWorldContext;
+import dev.kastrick.minesport.export.SpatialKey;
 
 import java.util.*;
 
@@ -109,10 +110,10 @@ public class MultipartResolver {
         // therefore see the same neighbour map even when culling is disabled.
         ExportWorldContext.set(blocks);
 
-        // Build a spatial lookup map for O(1) neighbour access
+        // Build a collision-free spatial lookup map for normal Minecraft coordinates.
         Map<Long, BlockData> blockMap = new HashMap<>(blocks.size());
         for (BlockData b : blocks) {
-            blockMap.put(key(b.x, b.y, b.z), b);
+            blockMap.put(SpatialKey.of(b.x, b.y, b.z), b);
         }
 
         // Flag multipart blocks in Pass 1 result
@@ -144,7 +145,7 @@ public class MultipartResolver {
             int x, int y, int z,
             Set<String> validTargets
     ) {
-        BlockData neighbour = map.get(key(x, y, z));
+        BlockData neighbour = map.get(SpatialKey.of(x, y, z));
         if (neighbour == null) return false; // air / out of export bounds
 
         String neighbourGroup = MULTIPART_GROUPS.get(neighbour.blockId);
@@ -157,14 +158,6 @@ public class MultipartResolver {
             boolean isSolid = !KNOWN_NON_SOLID.contains(neighbour.blockId);
             return isSolid && validTargets.contains("solid");
         }
-    }
-
-    /** Pack x,y,z into a single long for fast map lookup. */
-    private static long key(int x, int y, int z) {
-        // 21 bits each, offset to handle negatives
-        return ((long)(x + 1048576) << 42)
-             | ((long)(y + 1048576) << 21)
-             |  (long)(z + 1048576);
     }
 
     /** Get a human-readable connection string for a block (debug). */
