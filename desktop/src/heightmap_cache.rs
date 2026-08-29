@@ -90,8 +90,7 @@ fn fingerprint(world: &Path) -> Result<String> {
     hash.update(b"\n");
 
     let mut paths = vec![world.join("level.dat")];
-    let region = world.join("region");
-    if region.is_dir() {
+    if let Some(region) = overworld_region_dir(world) {
         let mut regions = fs::read_dir(&region)
             .with_context(|| format!("read {}", region.display()))?
             .filter_map(Result::ok)
@@ -123,6 +122,19 @@ fn fingerprint(world: &Path) -> Result<String> {
         hash.update(b"\n");
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+
+fn overworld_region_dir(world: &Path) -> Option<PathBuf> {
+    let modern = world
+        .join("dimensions")
+        .join("minecraft")
+        .join("overworld")
+        .join("region");
+    if modern.is_dir() {
+        return Some(modern);
+    }
+    let legacy = world.join("region");
+    legacy.is_dir().then_some(legacy)
 }
 
 fn cache_paths(world: &Path) -> Result<(PathBuf, PathBuf)> {
@@ -160,11 +172,32 @@ mod tests {
         root
     }
 
+    fn temp_modern_world(name: &str) -> PathBuf {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("minesport-heightmap-modern-{name}-{}-{stamp}", std::process::id()));
+        let region = root.join("dimensions").join("minecraft").join("overworld").join("region");
+        fs::create_dir_all(&region).unwrap();
+        fs::write(root.join("level.dat"), b"level").unwrap();
+        fs::write(region.join("r.0.0.mca"), b"modern-a").unwrap();
+        root
+    }
+
     #[test]
     fn fingerprint_changes_with_region_metadata() {
         let world = temp_world("fingerprint");
         let first = fingerprint(&world).unwrap();
         fs::write(world.join("region").join("r.0.0.mca"), b"region-b-longer").unwrap();
+        let second = fingerprint(&world).unwrap();
+        assert_ne!(first, second);
+        let _ = fs::remove_dir_all(world);
+    }
+
+    #[test]
+    fn fingerprint_tracks_modern_overworld_region_metadata() {
+        let world = temp_modern_world("fingerprint");
+        let region = world.join("dimensions").join("minecraft").join("overworld").join("region");
+        let first = fingerprint(&world).unwrap();
+        fs::write(region.join("r.0.0.mca"), b"modern-b-longer").unwrap();
         let second = fingerprint(&world).unwrap();
         assert_ne!(first, second);
         let _ = fs::remove_dir_all(world);
