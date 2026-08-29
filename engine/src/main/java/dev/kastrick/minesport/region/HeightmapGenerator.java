@@ -119,6 +119,10 @@ public class HeightmapGenerator {
 
     /** Generate a top-down PNG image of the world as a base64 string. */
     public static String generateBase64Png(File regionDir, int scale) throws IOException {
+        if (scale < 1 || scale > 512) {
+            throw new IllegalArgumentException("Heightmap scale must be between 1 and 512 blocks per pixel");
+        }
+
         File[] regionFiles = regionDir.listFiles((d, n) -> isRegionFile(n));
         if (regionFiles == null || regionFiles.length == 0) return null;
 
@@ -143,9 +147,14 @@ public class HeightmapGenerator {
         if (regions.isEmpty()) return null;
 
         final int regionBlocks = 512;
-        final int regionPx = regionBlocks / scale;
-        int imgW = (maxRX - minRX + 1) * regionPx;
-        int imgH = (maxRZ - minRZ + 1) * regionPx;
+        final int regionPx = (regionBlocks + scale - 1) / scale;
+        long imgWLong = (long) (maxRX - minRX + 1) * regionPx;
+        long imgHLong = (long) (maxRZ - minRZ + 1) * regionPx;
+        if (imgWLong <= 0 || imgHLong <= 0 || imgWLong > Integer.MAX_VALUE || imgHLong > Integer.MAX_VALUE) {
+            throw new IOException("Heightmap dimensions exceed supported image bounds: " + imgWLong + "x" + imgHLong);
+        }
+        int imgW = (int) imgWLong;
+        int imgH = (int) imgHLong;
 
         BufferedImage img = new BufferedImage(imgW, imgH, BufferedImage.TYPE_INT_RGB);
         for (int y = 0; y < imgH; y++) {
