@@ -51,8 +51,9 @@ jobs:
             (cd "$project" && ./gradlew --no-daemon --stacktrace build)
             jar="$(find "$project/build/libs" -maxdepth 1 -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' -print -quit)"
             test -n "$jar"
-            cp "$jar" "dist/bundled-export-worker/minesport-bridge-${slug}-0.2.0.jar"
-            test -s "dist/bundled-export-worker/minesport-bridge-${slug}-0.2.0.jar"
+            target="dist/bundled-export-worker/minesport_export_worker-${slug}-1.21.10.jar"
+            cp "$jar" "$target"
+            test -s "$target"
             echo "::endgroup::"
           }
           build_bridge Fabric minesport-bridge-fabric fabric
