@@ -544,7 +544,23 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
     let weak = ui.as_weak();
     ui.on_export_requested(move || {
         let Some(ui) = weak.upgrade() else { return; };
-        if !ui.get_engine_ready() || ui.get_task_active() || has_pending_export(&state) { return; }
+        if !ui.get_engine_ready() {
+            ui.set_task_title("EXPORT BLOCKED".into());
+            ui.set_task_detail("Minesport engine is not ready yet".into());
+            append_diagnostic(&ui, "Export blocked: backend is not ready.");
+            return;
+        }
+        if has_pending_export(&state) {
+            ui.set_task_title("WAITING FOR RUNTIME".into());
+            ui.set_task_detail("Export is already queued and will start when the runtime registry is ready".into());
+            append_diagnostic(&ui, "Export click ignored: an export is already queued for the runtime registry.");
+            return;
+        }
+        if ui.get_task_active() {
+            let active = ui.get_task_title().to_string();
+            append_diagnostic(&ui, &format!("Export blocked while another operation is active: {active}"));
+            return;
+        }
 
         let world = PathBuf::from(ui.get_world_path().to_string());
         if !world.join("level.dat").is_file() {
@@ -623,13 +639,23 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
         }
 
         if runtime_registry_supported(&loader, &version, &mods_path) {
-            if let Ok(mut guard) = state.lock() {
+            let queued = if let Ok(mut guard) = state.lock() {
                 guard.pending_export = Some(request);
+                true
+            } else {
+                false
+            };
+            if !queued {
+                ui.set_task_title("EXPORT FAILED".into());
+                ui.set_task_detail("Export state is unavailable".into());
+                append_diagnostic(&ui, "Export could not be queued because the export state lock is unavailable.");
+                return;
             }
             ui.set_task_active(false);
             ui.set_task_progress(0.01);
             ui.set_task_title("WAITING FOR RUNTIME".into());
             ui.set_task_detail("Export will start when the runtime registry is ready".into());
+            append_diagnostic(&ui, &format!("Export queued for runtime registry · {}", output.display()));
 
             if !cache.is_running_for_loader(&version, &loader, &mods_path) {
                 if let Err(error) = start_runtime_cache_job(
