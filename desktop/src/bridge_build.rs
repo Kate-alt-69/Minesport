@@ -46,9 +46,9 @@ pub fn compile_bridge(workspace: &Path, java_home: &Path, clean: bool) -> Result
 
     let status = command
         .status()
-        .with_context(|| format!("launch Gradle compatibility Bridge build in {}", workspace.display()))?;
+        .with_context(|| format!("launch Gradle compatibility Export Worker build in {}", workspace.display()))?;
     if !status.success() {
-        bail!("Gradle compatibility Bridge build failed with {status}");
+        bail!("Gradle compatibility Export Worker build failed with {status}");
     }
 
     find_built_bridge(workspace)
@@ -77,9 +77,13 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
 
 fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
     let libs = workspace.join("build").join("libs");
+    let expected_name = read_gradle_property(&workspace.join("gradle.properties"), "archives_base_name")
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("{}.jar", value.trim()));
+
     let mut candidates = Vec::new();
     for entry in fs::read_dir(&libs)
-        .with_context(|| format!("read Bridge build output {}", libs.display()))?
+        .with_context(|| format!("read Export Worker build output {}", libs.display()))?
     {
         let entry = entry?;
         if !entry.file_type()?.is_file() {
@@ -93,18 +97,71 @@ fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
         {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if name.ends_with("-sources.jar")
-            || name.ends_with("-javadoc.jar")
-            || name.contains("-dev")
+        let name = entry.file_name().to_string_lossy().to_string();
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with("-sources.jar")
+            || lower.ends_with("-javadoc.jar")
+            || lower.contains("-dev")
         {
             continue;
         }
+        if expected_name.as_ref().is_some_and(|expected| name == *expected) {
+            return Ok(path);
+        }
         candidates.push(path);
     }
-    candidates.sort();
-    candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("Gradle reported success but no non-sources Bridge JAR was produced in {}", libs.display()))
+
+    if let Some(expected) = expected_name {
+        bail!(
+            "Gradle reported success but expected Export Worker artifact {expected} was not produced in {}",
+            libs.display()
+        );
+    }
+
+    match candidates.as_slice() {
+        [only] => Ok(only.clone()),
+        [] => Err(anyhow!(
+            "Gradle reported success but no non-sources Export Worker JAR was produced in {}",
+            libs.display()
+        )),
+        _ => Err(anyhow!(
+            "Gradle produced multiple candidate Export Worker JARs in {} and no exact archives_base_name was available: {}",
+            libs.display(),
+            candidates
+                .iter()
+                .map(|path| path.file_name().unwrap_or_default().to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+fn read_gradle_property(path: &Path, key: &str) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    text.lines().find_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let (candidate, value) = line.split_once('=')?;
+        (candidate.trim() == key).then(|| value.trim().to_string())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn gradle_property_parser_reads_exact_key() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = env::temp_dir().join(format!("minesport-gradle-props-{}-{stamp}", std::process::id()));
+        fs::write(&path, "foo=bar\narchives_base_name=minesport_export_worker-fabric-1.20.1\n").unwrap();
+        assert_eq!(
+            read_gradle_property(&path, "archives_base_name").as_deref(),
+            Some("minesport_export_worker-fabric-1.20.1")
+        );
+        let _ = fs::remove_file(path);
+    }
 }
