@@ -239,6 +239,8 @@ fn wire_settings_persistence(
         };
         if format_index == 2 {
             cache.cancel();
+            aux_windows::close_runtime_cache(&ui);
+            ui.set_runtime_cache_busy(false);
             ui.set_runtime_cache_status("NOT REQUIRED FOR LITEMATICA".into());
             if cancelled_pending_export {
                 ui.set_task_title("EXPORT CANCELLED".into());
@@ -452,9 +454,13 @@ fn activate_world(
             )
         });
 
-        if cache.is_running() && !cache.is_running_for_loader(&version, &loader, &mods_path) {
-            cache.cancel();
-        }
+        let cancelled_previous_cache = if cache.is_running()
+            && !cache.is_running_for_loader(&version, &loader, &mods_path)
+        {
+            cache.cancel()
+        } else {
+            false
+        };
         viewer_selection::reset();
         let geometry_export = if let Ok(mut guard) = state.lock() {
             guard.pending_export = None;
@@ -489,6 +495,10 @@ fn activate_world(
         let version_for_ui = version.clone();
         let loader_for_ui = loader.clone();
         let _ = weak.upgrade_in_event_loop(move |ui| {
+            if cancelled_previous_cache {
+                aux_windows::close_runtime_cache(&ui);
+                ui.set_runtime_cache_busy(false);
+            }
             ui.set_world_path(display_for_ui.clone().into());
             ui.set_world_name(name.into());
             ui.set_minecraft_version(version_for_ui.clone().into());
@@ -1118,6 +1128,10 @@ fn start_runtime_cache_job(
     let ui_weak = weak.clone();
     let completion_engine = engine.clone();
     let completion_state = state.clone();
+    let job_state = state.clone();
+    let job_version = version.clone();
+    let job_loader = loader.clone();
+    let job_mods_path = mods_path.clone();
     let window_version = version.clone();
     let window_cache = cache.clone();
     let started = cache.start_for_loader(version.clone(), loader.clone(), mods_path.clone(), force, move |event| match event {
@@ -1125,8 +1139,21 @@ fn start_runtime_cache_job(
             let detail = progress.message.clone();
             let version = window_version.clone();
             let cancel_cache = window_cache.clone();
+            let event_state = job_state.clone();
+            let event_version = job_version.clone();
+            let event_loader = job_loader.clone();
+            let event_mods_path = job_mods_path.clone();
             let percent = (progress.percent.clamp(0, 100) as f32) / 100.0;
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
+                if !runtime_cache_event_is_current(
+                    &event_state,
+                    &event_version,
+                    &event_loader,
+                    &event_mods_path,
+                    force,
+                ) {
+                    return;
+                }
                 ui.set_runtime_cache_busy(true);
                 ui.set_runtime_cache_status(format!("{}% · {}", progress.percent, detail).into());
                 aux_windows::show_runtime_cache(
@@ -1153,7 +1180,21 @@ fn start_runtime_cache_job(
             };
             let ui_weak2 = ui_weak.clone();
             let ui_completion_state = completion_state.clone();
+            let event_state = job_state.clone();
+            let event_version = job_version.clone();
+            let event_loader = job_loader.clone();
+            let event_mods_path = job_mods_path.clone();
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
+                if !runtime_cache_event_is_current(
+                    &event_state,
+                    &event_version,
+                    &event_loader,
+                    &event_mods_path,
+                    force,
+                ) {
+                    append_diagnostic(&ui, "Ignored stale runtime-cache completion for a previous Minecraft instance or export mode.");
+                    return;
+                }
                 aux_windows::close_runtime_cache(&ui);
                 ui.set_runtime_cache_busy(false);
                 ui.set_runtime_cache_status(status.into());
@@ -1192,7 +1233,20 @@ fn start_runtime_cache_job(
         }
     })?;
 
+    let start_state = state.clone();
+    let start_version = version.clone();
+    let start_loader = loader.clone();
+    let start_mods_path = mods_path.clone();
     let _ = weak.upgrade_in_event_loop(move |ui| {
+        if !runtime_cache_event_is_current(
+            &start_state,
+            &start_version,
+            &start_loader,
+            &start_mods_path,
+            force,
+        ) {
+            return;
+        }
         ui.set_runtime_cache_busy(true);
         ui.set_runtime_cache_status(if force { "REBUILDING" } else { "STARTING" }.into());
         if foreground {
@@ -1202,6 +1256,24 @@ fn start_runtime_cache_job(
         }
     });
     Ok(started)
+}
+
+fn runtime_cache_event_is_current(
+    state: &SharedState,
+    version: &str,
+    loader: &str,
+    mods_path: &Path,
+    forced_rebuild: bool,
+) -> bool {
+    state.lock().map(|guard| {
+        let same_version = guard.selected_version.as_deref() == Some(version);
+        let same_loader = guard.selected_loader.as_deref()
+            .is_some_and(|selected| normalize_loader(selected) == normalize_loader(loader));
+        let same_mods = guard.selected_mods_path.as_deref()
+            .is_some_and(|selected| same_asset_path(selected, mods_path));
+        let format_still_needs_runtime = forced_rebuild || guard.export_format_index < 2;
+        same_version && same_loader && same_mods && format_still_needs_runtime
+    }).unwrap_or(false)
 }
 
 fn dispatch_pending_export(
@@ -1796,8 +1868,6 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         }
         "progress" => {
             ui.set_task_active(true);
-            // Percent 0 is the engine's indeterminate sentinel. Keep the
-            // last real value so phase announcements cannot rewind the bar.
             if response.percent > 0 {
                 let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
                 ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
@@ -2140,6 +2210,47 @@ mod tests {
         assert!(cancel_pending_export(&state));
         assert!(!has_pending_export(&state));
         assert!(!cancel_pending_export(&state));
+    }
+
+    #[test]
+    fn runtime_cache_identity_rejects_previous_instance_and_litematic_mode() {
+        let state: SharedState = Arc::new(Mutex::new(AppState::default()));
+        {
+            let mut guard = state.lock().unwrap();
+            guard.selected_version = Some("1.21.10".into());
+            guard.selected_loader = Some("Fabric".into());
+            guard.selected_mods_path = Some(PathBuf::from("mods-a"));
+            guard.export_format_index = 0;
+        }
+        assert!(runtime_cache_event_is_current(
+            &state,
+            "1.21.10",
+            "fabric",
+            Path::new("mods-a"),
+            false,
+        ));
+        assert!(!runtime_cache_event_is_current(
+            &state,
+            "1.21.10",
+            "fabric",
+            Path::new("mods-b"),
+            false,
+        ));
+        state.lock().unwrap().export_format_index = 2;
+        assert!(!runtime_cache_event_is_current(
+            &state,
+            "1.21.10",
+            "fabric",
+            Path::new("mods-a"),
+            false,
+        ));
+        assert!(runtime_cache_event_is_current(
+            &state,
+            "1.21.10",
+            "fabric",
+            Path::new("mods-a"),
+            true,
+        ));
     }
 
     #[test]
