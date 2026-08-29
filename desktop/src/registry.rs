@@ -7,10 +7,13 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:25590";
+pub const EPHEMERAL_ADDRESS: &str = "127.0.0.1:0";
 pub const SNAPSHOT_SCHEMA: i32 = 4;
 const REGISTRY_MAGIC: &[u8; 8] = b"MSREGD01";
 const REGISTRY_FILE: &str = "registry.data";
@@ -116,14 +119,37 @@ pub enum CaptureNotice {
     Complete { path: PathBuf, blocks: usize },
 }
 
-/// Receive one complete `MINESPORT_EXPORT_WORKER_MODE=all` registry dump and persist
-/// it as schema-4 `registry.data`. The Bridge wire protocol remains newline
-/// JSON; only the persistent hot-path cache is binary.
+/// Backward-compatible capture entry point for callers that do not need
+/// cancellation. Runtime preparation should use `capture_once_cancellable`.
 pub fn capture_once<F>(
     address: &str,
     cache_root: &Path,
     expected_version: &str,
     fingerprint: &str,
+    notice: F,
+) -> Result<PathBuf>
+where
+    F: FnMut(CaptureNotice),
+{
+    capture_once_cancellable(
+        address,
+        cache_root,
+        expected_version,
+        fingerprint,
+        Arc::new(AtomicBool::new(false)),
+        notice,
+    )
+}
+
+/// Receive one complete `MINESPORT_EXPORT_WORKER_MODE=all` registry dump and persist
+/// it as schema-4 `registry.data`. The listener is nonblocking so cancellation
+/// can terminate a capture even when Minecraft never connects.
+pub fn capture_once_cancellable<F>(
+    address: &str,
+    cache_root: &Path,
+    expected_version: &str,
+    fingerprint: &str,
+    cancel: Arc<AtomicBool>,
     mut notice: F,
 ) -> Result<PathBuf>
 where
@@ -136,8 +162,23 @@ where
 
     let listener = TcpListener::bind(address)
         .with_context(|| format!("listen for Minecraft runtime registry on {address}"))?;
+    listener
+        .set_nonblocking(true)
+        .context("make Minecraft runtime registry listener cancellable")?;
     notice(CaptureNotice::Listening(listener.local_addr()?.to_string()));
-    let (stream, peer) = listener.accept().context("accept Minecraft runtime registry worker")?;
+
+    let (stream, peer) = loop {
+        if cancel.load(Ordering::Relaxed) {
+            bail!("runtime cache cancelled while waiting for Minecraft worker");
+        }
+        match listener.accept() {
+            Ok(accepted) => break accepted,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => return Err(error).context("accept Minecraft runtime registry worker"),
+        }
+    };
     notice(CaptureNotice::Connected(peer.to_string()));
 
     let mut snapshot = Snapshot {
@@ -150,6 +191,9 @@ where
     let mut line = Vec::with_capacity(64 * 1024);
 
     while !complete {
+        if cancel.load(Ordering::Relaxed) {
+            bail!("runtime cache cancelled during registry capture");
+        }
         line.clear();
         let bytes = reader.read_until(b'\n', &mut line).context("read runtime registry packet")?;
         if bytes == 0 { break; }
@@ -257,7 +301,6 @@ fn write_snapshot(cache_root: &Path, snapshot: &Snapshot) -> Result<PathBuf> {
     if snapshot.minecraft_version.trim().is_empty() { bail!("minecraftVersion is required"); }
     if snapshot.mods_fingerprint.trim().is_empty() { bail!("modsFingerprint is required"); }
     if snapshot.blocks.len() > MAX_BLOCKS { bail!("runtime registry has too many blocks"); }
-
     let path = snapshot_path(cache_root, &snapshot.minecraft_version, &snapshot.mods_fingerprint);
     let folder = path.parent().context("runtime registry path has no parent")?;
     fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
