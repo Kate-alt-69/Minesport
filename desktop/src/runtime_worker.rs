@@ -222,23 +222,30 @@ where
         bail!("runtime cache cancelled");
     }
 
-    let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<()>>(1);
+    let (listen_tx, listen_rx) = mpsc::sync_channel::<Result<u16>>(1);
     let (capture_tx, capture_rx) = mpsc::sync_channel::<Result<PathBuf>>(1);
     let (capture_progress_tx, capture_progress_rx) = mpsc::channel::<(usize, usize)>();
     let capture_root = cache_root.clone();
     let capture_version = version.clone();
     let capture_fingerprint = fingerprint.clone();
-    thread::spawn(move || {
+    let capture_cancel = cancel.clone();
+    let capture_handle = thread::spawn(move || {
         let mut announced = false;
-        let result = registry::capture_once(
-            registry::DEFAULT_ADDRESS,
+        let result = registry::capture_once_cancellable(
+            registry::EPHEMERAL_ADDRESS,
             &capture_root,
             &capture_version,
             &capture_fingerprint,
+            capture_cancel,
             |notice| match notice {
-                registry::CaptureNotice::Listening(_) if !announced => {
+                registry::CaptureNotice::Listening(address) if !announced => {
                     announced = true;
-                    let _ = listen_tx.send(Ok(()));
+                    let port = address
+                        .rsplit(':')
+                        .next()
+                        .and_then(|value| value.parse::<u16>().ok())
+                        .ok_or_else(|| anyhow!("invalid runtime registry listener address {address}"));
+                    let _ = listen_tx.send(port);
                 }
                 registry::CaptureNotice::Progress {
                     blocks,
@@ -254,8 +261,9 @@ where
         }
         let _ = capture_tx.send(result);
     });
+    let _capture_thread = CaptureThreadGuard::new(cancel.clone(), capture_handle);
 
-    listen_rx
+    let capture_port = listen_rx
         .recv_timeout(Duration::from_secs(5))
         .context("wait for Rust runtime registry receiver")??;
 
@@ -275,9 +283,10 @@ where
             &java_home,
             manifest,
             app_cds_archive.as_deref(),
+            capture_port,
         )?
     } else {
-        start_gradle_worker(family, &workspace, &log_path, &java_home)?
+        start_gradle_worker(family, &workspace, &log_path, &java_home, capture_port)?
     };
     progress(Progress {
         percent: 62,
@@ -646,6 +655,7 @@ fn start_direct_worker(
     java_home: &Path,
     manifest: &DirectLaunchManifest,
     app_cds_archive: Option<&Path>,
+    capture_port: u16,
 ) -> Result<Child> {
     let stdout =
         File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
@@ -695,7 +705,7 @@ fn start_direct_worker(
     for (key, value) in &manifest.environment_overrides {
         command.env(key, value);
     }
-    command.env("MINESPORT_EXPORT_WORKER_PORT", "25590");
+    command.env("MINESPORT_EXPORT_WORKER_PORT", capture_port.to_string());
     command.env("MINESPORT_EXPORT_WORKER_MODE", "all");
     command.env("MINESPORT_EXPORT_WORKER", "1");
     hide_console_window(&mut command);
@@ -803,6 +813,7 @@ fn start_gradle_worker(
     workspace: &Path,
     log_path: &Path,
     java_home: &Path,
+    capture_port: u16,
 ) -> Result<Child> {
     let stdout =
         File::create(log_path).with_context(|| format!("create {}", log_path.display()))?;
@@ -848,7 +859,7 @@ fn start_gradle_worker(
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     sanitize_java_environment(&mut command, java_home);
-    command.env("MINESPORT_EXPORT_WORKER_PORT", "25590");
+    command.env("MINESPORT_EXPORT_WORKER_PORT", capture_port.to_string());
     command.env("MINESPORT_EXPORT_WORKER_MODE", "all");
     command.env("MINESPORT_EXPORT_WORKER", "1");
     // Inherited by JavaExec/runClient children as well as the wrapper JVM. It
@@ -1038,6 +1049,29 @@ fn stop_child(child: &mut Child) {
     if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
         let _ = child.wait();
+    }
+}
+
+struct CaptureThreadGuard {
+    cancel: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl CaptureThreadGuard {
+    fn new(cancel: Arc<AtomicBool>, handle: thread::JoinHandle<()>) -> Self {
+        Self {
+            cancel,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for CaptureThreadGuard {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
