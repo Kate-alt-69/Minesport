@@ -24,6 +24,7 @@ const MAX_VARIANTS: usize = 1_000_000;
 const MAX_QUADS: usize = 20_000_000;
 const MAX_PROPERTIES: usize = 4096;
 const MAX_LOADED_MODS: usize = 100_000;
+const MAX_FINGERPRINTS_PER_VERSION: usize = 4;
 const CAPTURE_PREFIX: &str = "minesport-capture-bridge-";
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -460,11 +461,24 @@ fn prune_sibling_fingerprints(cache_root: &Path, version: &str, keep: &str) -> R
     let root = runtime_registry_root(cache_root).join(safe_component(version));
     if !root.is_dir() { return Ok(()); }
     let keep = safe_component(keep);
+    let mut siblings = Vec::new();
     for entry in fs::read_dir(&root).with_context(|| format!("read {}", root.display()))? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() && entry.file_name() != keep.as_str() {
-            fs::remove_dir_all(entry.path()).with_context(|| format!("remove stale registry {}", entry.path().display()))?;
+        if !entry.file_type()?.is_dir() || entry.file_name() == keep.as_str() {
+            continue;
         }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .unwrap_or(UNIX_EPOCH);
+        siblings.push((modified, entry.path()));
+    }
+    siblings.sort_by(|left, right| right.0.cmp(&left.0));
+    let retain_siblings = MAX_FINGERPRINTS_PER_VERSION.saturating_sub(1);
+    for (_, path) in siblings.into_iter().skip(retain_siblings) {
+        fs::remove_dir_all(&path)
+            .with_context(|| format!("remove stale registry {}", path.display()))?;
     }
     Ok(())
 }
@@ -509,4 +523,18 @@ mod tests {
     #[test] fn malformed_quads_are_sanitized() { let variants = sanitize_variants(vec![BlockVariant { properties: BTreeMap::new(), quads: vec![BakedQuad { vertices: vec![0.0; 8], ..BakedQuad::default() }], }]); assert!(variants[0].quads.is_empty()); }
     #[test] fn safe_components_cannot_escape_registry_root() { assert_eq!(safe_component("../1.21.10"), ".._1.21.10"); assert!(!safe_component("../../bad").contains('/')); }
     #[test] fn writer_uses_big_endian_float_bits() { let value = 1.0f32; let mut bytes = Cursor::new(Vec::<u8>::new()); bytes.write_all(&value.to_bits().to_be_bytes()).unwrap(); assert_eq!(bytes.into_inner(), [0x3f, 0x80, 0x00, 0x00]); }
+    #[test] fn sibling_pruning_keeps_small_lru_instead_of_one_snapshot() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let cache = std::env::temp_dir().join(format!("minesport-registry-lru-{}-{stamp}", std::process::id()));
+        let version_root = runtime_registry_root(&cache).join("1.21.10");
+        fs::create_dir_all(&version_root).unwrap();
+        for name in ["a", "b", "c", "d", "keep"] {
+            fs::create_dir_all(version_root.join(name)).unwrap();
+        }
+        prune_sibling_fingerprints(&cache, "1.21.10", "keep").unwrap();
+        let remaining = fs::read_dir(&version_root).unwrap().count();
+        assert!(remaining <= MAX_FINGERPRINTS_PER_VERSION);
+        assert!(version_root.join("keep").is_dir());
+        let _ = fs::remove_dir_all(cache);
+    }
 }
