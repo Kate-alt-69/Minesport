@@ -20,11 +20,6 @@ public class WorldCopier {
         "entities"
     );
 
-    /**
-     * Copy only level metadata and the active Overworld region into the system
-     * temp directory. Engine readers consume temp/region, so copying every
-     * dimension and then mirroring the Overworld again is pure duplicate I/O.
-     */
     public static File copyToTemp(File worldFolder, Consumer<String> statusCallback) throws IOException {
         return copyToTemp(
             worldFolder,
@@ -34,7 +29,6 @@ public class WorldCopier {
         );
     }
 
-    /** Copy only the Overworld region files that can intersect selected X/Z bounds. */
     public static File copyToTemp(
         File worldFolder,
         int minX, int minZ,
@@ -75,10 +69,6 @@ public class WorldCopier {
         return tempDir;
     }
 
-    /**
-     * Locate the active Overworld region directory. Modern 26.1+ storage is
-     * checked first, then the legacy world/region layout.
-     */
     public static File findOverworldRegionDir(File worldFolder) throws IOException {
         List<String> checked = new ArrayList<>();
         for (String relativePath : OVERWORLD_REGION_PATHS) {
@@ -93,10 +83,6 @@ public class WorldCopier {
         );
     }
 
-    /**
-     * Copy modern separate entity-region files only when a caller needs them.
-     * Geometry exports deliberately never call this method.
-     */
     public static boolean copyOverworldEntitiesToTemp(
         File worldFolder,
         File tempDir,
@@ -111,7 +97,6 @@ public class WorldCopier {
         );
     }
 
-    /** Copy only entity-region files that can intersect selected X/Z bounds. */
     public static boolean copyOverworldEntitiesToTemp(
         File worldFolder,
         File tempDir,
@@ -297,11 +282,12 @@ public class WorldCopier {
         Path destination = tempDir.toPath().resolve("region");
         Files.createDirectories(destination);
         for (File file : files) {
+            String destinationName = normalizedBlockRegionName(file.getName());
             copyFile(
                 file.toPath(),
-                destination.resolve(file.getName()),
+                destination.resolve(destinationName),
                 log,
-                "region/" + file.getName()
+                "region/" + destinationName
             );
         }
         int externalCount = copySelectedExternalChunks(
@@ -319,6 +305,18 @@ public class WorldCopier {
         }
     }
 
+    /**
+     * The production IPC scanner historically selects temp block regions by
+     * .mca suffix. Legacy .mcr data has the same region coordinates and is
+     * parsed by RegionReader based on contents, so normalize only the private
+     * temporary filename while leaving the original save untouched.
+     */
+    private static String normalizedBlockRegionName(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (!lower.endsWith(".mcr")) return name;
+        return name.substring(0, name.length() - 4) + ".mca";
+    }
+
     private static void copyFile(Path source, Path destination, Consumer<String> log, String label)
         throws IOException {
         Files.copy(
@@ -330,10 +328,9 @@ public class WorldCopier {
         if (log != null) log.accept("Copied: " + label);
     }
 
-    /** Clean up a previously created temp copy. */
     public static void cleanupTemp(File tempDir) {
         if (tempDir == null || !tempDir.exists()) return;
-        if (!tempDir.getAbsolutePath().contains("minesport_")) return; // safety check
+        if (!tempDir.getAbsolutePath().contains("minesport_")) return;
 
         try {
             Files.walkFileTree(tempDir.toPath(), new SimpleFileVisitor<>() {
