@@ -35,6 +35,7 @@ const FABRIC_API_1_21_10: &str = "0.138.4+1.21.10";
 const LOOM_1_21_10: &str = "1.11.7";
 const FABRIC_MOD_JSON_LIMIT: u64 = 1 << 20;
 const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 1;
+const DIRECT_LAUNCH_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CAPTURE_STALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Debug, Clone)]
@@ -214,7 +215,20 @@ where
             percent: 54,
             message: "Preparing Minecraft launch…".into(),
         });
-        Some(ensure_direct_launch_profile(&version, &java_home)?)
+        Some(ensure_direct_launch_profile(
+            &version,
+            &java_home,
+            cancel.as_ref(),
+            |elapsed| {
+                progress(Progress {
+                    percent: 54,
+                    message: format!(
+                        "Preparing Minecraft launch… · {}s",
+                        elapsed.as_secs()
+                    ),
+                });
+            },
+        )?)
     } else {
         None
     };
@@ -544,11 +558,22 @@ fn direct_launch_profile_dir(version: &str) -> PathBuf {
         ))
 }
 
-fn ensure_direct_launch_profile(version: &str, java_home: &Path) -> Result<DirectLaunchManifest> {
+fn ensure_direct_launch_profile<F>(
+    version: &str,
+    java_home: &Path,
+    cancel: &AtomicBool,
+    mut on_wait: F,
+) -> Result<DirectLaunchManifest>
+where
+    F: FnMut(Duration),
+{
     let profile = direct_launch_profile_dir(version);
     let manifest_path = profile.join("minesport-launch.json");
     if let Ok(manifest) = load_direct_launch_manifest(&manifest_path) {
         return Ok(manifest);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        bail!("runtime cache cancelled while preparing Minecraft launch");
     }
 
     create_fast_bundled_workspace(&profile, version)?;
@@ -600,12 +625,54 @@ fn ensure_direct_launch_profile(version: &str, java_home: &Path) -> Result<Direc
     command.env("JAVA_TOOL_OPTIONS", "-XX:ActiveProcessorCount=2");
     hide_console_window(&mut command);
 
-    let status = command.status().with_context(|| {
+    let mut child = command.spawn().with_context(|| {
         format!(
-            "resolve cached Fabric runtime launch profile with {}",
+            "start cached Fabric runtime launch-profile resolver with {}",
             java_home.display()
         )
     })?;
+    let started = Instant::now();
+    let mut last_reported_second = 0u64;
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            stop_child(&mut child);
+            bail!("runtime cache cancelled while preparing Minecraft launch");
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                stop_child(&mut child);
+                return Err(error).context("poll Fabric runtime launch-profile resolver");
+            }
+        }
+
+        let elapsed = started.elapsed();
+        if elapsed >= DIRECT_LAUNCH_RESOLVE_TIMEOUT {
+            stop_child(&mut child);
+            let tail = tail_file(&log_path, 80);
+            if tail.is_empty() {
+                bail!(
+                    "runtime launch profile resolver timed out after {} seconds",
+                    DIRECT_LAUNCH_RESOLVE_TIMEOUT.as_secs()
+                );
+            }
+            bail!(
+                "runtime launch profile resolver timed out after {} seconds\n{}",
+                DIRECT_LAUNCH_RESOLVE_TIMEOUT.as_secs(),
+                tail
+            );
+        }
+
+        let elapsed_second = elapsed.as_secs();
+        if elapsed_second > last_reported_second {
+            last_reported_second = elapsed_second;
+            on_wait(elapsed);
+        }
+        thread::sleep(Duration::from_millis(200));
+    };
+
     if !status.success() {
         let tail = tail_file(&log_path, 80);
         if tail.is_empty() {
@@ -1386,7 +1453,7 @@ mod tests {
             .compression_method(zip::CompressionMethod::Stored);
         writer.start_file("fabric.mod.json", options).unwrap();
         writer
-            .write_all(br#"{"schemaVersion":1,"id":"crash_assistant","version":"1.0.0"}"#)
+            .write_all(br#"{\"schemaVersion\":1,\"id\":\"crash_assistant\",\"version\":\"1.0.0\"}"#)
             .unwrap();
         writer.finish().unwrap();
 
