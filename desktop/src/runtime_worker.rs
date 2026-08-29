@@ -36,6 +36,7 @@ const LOOM_1_21_10: &str = "1.11.7";
 const FABRIC_MOD_JSON_LIMIT: u64 = 1 << 20;
 const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 1;
 const DIRECT_LAUNCH_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const CAPTURE_FIRST_PROGRESS_TIMEOUT: Duration = Duration::from_secs(4 * 60);
 const CAPTURE_STALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Debug, Clone)]
@@ -200,7 +201,7 @@ where
         percent: 40,
         message: "Checking JDK…".into(),
     });
-    let java_home = toolchain::ensure_jdk(plan.java, |update| {
+    let java_home = toolchain::ensure_jdk_cancellable(plan.java, cancel.clone(), |update| {
         progress(Progress {
             percent: update.percent.clamp(40, 54),
             message: update.message,
@@ -307,7 +308,8 @@ where
         message: "Loading runtime models…".into(),
     });
 
-    let deadline = Instant::now() + Duration::from_secs(10 * 60);
+    let worker_started = Instant::now();
+    let deadline = worker_started + Duration::from_secs(10 * 60);
     let mut last_captured_blocks = 0usize;
     let mut last_capture_progress = None::<Instant>;
     loop {
@@ -412,13 +414,21 @@ where
         }
 
         let now = Instant::now();
-        if capture_has_stalled(last_capture_progress, now) {
+        if capture_has_stalled(last_capture_progress, worker_started, now) {
             stop_child(&mut child);
+            let reason = if last_capture_progress.is_none() {
+                format!(
+                    "runtime capture produced no model progress within {} seconds",
+                    CAPTURE_FIRST_PROGRESS_TIMEOUT.as_secs()
+                )
+            } else {
+                format!("runtime capture stalled after {last_captured_blocks} blocks")
+            };
             return Err(runtime_worker_failure(
                 &workspace,
                 &version,
                 &log_path,
-                format!("runtime capture stalled after {last_captured_blocks} blocks"),
+                reason,
                 80,
             ));
         }
@@ -438,8 +448,15 @@ fn loader_cache_fingerprint(family: BridgeFamily, raw: &str) -> String {
     }
 }
 
-fn capture_has_stalled(last_progress: Option<Instant>, now: Instant) -> bool {
-    last_progress.is_some_and(|last| now.duration_since(last) >= CAPTURE_STALL_TIMEOUT)
+fn capture_has_stalled(
+    last_progress: Option<Instant>,
+    worker_started: Instant,
+    now: Instant,
+) -> bool {
+    match last_progress {
+        Some(last) => now.duration_since(last) >= CAPTURE_STALL_TIMEOUT,
+        None => now.duration_since(worker_started) >= CAPTURE_FIRST_PROGRESS_TIMEOUT,
+    }
 }
 
 fn capture_progress_percent(blocks: usize, total_blocks: usize) -> i32 {
@@ -1341,14 +1358,28 @@ mod tests {
     }
 
     #[test]
-    fn capture_watchdog_only_arms_after_real_progress() {
+    fn capture_watchdog_covers_startup_and_mid_capture_stalls() {
         let now = Instant::now();
-        assert!(!capture_has_stalled(None, now));
         assert!(!capture_has_stalled(
-            Some(now - CAPTURE_STALL_TIMEOUT + Duration::from_millis(1)),
+            None,
+            now - CAPTURE_FIRST_PROGRESS_TIMEOUT + Duration::from_millis(1),
             now,
         ));
-        assert!(capture_has_stalled(Some(now - CAPTURE_STALL_TIMEOUT), now));
+        assert!(capture_has_stalled(
+            None,
+            now - CAPTURE_FIRST_PROGRESS_TIMEOUT,
+            now,
+        ));
+        assert!(!capture_has_stalled(
+            Some(now - CAPTURE_STALL_TIMEOUT + Duration::from_millis(1)),
+            now - CAPTURE_FIRST_PROGRESS_TIMEOUT,
+            now,
+        ));
+        assert!(capture_has_stalled(
+            Some(now - CAPTURE_STALL_TIMEOUT),
+            now - CAPTURE_FIRST_PROGRESS_TIMEOUT,
+            now,
+        ));
     }
 
     #[test]
