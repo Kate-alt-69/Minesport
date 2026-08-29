@@ -4,11 +4,12 @@ import dev.kastrick.minesport.nbt.NbtCompound;
 import dev.kastrick.minesport.nbt.NbtReader;
 
 import java.io.*;
+import java.nio.file.Files;
 import java.util.*;
 import java.util.zip.*;
 
 /**
- * Reads Minecraft Anvil .mca region files.
+ * Reads Minecraft Anvil .mca/.mcr region files.
  *
  * Region framing is stable across a huge span of Minecraft versions. Chunk NBT
  * differences are delegated to ChunkBlockDecoder so this reader can handle
@@ -17,6 +18,7 @@ import java.util.zip.*;
 public class RegionReader {
 
     private static final int SECTOR_SIZE = 4096;
+    private static final long MAX_EXTERNAL_COMPRESSED_BYTES = 64L * 1024L * 1024L;
 
     public record RegionContents(
         List<BlockData> blocks,
@@ -161,24 +163,44 @@ public class RegionReader {
                     }
                     raf.seek(seekPos);
                     int dataLength = raf.readInt();
+                    if (dataLength < 1) continue;
 
-                    if (dataLength <= 1) continue;
+                    int rawCompressionType = raf.readByte() & 0xFF;
+                    boolean external = (rawCompressionType & 0x80) != 0;
+                    int compressionType = rawCompressionType & 0x7F;
+                    byte[] compressed;
 
-                    int compressionType = raf.readByte() & 0xFF;
-                    // 128+ means external chunk storage in newer Anvil. Minesport
-                    // does not read external .mcc payloads yet, so skip safely.
-                    if (compressionType >= 128) continue;
+                    if (external) {
+                        File externalFile = new File(
+                            regionFile.getParentFile(),
+                            "c." + worldChunkX + "." + worldChunkZ + ".mcc"
+                        );
+                        if (!externalFile.isFile()) {
+                            throw new IOException(
+                                "Missing external chunk payload " + externalFile.getName()
+                            );
+                        }
+                        long externalSize = externalFile.length();
+                        if (externalSize <= 0 || externalSize > MAX_EXTERNAL_COMPRESSED_BYTES) {
+                            throw new IOException(
+                                "External chunk payload " + externalFile.getName()
+                                    + " has invalid size " + externalSize
+                            );
+                        }
+                        compressed = Files.readAllBytes(externalFile.toPath());
+                    } else {
+                        if (dataLength <= 1) continue;
+                        int payloadLength = dataLength - 1;
+                        int maxPayload = sectorCount * SECTOR_SIZE - 5;
+                        if (payloadLength <= 0 || payloadLength > maxPayload) continue;
 
-                    int payloadLength = dataLength - 1;
-                    int maxPayload = sectorCount * SECTOR_SIZE - 5;
-                    if (payloadLength <= 0 || payloadLength > maxPayload) continue;
+                        long currentPos = raf.getFilePointer();
+                        long remaining = raf.length() - currentPos;
+                        if (payloadLength > remaining) continue;
 
-                    long currentPos = raf.getFilePointer();
-                    long remaining = raf.length() - currentPos;
-                    if (payloadLength > remaining) continue;
-
-                    byte[] compressed = new byte[payloadLength];
-                    raf.readFully(compressed);
+                        compressed = new byte[payloadLength];
+                        raf.readFully(compressed);
+                    }
 
                     byte[] nbtBytes = decompress(compressed, compressionType);
                     if (nbtBytes == null || nbtBytes.length == 0) continue;
@@ -235,7 +257,8 @@ public class RegionReader {
                     }
 
                 } catch (EOFException e) {
-                    // Truncated chunk — skip without aborting the export.
+                    System.err.println("[WARN] Truncated chunk " + worldChunkX + "," + worldChunkZ
+                        + " in " + regionFile.getName());
                 } catch (Exception e) {
                     if (e.getMessage() != null && !e.getMessage().contains("TAG_End")) {
                         System.err.println("[WARN] Skipping chunk " + worldChunkX + "," + worldChunkZ
