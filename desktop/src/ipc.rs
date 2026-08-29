@@ -53,6 +53,10 @@ pub struct Response {
     pub operation_id: String,
     #[serde(default, rename = "traceId")]
     pub trace_id: String,
+    #[serde(default, rename = "clientWorldPath")]
+    pub client_world_path: String,
+    #[serde(default, rename = "clientPurpose")]
+    pub client_purpose: String,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +76,8 @@ struct EngineInner {
 struct RequestCorrelation {
     operation_id: String,
     trace_id: String,
+    client_world_path: String,
+    client_purpose: String,
 }
 
 /// UI-side handle to the isolated Minesport backend worker.
@@ -212,6 +218,7 @@ impl Engine {
     }
 
     pub fn send_value(&self, mut request: Value) -> Result<()> {
+        preserve_client_world_path(&mut request);
         prepare_world_storage_payload(&mut request)?;
         self.send(&request)
     }
@@ -274,6 +281,23 @@ fn request_operation_id(command: &str) -> &'static str {
     }
 }
 
+fn preserve_client_world_path(request: &mut Value) {
+    let Some(world_path) = request
+        .get("worldPath")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(object) = request.as_object_mut() else {
+        return;
+    };
+    object
+        .entry("clientWorldPath".to_string())
+        .or_insert(Value::String(world_path));
+}
+
 fn correlation_from_request_line(line: &str) -> RequestCorrelation {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
         return RequestCorrelation::default();
@@ -286,6 +310,16 @@ fn correlation_from_request_line(line: &str) -> RequestCorrelation {
             .to_string(),
         trace_id: value
             .get("traceId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        client_world_path: value
+            .get("clientWorldPath")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        client_purpose: value
+            .get("clientPurpose")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
@@ -308,6 +342,18 @@ fn annotate_java_response(line: &str, correlation: &RequestCorrelation) -> (Stri
             object.insert(
                 "traceId".to_string(),
                 Value::String(correlation.trace_id.clone()),
+            );
+        }
+        if !correlation.client_world_path.is_empty() {
+            object.insert(
+                "clientWorldPath".to_string(),
+                Value::String(correlation.client_world_path.clone()),
+            );
+        }
+        if !correlation.client_purpose.is_empty() {
+            object.insert(
+                "clientPurpose".to_string(),
+                Value::String(correlation.client_purpose.clone()),
             );
         }
     }
@@ -388,8 +434,9 @@ fn has_region_files(region_dir: &Path) -> bool {
 /// Headless mode used by the self-spawned Minesport backend process.
 ///
 /// This process owns Java and transparently relays the existing Java newline
-/// JSON protocol. It also preserves the UI request's operation/trace IDs on
-/// Java responses, keeping observability concerns out of the Java engine.
+/// JSON protocol. It also preserves the UI request's operation/trace IDs and
+/// client routing metadata on Java responses, keeping observability and stale
+/// response protection out of the Java engine.
 pub fn run_engine_worker(jar: &Path) -> Result<()> {
     let logger = diagnostics::Logger::new("IPC").child("WORKER");
     let operation = logger
@@ -799,21 +846,30 @@ mod tests {
     }
 
     #[test]
-    fn heightmap_payload_is_rewritten_but_export_payload_is_not() {
+    fn heightmap_payload_is_rewritten_but_client_world_identity_is_preserved() {
         let world = temp_world("payload");
         let modern = world.join("dimensions/minecraft/overworld/region");
         fs::create_dir_all(&modern).unwrap();
         fs::write(modern.join("r.0.0.mca"), b"region").unwrap();
         let mut heightmap = serde_json::json!({ "command": "heightmap", "worldPath": world });
+        preserve_client_world_path(&mut heightmap);
         prepare_world_storage_payload(&mut heightmap).unwrap();
         assert_eq!(
             heightmap.get("worldPath").and_then(Value::as_str).map(PathBuf::from),
             Some(world.join("dimensions/minecraft/overworld"))
         );
+        assert_eq!(
+            heightmap.get("clientWorldPath").and_then(Value::as_str).map(PathBuf::from),
+            Some(world.clone())
+        );
         let mut export = serde_json::json!({ "command": "export", "worldPath": world });
+        preserve_client_world_path(&mut export);
         prepare_world_storage_payload(&mut export).unwrap();
         assert_eq!(
             export.get("worldPath").and_then(Value::as_str).map(PathBuf::from), Some(world.clone())
+        );
+        assert_eq!(
+            export.get("clientWorldPath").and_then(Value::as_str).map(PathBuf::from), Some(world.clone())
         );
         let _ = fs::remove_dir_all(world);
     }
@@ -839,13 +895,17 @@ mod tests {
     #[test]
     fn request_correlation_is_read_from_json() {
         let request = serde_json::json!({
-            "command": "export",
-            "operationId": "IpcRequestDispatchExport",
-            "traceId": "123-000004"
+            "command": "listBlocks",
+            "operationId": "IpcRequestDispatchBlockList",
+            "traceId": "123-000004",
+            "clientWorldPath": "C:/world-a",
+            "clientPurpose": "preview"
         }).to_string();
         let correlation = correlation_from_request_line(&request);
-        assert_eq!(correlation.operation_id, "IpcRequestDispatchExport");
+        assert_eq!(correlation.operation_id, "IpcRequestDispatchBlockList");
         assert_eq!(correlation.trace_id, "123-000004");
+        assert_eq!(correlation.client_world_path, "C:/world-a");
+        assert_eq!(correlation.client_purpose, "preview");
     }
 
     #[test]
@@ -853,6 +913,8 @@ mod tests {
         let correlation = RequestCorrelation {
             operation_id: "IpcRequestDispatchExport".to_string(),
             trace_id: "123-000004".to_string(),
+            client_world_path: "C:/world-a".to_string(),
+            client_purpose: "export".to_string(),
         };
         let response = serde_json::json!({ "type": "done", "output": "test.obj" }).to_string();
         let (line, terminal) = annotate_java_response(&response, &correlation);
@@ -860,6 +922,8 @@ mod tests {
         assert!(terminal);
         assert_eq!(value.get("operationId").and_then(Value::as_str), Some("IpcRequestDispatchExport"));
         assert_eq!(value.get("traceId").and_then(Value::as_str), Some("123-000004"));
+        assert_eq!(value.get("clientWorldPath").and_then(Value::as_str), Some("C:/world-a"));
+        assert_eq!(value.get("clientPurpose").and_then(Value::as_str), Some("export"));
     }
 
     #[test]
@@ -867,6 +931,7 @@ mod tests {
         let correlation = RequestCorrelation {
             operation_id: "IpcRequestDispatchExport".to_string(),
             trace_id: "123-000004".to_string(),
+            ..RequestCorrelation::default()
         };
         let response = serde_json::json!({
             "type": "progress", "percent": 62, "message": "Building geometry"
