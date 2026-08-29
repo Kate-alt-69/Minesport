@@ -3,9 +3,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
+    fs::{self, File},
+    io::Write,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,11 +17,16 @@ pub struct CachedHeightmap {
     pub max_x: i32,
     pub max_z: i32,
     pub scale: i32,
+    #[serde(default)]
+    pub png_sha256: String,
 }
 
 pub fn load(world: &Path) -> Result<Option<(CachedHeightmap, Vec<u8>)>> {
     let fingerprint = fingerprint(world)?;
     let (metadata_path, png_path) = cache_paths(world)?;
+    restore_backup_if_needed(&metadata_path)?;
+    restore_backup_if_needed(&png_path)?;
+
     let metadata_bytes = match fs::read(&metadata_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -30,7 +36,7 @@ pub fn load(world: &Path) -> Result<Option<(CachedHeightmap, Vec<u8>)>> {
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
-    if metadata.fingerprint != fingerprint {
+    if metadata.fingerprint != fingerprint || metadata.png_sha256.is_empty() {
         return Ok(None);
     }
     let png = match fs::read(&png_path) {
@@ -39,6 +45,9 @@ pub fn load(world: &Path) -> Result<Option<(CachedHeightmap, Vec<u8>)>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("read {}", png_path.display())),
     };
+    if sha256_hex(&png) != metadata.png_sha256 {
+        return Ok(None);
+    }
     Ok(Some((metadata, png)))
 }
 
@@ -63,9 +72,13 @@ pub fn save(
         max_x,
         max_z,
         scale,
+        png_sha256: sha256_hex(png),
     };
     let metadata_bytes = serde_json::to_vec(&metadata).context("serialize heightmap cache metadata")?;
 
+    // Publish data first, then metadata. The metadata carries the PNG digest,
+    // so a crash between these operations can only create a cache miss, never
+    // a mismatched image/bounds pair that is accepted as valid.
     atomic_replace(&png_path, png)?;
     atomic_replace(&metadata_path, &metadata_bytes)?;
     Ok(())
@@ -74,10 +87,12 @@ pub fn save(
 pub fn invalidate(world: &Path) -> Result<()> {
     let (metadata_path, png_path) = cache_paths(world)?;
     for path in [metadata_path, png_path] {
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).with_context(|| format!("remove {}", path.display())),
+        for candidate in [path.clone(), backup_path(&path)] {
+            match fs::remove_file(&candidate) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).with_context(|| format!("remove {}", candidate.display())),
+            }
         }
     }
     Ok(())
@@ -147,15 +162,70 @@ fn cache_paths(world: &Path) -> Result<(PathBuf, PathBuf)> {
     Ok((root.join(format!("{key}.json")), root.join(format!("{key}.png"))))
 }
 
-fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temporary = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|value| value.to_str()).unwrap_or("cache")
-    ));
-    fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
-    let _ = fs::remove_file(path);
-    fs::rename(&temporary, path).with_context(|| format!("install {}", path.display()))?;
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("cache");
+    path.with_extension(format!("{extension}.bak"))
+}
+
+fn restore_backup_if_needed(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    let backup = backup_path(path);
+    if backup.is_file() {
+        fs::rename(&backup, path)
+            .with_context(|| format!("restore {} from {}", path.display(), backup.display()))?;
+    }
     Ok(())
+}
+
+fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
+    restore_backup_if_needed(path)?;
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("cache");
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = path.with_extension(format!(
+        "{extension}.{}.{}.tmp",
+        std::process::id(),
+        stamp
+    ));
+    let backup = backup_path(path);
+
+    {
+        let mut file = File::create(&temporary)
+            .with_context(|| format!("create {}", temporary.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("write {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync {}", temporary.display()))?;
+    }
+
+    let had_original = path.is_file();
+    if had_original {
+        let _ = fs::remove_file(&backup);
+        fs::rename(path, &backup)
+            .with_context(|| format!("stage previous cache {}", path.display()))?;
+    }
+
+    match fs::rename(&temporary, path) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            if had_original && backup.is_file() {
+                let _ = fs::rename(&backup, path);
+            }
+            Err(error).with_context(|| format!("install {}", path.display()))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -213,6 +283,28 @@ mod tests {
         assert_eq!(restored, png);
         invalidate(&world).unwrap();
         assert!(load(&world).unwrap().is_none());
+        let _ = fs::remove_dir_all(world);
+    }
+
+    #[test]
+    fn mismatched_png_is_rejected_instead_of_pairing_with_old_metadata() {
+        let world = temp_world("torn-pair");
+        save(&world, b"png-a", 0, 0, 16, 16, 1).unwrap();
+        let (_, png_path) = cache_paths(&world).unwrap();
+        fs::write(&png_path, b"png-b").unwrap();
+        assert!(load(&world).unwrap().is_none());
+        let _ = fs::remove_dir_all(world);
+    }
+
+    #[test]
+    fn missing_primary_is_restored_from_backup() {
+        let world = temp_world("backup");
+        save(&world, b"png", 0, 0, 16, 16, 1).unwrap();
+        let (metadata_path, _) = cache_paths(&world).unwrap();
+        let backup = backup_path(&metadata_path);
+        fs::rename(&metadata_path, &backup).unwrap();
+        assert!(load(&world).unwrap().is_some());
+        assert!(metadata_path.is_file());
         let _ = fs::remove_dir_all(world);
     }
 }
