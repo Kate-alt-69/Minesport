@@ -1,0 +1,64 @@
+name: One Shot Test Only Checksum Wrapper
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/one-shot-test-only-checksum-wrapper.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("desktop/src/toolchain.rs")
+          text = path.read_text(encoding="utf-8")
+          old = '''fn verify_sha256(path: &Path, expected: &str) -> Result<()> {\n    verify_sha256_cancellable(path, expected, &Arc::new(AtomicBool::new(false)))\n}\n'''
+          new = '''#[cfg(test)]\nfn verify_sha256(path: &Path, expected: &str) -> Result<()> {\n    verify_sha256_cancellable(path, expected, &Arc::new(AtomicBool::new(false)))\n}\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one legacy checksum wrapper, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          git diff --check
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
+      - name: Install Slint dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+
+      - name: Test desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: "1"
+        run: |
+          cargo check --locked --all-targets
+          cargo test --locked --all-targets
+
+      - name: Commit tested source fix and remove one-shot gate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add desktop/src/toolchain.rs
+          git rm .github/workflows/one-shot-test-only-checksum-wrapper.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-069 Keep checksum wrapper test-only"
+          git push origin HEAD:main
