@@ -1,0 +1,61 @@
+name: One Shot Ordered Settings Persistence
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/one-shot-ordered-settings-persistence.yml"
+      - ".github/ordered_settings_persistence_fix.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: |
+          python3 -m py_compile .github/ordered_settings_persistence_fix.py
+          python3 .github/ordered_settings_persistence_fix.py
+          git diff --check
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
+      - name: Install Slint dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+
+      - name: Test desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: "1"
+        run: |
+          cargo check --locked --all-targets
+          cargo test --locked --all-targets
+
+      - name: Commit tested source fix and remove one-shot gate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            desktop/src/settings.rs \
+            desktop/src/app.rs
+          git rm \
+            .github/ordered_settings_persistence_fix.py \
+            .github/workflows/one-shot-ordered-settings-persistence.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-068 Order settings persistence"
+          git push origin HEAD:main
