@@ -69,6 +69,16 @@ public class GeometryBuilder {
 
     public void enableFaceCulling(List<BlockData> allBlocks) {
         ensureOcclusionIndex(allBlocks);
+        enableFaceCullingWithIndex(occlusionIndex);
+    }
+
+    /**
+     * Enable face culling against an already-built export spatial index.
+     * Subclasses may share an immutable/read-only map; this class never mutates
+     * the supplied index.
+     */
+    protected final void enableFaceCullingWithIndex(Map<Long,BlockData> index) {
+        occlusionIndex = index == null ? Map.of() : index;
         faceCullingEnabled = true;
         fullFaceCache.clear();
         opaqueTextureCache.clear();
