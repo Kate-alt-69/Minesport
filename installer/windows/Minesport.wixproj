@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AcceptEula>wix7</AcceptEula>
     <InstallerPlatform>x64</InstallerPlatform>
-    <OutputName>Minesport-0.2.0-x64</OutputName>
+    <OutputName>Minesport-0.2.1-x64</OutputName>
     <OutputType>Package</OutputType>
     <DefineConstants>SourceDir=$(SourceDir)</DefineConstants>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
