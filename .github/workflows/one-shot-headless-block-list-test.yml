@@ -1,0 +1,82 @@
+name: One Shot Headless Block List Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/one-shot-headless-block-list-test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          app = Path("desktop/src/app.rs")
+          text = app.read_text(encoding="utf-8")
+
+          old = '''fn block_list_request(ui: &MainWindow, world: &Path, state: &SharedState, purpose: &str) -> Value {\n    let (_, loader, mods_path) = selected_runtime_context(state, ui, world);\n    json!({\n        "command": "listBlocks",\n        "worldPath": world,\n        "modsPath": mods_path,\n        "modLoader": loader,\n        "clientPurpose": purpose,\n        "minX": ui.get_min_x(), "minY": ui.get_min_y(), "minZ": ui.get_min_z(),\n        "maxX": ui.get_max_x(), "maxY": ui.get_max_y(), "maxZ": ui.get_max_z()\n    })\n}\n'''
+          new = '''fn block_list_request(ui: &MainWindow, world: &Path, state: &SharedState, purpose: &str) -> Value {\n    let (_, loader, mods_path) = selected_runtime_context(state, ui, world);\n    block_list_request_payload(\n        world,\n        &mods_path,\n        &loader,\n        purpose,\n        [ui.get_min_x(), ui.get_min_y(), ui.get_min_z()],\n        [ui.get_max_x(), ui.get_max_y(), ui.get_max_z()],\n    )\n}\n\nfn block_list_request_payload(\n    world: &Path,\n    mods_path: &Path,\n    loader: &str,\n    purpose: &str,\n    min: [i32; 3],\n    max: [i32; 3],\n) -> Value {\n    json!({\n        "command": "listBlocks",\n        "worldPath": world,\n        "modsPath": mods_path,\n        "modLoader": loader,\n        "clientPurpose": purpose,\n        "minX": min[0], "minY": min[1], "minZ": min[2],\n        "maxX": max[0], "maxY": max[1], "maxZ": max[2]\n    })\n}\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one block_list_request implementation, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old_test = '''    #[test]\n    fn block_list_request_carries_its_own_action_identity() {\n        let state: SharedState = Arc::new(Mutex::new(AppState::default()));\n        let ui = MainWindow::new().unwrap();\n        let preview = block_list_request(&ui, Path::new("world"), &state, "preview");\n        let preflight = block_list_request(&ui, Path::new("world"), &state, "preflight");\n        assert_eq!(preview.get("clientPurpose").and_then(Value::as_str), Some("preview"));\n        assert_eq!(preflight.get("clientPurpose").and_then(Value::as_str), Some("preflight"));\n    }\n'''
+          new_test = '''    #[test]\n    fn block_list_request_carries_its_own_action_identity() {\n        let preview = block_list_request_payload(\n            Path::new("world"),\n            Path::new("mods"),\n            "fabric",\n            "preview",\n            [-8, -4, -2],\n            [8, 4, 2],\n        );\n        let preflight = block_list_request_payload(\n            Path::new("world"),\n            Path::new("mods"),\n            "fabric",\n            "preflight",\n            [-8, -4, -2],\n            [8, 4, 2],\n        );\n        assert_eq!(preview.get("clientPurpose").and_then(Value::as_str), Some("preview"));\n        assert_eq!(preflight.get("clientPurpose").and_then(Value::as_str), Some("preflight"));\n        assert_eq!(preview.get("command").and_then(Value::as_str), Some("listBlocks"));\n        assert_eq!(preview.get("minX").and_then(Value::as_i64), Some(-8));\n        assert_eq!(preview.get("maxZ").and_then(Value::as_i64), Some(2));\n    }\n'''
+          if text.count(old_test) != 1:
+              raise SystemExit(f"expected one display-dependent block-list test, found {text.count(old_test)}")
+          app.write_text(text.replace(old_test, new_test, 1), encoding="utf-8")
+
+          # BUG-069 is a separate pending gate. Apply its already-proven lint fix
+          # only in this runner so BUG-070 can exercise the full Rust suite.
+          toolchain = Path("desktop/src/toolchain.rs")
+          tc = toolchain.read_text(encoding="utf-8")
+          checksum = '''fn verify_sha256(path: &Path, expected: &str) -> Result<()> {\n    verify_sha256_cancellable(path, expected, &Arc::new(AtomicBool::new(false)))\n}\n'''
+          if tc.count(checksum) != 1:
+              raise SystemExit(f"expected one checksum wrapper, found {tc.count(checksum)}")
+          toolchain.write_text(tc.replace(checksum, "#[cfg(test)]\n" + checksum, 1), encoding="utf-8")
+          PY
+          git diff --check
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
+      - name: Install Slint dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+
+      - name: Test desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: "1"
+        run: |
+          cargo check --locked --all-targets
+          cargo test --locked --all-targets
+
+      - name: Commit tested source fix and remove one-shot gate
+        run: |
+          git checkout -- desktop/src/toolchain.rs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add desktop/src/app.rs
+          git rm .github/workflows/one-shot-headless-block-list-test.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-070 Make block-list test headless"
+          git push origin HEAD:main
