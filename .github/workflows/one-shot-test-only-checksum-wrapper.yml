@@ -1,3 +1,4 @@
+# Rerun after BUG-070 made the full Rust test suite headless-safe.
 name: One Shot Test Only Checksum Wrapper
 
 on:
