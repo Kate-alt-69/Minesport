@@ -2,7 +2,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::{
     env, fs,
     path::{Component, Path, PathBuf},
+    process::{Child, Command, ExitStatus, Output, Stdio},
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError},
+    thread,
+    time::{Duration, Instant},
 };
 
 const VENDOR_DIR: &str = "kastrick's_software";
@@ -195,6 +198,99 @@ pub fn remove_generated_cache() -> Result<()> {
     Ok(())
 }
 
+/// Terminate a child and, on Windows, the complete process tree rooted at that
+/// child. Every wait is bounded so cancellation/shutdown cannot trade one hang
+/// for another. The returned status is present only when the direct child was
+/// reaped before the deadline.
+pub(crate) fn terminate_process_tree(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
+    if let Ok(Some(status)) = child.try_wait() {
+        return Some(status);
+    }
+
+    let deadline = Instant::now() + timeout;
+    #[cfg(windows)]
+    terminate_windows_process_tree(child.id(), timeout.min(Duration::from_secs(4)));
+
+    if let Ok(Some(status)) = child.try_wait() {
+        return Some(status);
+    }
+    let _ = child.kill();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Run a tiny probe command with captured output and a hard deadline. This is
+/// used for Java/Javac version detection where an unhealthy launcher/shim must
+/// never freeze Minesport startup or runtime preparation.
+pub(crate) fn output_with_timeout(command: &mut Command, timeout: Duration) -> std::io::Result<Option<Output>> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait()? {
+            Some(_) => return child.wait_with_output().map(Some),
+            None => {}
+        }
+        if Instant::now() >= deadline {
+            let _ = terminate_process_tree(&mut child, Duration::from_secs(2));
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(windows)]
+fn terminate_windows_process_tree(pid: u32, timeout: Duration) {
+    let taskkill = env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|root| root.join("System32").join("taskkill.exe"))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("taskkill.exe"));
+    let pid = pid.to_string();
+    let mut command = Command::new(taskkill);
+    command
+        .args(["/PID", pid.as_str(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    hide_process_window(&mut command);
+
+    let Ok(mut killer) = command.spawn() else { return; };
+    let deadline = Instant::now() + timeout;
+    loop {
+        match killer.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(_) => return,
+        }
+        if Instant::now() >= deadline {
+            let _ = killer.kill();
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(windows)]
+fn hide_process_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
 fn env_path(name: &str) -> Option<PathBuf> {
     env::var(name)
         .ok()
@@ -334,5 +430,10 @@ mod tests {
         if env::var_os("MINESPORT_BRIDGE_DATA").is_none() {
             assert_eq!(bridge_data_root(), cache_root().join("bridge-data"));
         }
+    }
+
+    #[test]
+    fn process_cleanup_deadlines_are_finite() {
+        assert!(Duration::from_secs(4) < Duration::from_secs(15));
     }
 }
