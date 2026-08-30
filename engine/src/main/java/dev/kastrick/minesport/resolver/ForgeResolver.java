@@ -13,7 +13,8 @@ import java.util.zip.*;
  * Resolves block assets from Forge and NeoForge mod jars.
  *
  * Forge/NeoForge mod jars are standard zip files containing:
- *   META-INF/mods.toml            ← mod metadata (modId, version, displayName)
+ *   META-INF/mods.toml            ← Forge mod metadata
+ *   META-INF/neoforge.mods.toml   ← modern NeoForge mod metadata
  *   assets/<modid>/blockstates/   ← blockstate JSONs (identical format to vanilla/Fabric)
  *   assets/<modid>/models/        ← model JSONs
  *   assets/<modid>/textures/      ← PNG textures
@@ -59,7 +60,8 @@ public class ForgeResolver implements AssetResolver {
     /**
      * Scan a mods folder and load all Forge/NeoForge mod jars.
      * A jar only registers with this resolver if it has a valid
-     * META-INF/mods.toml with at least one [[mods]] entry.
+     * META-INF/mods.toml or META-INF/neoforge.mods.toml with at least one
+     * [[mods]] entry.
      *
      * @param modsFolder  e.g. .minecraft/mods or an instance's mods folder
      * @param log         optional logger
@@ -99,21 +101,31 @@ public class ForgeResolver implements AssetResolver {
     private void loadJar(File jarFile, java.util.function.Consumer<String> log) throws IOException {
         ZipFile zip = new ZipFile(jarFile);
 
-        ZipEntry modsToml = zip.getEntry("META-INF/mods.toml");
+        String metadataPath = "META-INF/mods.toml";
+        ZipEntry modsToml = zip.getEntry(metadataPath);
         if (modsToml == null) {
-            // Not a Forge/NeoForge mod — skip (don't claim namespaces from
-            // jars we can't positively identify, to avoid stealing a
-            // namespace that a Fabric/Quilt mod jar with the same modid
-            // might legitimately own in a mixed-mods folder scenario).
+            metadataPath = "META-INF/neoforge.mods.toml";
+            modsToml = zip.getEntry(metadataPath);
+        }
+        if (modsToml == null) {
+            // The selected Forge/NeoForge resolver must not claim arbitrary
+            // library/resource JARs. Require one of the loader metadata files,
+            // but support both the Forge and modern NeoForge names.
             zip.close();
             return;
         }
 
-        String toml = new String(zip.getInputStream(modsToml).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        String toml;
+        try (InputStream metadata = zip.getInputStream(modsToml)) {
+            toml = new String(metadata.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
         List<ModInfo> mods = parseModsToml(toml, jarFile);
 
         if (mods.isEmpty()) {
-            if (log != null) log.accept("[ForgeResolver] mods.toml present but no [[mods]] entries in " + jarFile.getName());
+            if (log != null) log.accept(
+                "[ForgeResolver] " + metadataPath
+                    + " present but no [[mods]] entries in " + jarFile.getName()
+            );
             zip.close();
             return;
         }
