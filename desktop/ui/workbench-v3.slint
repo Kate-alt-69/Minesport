@@ -425,6 +425,7 @@ export component MainWindow inherits Window {
     in-out property <string> task-detail: "Ready";
     in-out property <float> task-progress: 0.0;
     in-out property <bool> task-active: false;
+    private property <bool> foreground-busy: root.task-active || root.runtime-cache-busy;
     in-out property <bool> task-completing: false;
     in-out property <string> task-completion-detail: "";
     in-out property <string> diagnostics: "Minesport Rust/Slint desktop initialized.";
@@ -664,7 +665,7 @@ export component MainWindow inherits Window {
                                     Text { text: "Optimization: face culling " + (root.face-culling ? "ON" : "OFF") + " · FLATTER " + (root.flatter-enabled ? "ON" : "OFF") + " · hidden culling " + (root.hidden-culling ? "ON" : "OFF"); color: #b6beb9; font-size: 12px; wrap: word-wrap; }
                                     Button { text: "Apply safe optimization"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.export-preset-index = 0; root.settings-changed(); } }
                                 }
-                                Button { text: root.task-active ? "Working…" : "Export world"; primary: true; enabled: root.engine-ready && !root.task-active && root.world-path != "No world selected"; clicked => { root.export-requested(); } }
+                                Button { text: root.task-active ? "Working…" : "Export world"; primary: true; enabled: root.engine-ready && !root.foreground-busy && root.world-path != "No world selected"; clicked => { root.export-requested(); } }
                                 HintText { text: root.export-format-index == 2 ? "Litematica exports Minecraft block states directly. 3D geometry, runtime model resolution and Blender translation are skipped." : "3D export automatically prepares a matching runtime-model cache when needed. Progress appears only while work is active."; }
                             }
                         }
@@ -685,7 +686,7 @@ export component MainWindow inherits Window {
                                         Text { width: 18px; text: root.blender-translator-current ? "✓" : "✕"; color: root.blender-translator-current ? #8fc69b : #d39191; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                         Text { horizontal-stretch: 1; text: root.blender-translator-status; color: #b6beb9; font-size: 12px; vertical-alignment: center; overflow: elide; }
                                     }
-                                    Button { text: "Install / repair Minesport translator"; enabled: !root.task-active; clicked => { root.install-blender-translator(); } }
+                                    Button { text: "Install / repair Minesport translator"; enabled: !root.foreground-busy; clicked => { root.install-blender-translator(); } }
                                     HintText { text: "Animate export prepares dynamic state descriptors plus animated textures. Animate static preserves interactable world state while keeping continuously animated textures."; }
                                     HintText { text: "For OBJ, use Minesport's Blender translator import path. Blender's stock Wavefront importer bypasses Minesport metadata."; }
                                 }
@@ -1030,7 +1031,7 @@ export component MainWindow inherits Window {
                             if root.export-format-index < 2: VerticalLayout {
                                 spacing: 8px;
                                 Text { text: root.runtime-cache-status; color: #aab2ad; font-size: 12px; wrap: word-wrap; }
-                                Button { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.runtime-cache-busy; clicked => { root.rebuild-runtime-cache(); } }
+                                Button { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.rebuild-runtime-cache(); } }
                             }
                             if root.export-format-index < 2: VerticalLayout {
                                 spacing: 11px;
@@ -1062,11 +1063,11 @@ export component MainWindow inherits Window {
                                 }
                             }
                             SectionTitle { label: "ADVANCED EXPORT TOOLS"; }
-                            Button { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.task-active; clicked => { root.run-preflight(); } }
+                            Button { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.run-preflight(); } }
                             Text { text: root.preflight-summary; color: #a7b0aa; font-size: 12px; wrap: word-wrap; }
-                            Button { text: "Reload 2D map"; enabled: root.world-path != "No world selected" && !root.map-loading; clicked => { root.reload-map(); } }
+                            Button { text: "Reload 2D map"; enabled: root.world-path != "No world selected" && !root.map-loading && !root.foreground-busy; clicked => { root.reload-map(); } }
                             Button { text: "Open documentation"; clicked => { root.open-docs(); root.settings-visible = false; } }
-                            Button { text: "Remove all Minesport cache"; enabled: !root.task-active && !root.runtime-cache-busy; clicked => { root.remove-cache(); } }
+                            Button { text: "Remove all Minesport cache"; enabled: !root.foreground-busy; clicked => { root.remove-cache(); } }
                             HintText { text: "Deletes only regenerable runtime/cache/toolchain data. Worlds, exports, settings and real mods are never touched."; }
                         }
                     }
@@ -1103,7 +1104,7 @@ export component MainWindow inherits Window {
                         spacing: 8px;
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                         Button { text: "Not now"; clicked => { root.blender-prompt-later(); } }
-                        Button { text: "Install"; primary: true; clicked => { root.blender-prompt-install(); } }
+                        Button { text: "Install"; primary: true; enabled: !root.foreground-busy; clicked => { root.blender-prompt-install(); } }
                     }
                 }
             }
