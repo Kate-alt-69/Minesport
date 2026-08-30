@@ -54,7 +54,7 @@ public class GltfExporter {
         int progressBlocks = Math.max(blocks.size(), 1);
         boolean flatterEnabled = FlatterSettings.enabled();
         FlatterOptimizer.Result flatter = flatterEnabled
-            ? FlatterOptimizer.compile(blocks, resolvers, (doneCount, total) -> {
+            ? FlatterOptimizer.compile(blocks, builder, resolvers, (doneCount, total) -> {
                 if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
             })
             : FlatterOptimizer.Result.empty();

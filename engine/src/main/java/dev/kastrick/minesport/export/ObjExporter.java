@@ -57,7 +57,7 @@ public class ObjExporter {
         int progressBlocks = Math.max(blocks.size(), 1);
         boolean flatterEnabled = FlatterSettings.enabled();
         FlatterOptimizer.Result flatter = flatterEnabled
-            ? FlatterOptimizer.compile(blocks, builder.getResolvers(), (doneCount, total) -> {
+            ? FlatterOptimizer.compile(blocks, builder, builder.getResolvers(), (doneCount, total) -> {
                 if (progress != null) progress.onProgress(doneCount, Math.max(1, total * 2));
             })
             : FlatterOptimizer.Result.empty();

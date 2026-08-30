@@ -1,12 +1,9 @@
 package dev.kastrick.minesport;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import dev.kastrick.minesport.export.BlockGeometryClassifier;
 import dev.kastrick.minesport.export.BlockGeometryKind;
 import dev.kastrick.minesport.export.BlockGrouper;
 import dev.kastrick.minesport.export.ExportWorldContext;
-import dev.kastrick.minesport.export.FlatterSettings;
 import dev.kastrick.minesport.export.LiquidGeometryBuilder;
 import dev.kastrick.minesport.export.Quad;
 import dev.kastrick.minesport.export.SpatialKey;
@@ -16,7 +13,6 @@ import dev.kastrick.minesport.resolver.RuntimeModelRegistry;
 
 import java.io.File;
 import java.lang.ref.WeakReference;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -60,7 +56,10 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
     public GeometryBuilder(ResolverChain resolvers) {
         super(resolvers);
         this.classifier = new BlockGeometryClassifier(resolvers);
-        this.hiddenBlockCullingEnabled = readHiddenBlockCullingSetting();
+        // The current export request is authoritative. IpcMode explicitly
+        // enables this for the selected export when requested; never let a
+        // stale settings.json value turn culling on behind the UI's back.
+        this.hiddenBlockCullingEnabled = false;
         this.worldIndex = ExportWorldContext.takeIndex();
     }
 
@@ -251,15 +250,4 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
         return kindCache.computeIfAbsent(key, ignored -> classifier.classify(block));
     }
 
-    private static boolean readHiddenBlockCullingSetting() {
-        try {
-            File settings = FlatterSettings.settingsFile();
-            if (settings == null || !settings.isFile()) return false;
-            JsonObject obj = JsonParser.parseString(Files.readString(settings.toPath())).getAsJsonObject();
-            return obj.has("hiddenBlockCullingEnabled")
-                && obj.get("hiddenBlockCullingEnabled").getAsBoolean();
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
 }

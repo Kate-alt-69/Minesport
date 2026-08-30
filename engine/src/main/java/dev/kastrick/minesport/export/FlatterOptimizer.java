@@ -155,6 +155,20 @@ public final class FlatterOptimizer {
         return compile(blocks, resolvers, FlatterSettings.cellSize(), progress);
     }
 
+    /**
+     * Live-export overload: reuse the exact configured GeometryBuilder so
+     * FLATTER sees the same runtime registry, neighbour map and culling flags
+     * as conventional geometry.
+     */
+    public static Result compile(
+        List<BlockData> blocks,
+        GeometryBuilder geometry,
+        ResolverChain resolvers,
+        ObjExporter.ProgressCallback progress
+    ) {
+        return compile(blocks, geometry, resolvers, FlatterSettings.cellSize(), progress);
+    }
+
     /** Explicit cell-size overload used by tests/tools without changing global settings. */
     public static Result compile(List<BlockData> blocks, ResolverChain resolvers, int requestedCellSize) {
         return compile(blocks, resolvers, requestedCellSize, null);
@@ -166,12 +180,24 @@ public final class FlatterOptimizer {
         int requestedCellSize,
         ObjExporter.ProgressCallback progress
     ) {
-        if (blocks == null || blocks.isEmpty() || resolvers == null) return Result.empty();
+        GeometryBuilder geometry = resolvers == null
+            ? null
+            : new dev.kastrick.minesport.GeometryBuilder(resolvers);
+        return compile(blocks, geometry, resolvers, requestedCellSize, progress);
+    }
+
+    private static Result compile(
+        List<BlockData> blocks,
+        GeometryBuilder geometry,
+        ResolverChain resolvers,
+        int requestedCellSize,
+        ObjExporter.ProgressCallback progress
+    ) {
+        if (blocks == null || blocks.isEmpty() || resolvers == null || geometry == null) {
+            return Result.empty();
+        }
 
         int cellSize = FlatterSettings.normalizeCellSize(requestedCellSize);
-        // Use the IPC/export GeometryBuilder so FLATTER and conventional output
-        // consume the same captured runtime baked-model source.
-        GeometryBuilder geometry = new dev.kastrick.minesport.GeometryBuilder(resolvers);
         Map<MaterialKey,Boolean> opaqueCache = new HashMap<>();
         Map<ObjectKey,List<Candidate>> cells = new LinkedHashMap<>();
 
