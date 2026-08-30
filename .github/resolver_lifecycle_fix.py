@@ -70,37 +70,36 @@ replace_once(
     "ResolverChain close implementation",
 )
 
+# VanillaResolver already owns a close method, but it was outside the common
+# resolver contract and was not idempotent/clearing its fallback reference.
 replace_once(
     "engine/src/main/java/dev/kastrick/minesport/resolver/VanillaResolver.java",
-    '''    @Override
-    public String name() { return "VanillaResolver(" + jarFile.getName() + ")"; }
+    '''    public void close() {
+        try { if (zip != null) zip.close(); }
+        catch (IOException ignored) {}
 
-    public boolean usesSyntheticLegacyModels() { return legacyModelEra; }
+        VanillaResolver fallback = pistonFallback;
+        if (fallback != null) fallback.close();
+    }
 ''',
     '''    @Override
-    public String name() { return "VanillaResolver(" + jarFile.getName() + ")"; }
-
-    @Override
     public void close() {
         VanillaResolver fallback = pistonFallback;
         pistonFallback = null;
-        if (fallback != null && fallback != this) {
-            fallback.close();
-        }
+        if (fallback != null && fallback != this) fallback.close();
+
         ZipFile current = zip;
         zip = null;
-        if (current != null) {
-            try { current.close(); } catch (IOException ignored) {}
-        }
+        try { if (current != null) current.close(); }
+        catch (IOException ignored) {}
+
         stateCache.clear();
         modelCache.clear();
         texCache.clear();
         pistonTextureMisses.clear();
     }
-
-    public boolean usesSyntheticLegacyModels() { return legacyModelEra; }
 ''',
-    "VanillaResolver close",
+    "VanillaResolver lifecycle close",
 )
 
 # Keep the chain visible to the method finally block. Litematica never creates
