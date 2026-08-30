@@ -118,11 +118,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
-            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
       - name: Test Rust core and compile Slint UI
-        env:
-          SLINT_BACKEND: testing
-        run: cargo test --manifest-path desktop/Cargo.toml --all-targets
+        run: xvfb-run -a cargo test --manifest-path desktop/Cargo.toml --all-targets
       - name: Check release build
         run: cargo check --release --manifest-path desktop/Cargo.toml --all-targets
 
@@ -236,12 +234,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
-            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
       - name: Test Rust desktop and Slint UI
         shell: bash
-        env:
-          SLINT_BACKEND: testing
-        run: cargo test --manifest-path desktop/Cargo.toml
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a cargo test --manifest-path desktop/Cargo.toml
+          else
+            cargo test --manifest-path desktop/Cargo.toml
+          fi
       - name: Build Rust desktop release
         shell: bash
         run: cargo build --release --manifest-path desktop/Cargo.toml --bin minesport
