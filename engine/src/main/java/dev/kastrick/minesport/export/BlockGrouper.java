@@ -18,8 +18,16 @@ public class BlockGrouper {
 
     public static Map<BlockData, String> computeGroups(List<BlockData> blocks) {
         Map<Long, BlockData> index = new HashMap<>(Math.max(16, blocks.size() * 2));
+        Map<BlockData, String> typeKeys = new IdentityHashMap<>(blocks.size());
         for (BlockData b : blocks) {
-            if (!b.isAir()) index.put(SpatialKey.of(b.x, b.y, b.z), b);
+            if (!b.isAir()) {
+                index.put(SpatialKey.of(b.x, b.y, b.z), b);
+                // stateKey() sorts property names. The BFS can inspect the same
+                // block from up to six neighbours, so computing this lazily in
+                // the inner loop repeated identical sorting/string allocation
+                // millions of times on large selections. Cache it once/block.
+                typeKeys.put(b, typeKey(b));
+            }
         }
 
         Map<BlockData, String> result = new IdentityHashMap<>(blocks.size());
@@ -48,7 +56,7 @@ public class BlockGrouper {
         for (BlockData b : blocks) {
             if (b.isAir() || componentId.containsKey(b)) continue;
 
-            String blockType = typeKey(b);
+            String blockType = typeKeys.get(b);
             int cid = typeCounter.getOrDefault(blockType, 0);
             typeCounter.put(blockType, cid + 1);
 
@@ -68,7 +76,7 @@ public class BlockGrouper {
                 for (int[] d : NEIGHBOURS) {
                     BlockData neighbour = index.get(SpatialKey.of(cur.x + d[0], cur.y + d[1], cur.z + d[2]));
                     if (neighbour == null || compoundGroups.containsKey(neighbour)) continue;
-                    if (!typeKey(neighbour).equals(blockType)) continue;
+                    if (!blockType.equals(typeKeys.get(neighbour))) continue;
                     if (componentId.containsKey(neighbour)) continue;
                     componentId.put(neighbour, cid);
                     queue.add(neighbour);
