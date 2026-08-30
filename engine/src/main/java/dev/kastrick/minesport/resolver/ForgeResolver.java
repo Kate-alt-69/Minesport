@@ -35,7 +35,7 @@ import java.util.zip.*;
 public class ForgeResolver implements AssetResolver {
 
     // namespace → ZipFile that owns it
-    private final Map<String, ZipFile> namespaceJars = new LinkedHashMap<>();
+    private final Map<String, List<ZipFile>> namespaceJars = new LinkedHashMap<>();
 
     // All open ZipFiles (for cleanup)
     private final List<ZipFile> openJars = new ArrayList<>();
@@ -142,7 +142,7 @@ public class ForgeResolver implements AssetResolver {
                 if (slash > 0) {
                     String ns = rest.substring(0, slash);
                     if (!ns.isEmpty() && foundNamespaces.add(ns)) {
-                        namespaceJars.putIfAbsent(ns, zip);
+                        namespaceJars.computeIfAbsent(ns, ignored -> new ArrayList<>()).add(zip);
                     }
                 }
             }
@@ -349,11 +349,19 @@ public class ForgeResolver implements AssetResolver {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private InputStream openEntry(String namespace, String path) throws IOException {
-        ZipFile zip = namespaceJars.get(namespace);
-        if (zip == null) return null;
-        ZipEntry entry = zip.getEntry(path);
-        if (entry == null) return null;
-        return zip.getInputStream(entry);
+        List<ZipFile> sources = namespaceJars.get(namespace);
+        if (sources == null || sources.isEmpty()) return null;
+
+        // Preserve the historical first-owner priority, but fall through to
+        // later JARs sharing the namespace when the earlier source does not
+        // contain this exact resource. Companion/library JARs can therefore
+        // contribute models/textures without unexpectedly overriding a file
+        // that Minesport already resolved from the first source.
+        for (ZipFile zip : sources) {
+            ZipEntry entry = zip.getEntry(path);
+            if (entry != null) return zip.getInputStream(entry);
+        }
+        return null;
     }
 
     private static String normalizePath(String path) {
@@ -379,20 +387,18 @@ public class ForgeResolver implements AssetResolver {
 
     /** List all block model names available in the given namespace (used by fallback matching). */
     public Set<String> listModels(String namespace) {
-        ZipFile zip = namespaceJars.get(namespace);
-        if (zip == null) return Collections.emptySet();
+        List<ZipFile> sources = namespaceJars.get(namespace);
+        if (sources == null || sources.isEmpty()) return Collections.emptySet();
 
         String prefix = "assets/" + namespace + "/models/block/";
         Set<String> names = new LinkedHashSet<>();
-
-        Enumeration<? extends ZipEntry> entries = zip.entries();
-        while (entries.hasMoreElements()) {
-            ZipEntry entry = entries.nextElement();
-            String name = entry.getName();
-            if (name.startsWith(prefix) && name.endsWith(".json")) {
-                String modelName = name.substring(prefix.length(), name.length() - 5);
-                if (!modelName.contains("/")) {
-                    names.add(modelName);
+        for (ZipFile zip : sources) {
+            Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                String name = entries.nextElement().getName();
+                if (name.startsWith(prefix) && name.endsWith(".json")) {
+                    String modelName = name.substring(prefix.length(), name.length() - 5);
+                    if (!modelName.contains("/")) names.add(modelName);
                 }
             }
         }
