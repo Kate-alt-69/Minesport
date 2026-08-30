@@ -1130,10 +1130,7 @@ fn finish_child_after_capture(child: &mut Child, allow_graceful_exit: bool) {
 }
 
 fn stop_child(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+    let _ = runtime::terminate_process_tree(child, Duration::from_secs(5));
 }
 
 struct CaptureThreadGuard {
