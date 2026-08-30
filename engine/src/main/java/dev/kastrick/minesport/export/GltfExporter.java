@@ -49,8 +49,12 @@ public class GltfExporter {
         File binFile = new File(outputFile.getParent(), outputName.replaceFirst("(?i)\\.gltf$", ".bin"));
 
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
-        Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
-        Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+        Map<BlockData,String> groupedIds = mode == ObjExporter.ExportMode.GROUPED_BY_TYPE
+            ? BlockGrouper.computeGroups(blocks)
+            : Map.of();
+        Map<BlockData,String> compoundIds = mode == ObjExporter.ExportMode.INDIVIDUAL
+            ? MultiBlockStructureResolver.resolve(blocks)
+            : Map.of();
         int progressBlocks = Math.max(blocks.size(), 1);
         boolean flatterEnabled = FlatterSettings.enabled();
         FlatterOptimizer.Result flatter = flatterEnabled

@@ -52,8 +52,12 @@ public class ObjExporter {
         FlatterMetadataExporter.resetForExport(outputFile);
 
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
-        Map<BlockData,String> groupedIds = BlockGrouper.computeGroups(blocks);
-        Map<BlockData,String> compoundIds = MultiBlockStructureResolver.resolve(blocks);
+        Map<BlockData,String> groupedIds = mode == ExportMode.GROUPED_BY_TYPE
+            ? BlockGrouper.computeGroups(blocks)
+            : Map.of();
+        Map<BlockData,String> compoundIds = mode == ExportMode.INDIVIDUAL
+            ? MultiBlockStructureResolver.resolve(blocks)
+            : Map.of();
         int progressBlocks = Math.max(blocks.size(), 1);
         boolean flatterEnabled = FlatterSettings.enabled();
         FlatterOptimizer.Result flatter = flatterEnabled
