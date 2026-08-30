@@ -1,123 +1,4 @@
-from pathlib import Path
-
-
-def replace_once(text: str, old: str, new: str, label: str) -> str:
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{label}: expected exactly one match, found {count}")
-    return text.replace(old, new, 1)
-
-
-path = Path("engine/src/main/java/dev/kastrick/minesport/export/TextureAnimationExporter.java")
-text = path.read_text(encoding="utf-8")
-
-text = replace_once(
-    text,
-    '''import com.google.gson.JsonParser;\nimport dev.kastrick.minesport.region.BlockData;''',
-    '''import com.google.gson.JsonParser;\nimport dev.kastrick.minesport.model.BlockState;\nimport dev.kastrick.minesport.region.BlockData;''',
-    "BlockState import",
-)
-
-text = replace_once(
-    text,
-    '''        Set<String> seenStates = new HashSet<>();
-        Map<String, MaterialKey> materials = new LinkedHashMap<>();
-        for (BlockData block : blocks) {
-            if (block == null || block.isAir()) continue;
-            String stateKey = block.blockId + "[" + BlockGrouper.stateKey(block.properties) + "]";
-            if (!seenStates.add(stateKey)) continue;
-            List<Quad> quads;''',
-    '''        Set<String> seenVariants = new HashSet<>();
-        Map<String, BlockState> resolvedStates = new LinkedHashMap<>();
-        Set<String> unresolvedBlockStates = new HashSet<>();
-        Map<String, MaterialKey> materials = new LinkedHashMap<>();
-        ResolverChain resolvers = geometry.getResolvers();
-        for (BlockData block : blocks) {
-            if (block == null || block.isAir()) continue;
-            String discoveryKey = materialDiscoveryKey(
-                block,
-                resolvers,
-                resolvedStates,
-                unresolvedBlockStates
-            );
-            if (!seenVariants.add(discoveryKey)) continue;
-            List<Quad> quads;''',
-    "coordinate-aware animation discovery",
-)
-
-text = replace_once(
-    text,
-    '''        return materials;
-    }
-
-    static JsonObject describeMaterial(MaterialKey material, ResolverChain resolvers) {''',
-    '''        return materials;
-    }
-
-    /**
-     * Deduplicate animation discovery by the model application that this exact
-     * coordinate resolves to, not merely by logical block state. Minecraft's
-     * weighted variants deliberately use position as part of their stable
-     * selection, so two equal states can legitimately render different models
-     * (and therefore different animated textures).
-     */
-    private static String materialDiscoveryKey(
-        BlockData block,
-        ResolverChain resolvers,
-        Map<String, BlockState> resolvedStates,
-        Set<String> unresolvedBlockStates
-    ) {
-        String stateKey = block.blockId + "[" + BlockGrouper.stateKey(block.properties) + "]";
-        if (resolvers == null || unresolvedBlockStates.contains(block.blockId)) return stateKey;
-
-        BlockState state = resolvedStates.get(block.blockId);
-        if (state == null) {
-            try {
-                state = resolvers.resolveBlockState(block.blockId);
-            } catch (Exception ignored) {
-                state = null;
-            }
-            if (state == null) {
-                unresolvedBlockStates.add(block.blockId);
-                return stateKey;
-            }
-            resolvedStates.put(block.blockId, state);
-        }
-
-        List<BlockState.ModelApplication> applications;
-        try {
-            applications = state.resolve(
-                block.properties,
-                block.x,
-                block.y,
-                block.z
-            );
-        } catch (Exception ignored) {
-            return stateKey;
-        }
-        if (applications == null || applications.isEmpty()) return stateKey;
-
-        StringBuilder signature = new StringBuilder(stateKey).append("|models=");
-        for (BlockState.ModelApplication application : applications) {
-            if (application == null) continue;
-            signature.append(application.modelPath == null ? "" : application.modelPath)
-                .append(';');
-        }
-        return signature.toString();
-    }
-
-    static JsonObject describeMaterial(MaterialKey material, ResolverChain resolvers) {''',
-    "animation model discovery key helper",
-)
-
-path.write_text(text, encoding="utf-8")
-
-
-test = Path("engine/src/test/java/dev/kastrick/minesport/export/TextureAnimationWeightedVariantTest.java")
-if test.exists():
-    raise SystemExit("TextureAnimationWeightedVariantTest.java already exists")
-
-test.write_text('''package dev.kastrick.minesport.export;
+package dev.kastrick.minesport.export;
 
 import com.google.gson.JsonArray;
 import dev.kastrick.minesport.model.BlockModel;
@@ -190,7 +71,7 @@ class TextureAnimationWeightedVariantTest {
         @Override
         public String resolveTextureMetadata(String texturePath) {
             return texturePath != null && texturePath.startsWith("test:animated_")
-                ? "{\\\"animation\\\":{\\\"frametime\\\":1}}"
+                ? "{\"animation\":{\"frametime\":1}}"
                 : null;
         }
 
@@ -253,6 +134,3 @@ class TextureAnimationWeightedVariantTest {
         }
     }
 }
-''', encoding="utf-8")
-
-print("Made texture animation discovery weighted-variant aware")
