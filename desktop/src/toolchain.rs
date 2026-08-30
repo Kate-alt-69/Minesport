@@ -90,7 +90,7 @@ pub fn find_installed_jdk(required: u32) -> Option<PathBuf> {
         let mut command = Command::new(java);
         command.args(["-XshowSettings:properties", "-version"]);
         hide_console_window(&mut command);
-        if let Ok(output) = command.output() {
+        if let Ok(Some(output)) = runtime::output_with_timeout(&mut command, Duration::from_secs(5)) {
             let text = String::from_utf8_lossy(&output.stderr);
             for line in text.lines() {
                 let Some(value) = line.trim().strip_prefix("java.home =") else { continue; };
@@ -390,10 +390,7 @@ fn extract_archive_cancellable(
 }
 
 fn terminate_child(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+    let _ = runtime::terminate_process_tree(child, Duration::from_secs(3));
 }
 
 fn check_cancelled(cancel: &Arc<AtomicBool>, stage: &str) -> Result<()> {
@@ -448,9 +445,9 @@ pub fn javac_major(javac: &Path) -> u32 {
     let mut command = Command::new(javac);
     command.arg("-version");
     hide_console_window(&mut command);
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(_) => return 0,
+    let output = match runtime::output_with_timeout(&mut command, Duration::from_secs(5)) {
+        Ok(Some(output)) => output,
+        _ => return 0,
     };
     let text = format!("{} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     let rx = Regex::new(r"(?i)javac\s+([0-9]+)").expect("javac version regex");
