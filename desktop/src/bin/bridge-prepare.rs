@@ -137,8 +137,13 @@ fn main() -> Result<()> {
 }
 
 fn output_name(family: BridgeFamily, version: &str) -> String {
+    // bridge-prepare is the compatibility/CI publication helper. Its output is
+    // consumed by workflows, installers and artifact downloaders under the
+    // public `minesport-bridge-<loader>-<version>.jar` contract. The Gradle
+    // project may internally call the module an `export_worker`; do not leak
+    // that implementation filename into the published artifact name.
     format!(
-        "minesport_export_worker-{}-{}.jar",
+        "minesport-bridge-{}-{}.jar",
         family.label().to_ascii_lowercase(),
         safe(version)
     )
@@ -191,26 +196,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fabric_recipe_filename_contains_family() {
+    fn fabric_recipe_filename_uses_public_bridge_contract() {
         assert_eq!(
             output_name(BridgeFamily::Fabric, "1.21.5"),
-            "minesport_export_worker-fabric-1.21.5.jar"
+            "minesport-bridge-fabric-1.21.5.jar"
         );
     }
 
     #[test]
-    fn loader_recipe_filename_contains_family() {
+    fn loader_recipe_filename_uses_public_bridge_contract() {
         assert_eq!(
             output_name(BridgeFamily::Forge, "1.21.5"),
-            "minesport_export_worker-forge-1.21.5.jar"
+            "minesport-bridge-forge-1.21.5.jar"
         );
         assert_eq!(
             output_name(BridgeFamily::NeoForge, "1.21.7"),
-            "minesport_export_worker-neoforge-1.21.7.jar"
+            "minesport-bridge-neoforge-1.21.7.jar"
         );
         assert_eq!(
             output_name(BridgeFamily::Quilt, "1.21.6"),
-            "minesport_export_worker-quilt-1.21.6.jar"
+            "minesport-bridge-quilt-1.21.6.jar"
         );
     }
 }
