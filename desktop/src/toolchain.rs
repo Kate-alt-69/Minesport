@@ -314,6 +314,7 @@ fn retryable_http_status(code: u16) -> bool {
     matches!(code, 408 | 425 | 429) || (500..=599).contains(&code)
 }
 
+#[cfg(test)]
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     verify_sha256_cancellable(path, expected, &Arc::new(AtomicBool::new(false)))
 }
