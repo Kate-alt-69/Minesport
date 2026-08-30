@@ -348,8 +348,8 @@ jobs:
       - name: Verify Windows installer outputs
         shell: pwsh
         run: |
-          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.0-x64.msi'
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.0-Setup-x64.exe'
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-x64.msi'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-Setup-x64.exe'
           $standalone = Join-Path $env:GITHUB_WORKSPACE 'dist\source\Minesport.exe'
           if (-not (Test-Path $msi)) { throw "Missing MSI: $msi" }
           if (-not (Test-Path $exe)) { throw "Missing setup EXE: $exe" }
@@ -359,8 +359,8 @@ jobs:
         with:
           name: minesport-windows-installers
           path: |
-            dist/installer/Minesport-0.2.0-x64.msi
-            dist/installer/Minesport-0.2.0-Setup-x64.exe
+            dist/installer/Minesport-0.2.1-x64.msi
+            dist/installer/Minesport-0.2.1-Setup-x64.exe
             dist/source/Minesport.exe
           if-no-files-found: error
           retention-days: 7
@@ -443,7 +443,7 @@ jobs:
         continue-on-error: true
         run: |
           {
-            echo "## Minesport 0.2.0 compile report"
+            echo "## Minesport 0.2.1 compile report"
             echo
             echo "| Component | Result |"
             echo "|---|---|"
@@ -466,7 +466,7 @@ jobs:
              [ "$WIN_INSTALLER_RESULT" = success ] && \
              [ "$LINUX_INSTALLER_RESULT" = success ]; then
             echo 'result=success' >> "$GITHUB_OUTPUT"
-            echo '✅ Rust/Slint Minesport 0.2.0 compiled, tested, and packaged cleanly.' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '✅ Rust/Slint Minesport 0.2.1 compiled, tested, and packaged cleanly.' | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo 'result=failure' >> "$GITHUB_OUTPUT"
             echo '❌ One or more required compile/package jobs failed.' | tee -a "$GITHUB_STEP_SUMMARY"
