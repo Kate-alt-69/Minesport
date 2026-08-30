@@ -1047,14 +1047,32 @@ fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: P
 
 fn block_list_request(ui: &MainWindow, world: &Path, state: &SharedState, purpose: &str) -> Value {
     let (_, loader, mods_path) = selected_runtime_context(state, ui, world);
+    block_list_request_payload(
+        world,
+        &mods_path,
+        &loader,
+        purpose,
+        [ui.get_min_x(), ui.get_min_y(), ui.get_min_z()],
+        [ui.get_max_x(), ui.get_max_y(), ui.get_max_z()],
+    )
+}
+
+fn block_list_request_payload(
+    world: &Path,
+    mods_path: &Path,
+    loader: &str,
+    purpose: &str,
+    min: [i32; 3],
+    max: [i32; 3],
+) -> Value {
     json!({
         "command": "listBlocks",
         "worldPath": world,
         "modsPath": mods_path,
         "modLoader": loader,
         "clientPurpose": purpose,
-        "minX": ui.get_min_x(), "minY": ui.get_min_y(), "minZ": ui.get_min_z(),
-        "maxX": ui.get_max_x(), "maxY": ui.get_max_y(), "maxZ": ui.get_max_z()
+        "minX": min[0], "minY": min[1], "minZ": min[2],
+        "maxX": max[0], "maxY": max[1], "maxZ": max[2]
     })
 }
 
@@ -2353,12 +2371,27 @@ mod tests {
 
     #[test]
     fn block_list_request_carries_its_own_action_identity() {
-        let state: SharedState = Arc::new(Mutex::new(AppState::default()));
-        let ui = MainWindow::new().unwrap();
-        let preview = block_list_request(&ui, Path::new("world"), &state, "preview");
-        let preflight = block_list_request(&ui, Path::new("world"), &state, "preflight");
+        let preview = block_list_request_payload(
+            Path::new("world"),
+            Path::new("mods"),
+            "fabric",
+            "preview",
+            [-8, -4, -2],
+            [8, 4, 2],
+        );
+        let preflight = block_list_request_payload(
+            Path::new("world"),
+            Path::new("mods"),
+            "fabric",
+            "preflight",
+            [-8, -4, -2],
+            [8, 4, 2],
+        );
         assert_eq!(preview.get("clientPurpose").and_then(Value::as_str), Some("preview"));
         assert_eq!(preflight.get("clientPurpose").and_then(Value::as_str), Some("preflight"));
+        assert_eq!(preview.get("command").and_then(Value::as_str), Some("listBlocks"));
+        assert_eq!(preview.get("minX").and_then(Value::as_i64), Some(-8));
+        assert_eq!(preview.get("maxZ").and_then(Value::as_i64), Some(2));
     }
 
     #[test]
