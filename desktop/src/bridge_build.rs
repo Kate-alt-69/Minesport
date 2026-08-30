@@ -111,28 +111,45 @@ fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
         candidates.push(path);
     }
 
-    if let Some(expected) = expected_name {
-        bail!(
-            "Gradle reported success but expected Export Worker artifact {expected} was not produced in {}",
-            libs.display()
-        );
-    }
-
+    // Compatibility recipes may intentionally change Gradle/Loom versions.
+    // Older Loom/Gradle combinations can append project.version even when the
+    // canonical 1.21.10 build suppresses archiveVersion. The caller installs
+    // the returned JAR under Minesport's canonical cache filename, so when
+    // Gradle produced exactly one usable runtime JAR it is unambiguous and safe
+    // to accept that artifact instead of failing solely on its source filename.
     match candidates.as_slice() {
         [only] => Ok(only.clone()),
-        [] => Err(anyhow!(
-            "Gradle reported success but no non-sources Export Worker JAR was produced in {}",
-            libs.display()
-        )),
-        _ => Err(anyhow!(
-            "Gradle produced multiple candidate Export Worker JARs in {} and no exact archives_base_name was available: {}",
-            libs.display(),
-            candidates
+        [] => {
+            if let Some(expected) = expected_name {
+                Err(anyhow!(
+                    "Gradle reported success but expected Export Worker artifact {expected} was not produced in {} and no fallback runtime JAR was found",
+                    libs.display()
+                ))
+            } else {
+                Err(anyhow!(
+                    "Gradle reported success but no non-sources Export Worker JAR was produced in {}",
+                    libs.display()
+                ))
+            }
+        }
+        _ => {
+            let names = candidates
                 .iter()
                 .map(|path| path.file_name().unwrap_or_default().to_string_lossy().to_string())
                 .collect::<Vec<_>>()
-                .join(", ")
-        )),
+                .join(", ");
+            if let Some(expected) = expected_name {
+                Err(anyhow!(
+                    "Gradle did not produce exact Export Worker artifact {expected} in {} and produced multiple fallback candidates: {names}",
+                    libs.display()
+                ))
+            } else {
+                Err(anyhow!(
+                    "Gradle produced multiple candidate Export Worker JARs in {} and no exact archives_base_name was available: {names}",
+                    libs.display()
+                ))
+            }
+        }
     }
 }
 
@@ -153,6 +170,14 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn temp_workspace(label: &str) -> PathBuf {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        env::temp_dir().join(format!(
+            "minesport-bridge-build-{label}-{}-{stamp}",
+            std::process::id()
+        ))
+    }
+
     #[test]
     fn gradle_property_parser_reads_exact_key() {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -163,5 +188,49 @@ mod tests {
             Some("minesport_export_worker-fabric-1.20.1")
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn artifact_discovery_accepts_single_version_suffixed_runtime_jar() {
+        let workspace = temp_workspace("version-suffix");
+        let libs = workspace.join("build").join("libs");
+        fs::create_dir_all(&libs).unwrap();
+        fs::write(
+            workspace.join("gradle.properties"),
+            "archives_base_name=minesport_export_worker-fabric-1.19\n",
+        )
+        .unwrap();
+        let actual = libs.join("minesport_export_worker-fabric-1.19-0.2.1.jar");
+        fs::write(&actual, b"runtime").unwrap();
+        fs::write(
+            libs.join("minesport_export_worker-fabric-1.19-0.2.1-sources.jar"),
+            b"sources",
+        )
+        .unwrap();
+
+        assert_eq!(find_built_bridge(&workspace).unwrap(), actual);
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn artifact_discovery_prefers_exact_name_over_other_runtime_jars() {
+        let workspace = temp_workspace("exact-name");
+        let libs = workspace.join("build").join("libs");
+        fs::create_dir_all(&libs).unwrap();
+        fs::write(
+            workspace.join("gradle.properties"),
+            "archives_base_name=minesport_export_worker-fabric-1.20.1\n",
+        )
+        .unwrap();
+        let exact = libs.join("minesport_export_worker-fabric-1.20.1.jar");
+        fs::write(&exact, b"runtime").unwrap();
+        fs::write(
+            libs.join("minesport_export_worker-fabric-1.20.1-legacy.jar"),
+            b"legacy",
+        )
+        .unwrap();
+
+        assert_eq!(find_built_bridge(&workspace).unwrap(), exact);
+        let _ = fs::remove_dir_all(workspace);
     }
 }
