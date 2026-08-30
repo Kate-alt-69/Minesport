@@ -641,12 +641,21 @@ public class VanillaResolver implements AssetResolver {
         return "minecraft:" + path;
     }
 
+    @Override
     public void close() {
-        try { if (zip != null) zip.close(); }
+        VanillaResolver fallback = pistonFallback;
+        pistonFallback = null;
+        if (fallback != null && fallback != this) fallback.close();
+
+        ZipFile current = zip;
+        zip = null;
+        try { if (current != null) current.close(); }
         catch (IOException ignored) {}
 
-        VanillaResolver fallback = pistonFallback;
-        if (fallback != null) fallback.close();
+        stateCache.clear();
+        modelCache.clear();
+        texCache.clear();
+        pistonTextureMisses.clear();
     }
 
     public static File findMinecraftJar(String version) {

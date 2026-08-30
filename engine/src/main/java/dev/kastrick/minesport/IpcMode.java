@@ -117,6 +117,7 @@ public class IpcMode {
 
         File tempDir = null;
         File stagedOutput = null;
+        ResolverChain chain = null;
         try {
             progressIndeterminate("Preparing selected world data");
             tempDir = WorldCopier.copyToTemp(
@@ -396,7 +397,7 @@ public class IpcMode {
             progress(45, "Multipart resolved");
 
             log("Setting up resolvers...");
-            var chain = new ResolverChain();
+            chain = new ResolverChain();
 
             List<File> resourcePackPaths = getPathList(request, "resourcePacks");
             if (!resourcePackPaths.isEmpty()) {
@@ -571,6 +572,10 @@ public class IpcMode {
             exception.printStackTrace(new PrintWriter(stack));
             error("Export failed: " + exception.getMessage() + "\n" + stack);
         } finally {
+            if (chain != null) {
+                chain.close();
+                chain = null;
+            }
             if (stagedOutput != null) {
                 try {
                     Files.deleteIfExists(stagedOutput.toPath());

@@ -9,7 +9,14 @@ import java.awt.image.BufferedImage;
  * VanillaResolver reads from minecraft.jar.
  * FabricResolver / ForgeResolver scan mods folders.
  */
-public interface AssetResolver {
+public interface AssetResolver extends AutoCloseable {
+
+    /**
+     * Release resolver-owned files/resources. Stateless resolvers need no
+     * implementation; JAR/ZIP-backed resolvers override this method.
+     */
+    @Override
+    default void close() {}
 
     /** Returns true if this resolver can handle the given namespaced block ID. */
     boolean canResolve(String blockId);

@@ -7,7 +7,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Chains multiple asset resolvers together in priority order. */
-public class ResolverChain {
+public class ResolverChain implements AutoCloseable {
     private static final ThreadLocal<ResolverChain> CURRENT = new ThreadLocal<>();
     private static final Set<String> VIRTUAL_PARENTS = Set.of(
         "minecraft:block/block",
@@ -139,4 +139,33 @@ public class ResolverChain {
 
     public List<AssetResolver> getResolvers() { return Collections.unmodifiableList(resolvers); }
     public int size() { return resolvers.size(); }
+
+    /**
+     * Close every unique resolver exactly once and release the per-request
+     * ThreadLocal. Resolver close failures are deliberately isolated so one bad
+     * mod JAR cannot prevent the rest of the handles from being released.
+     */
+    @Override
+    public void close() {
+        Set<AssetResolver> closed = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (int i = resolvers.size() - 1; i >= 0; i--) {
+            AssetResolver resolver = resolvers.get(i);
+            if (resolver == null || !closed.add(resolver)) continue;
+            try {
+                resolver.close();
+            } catch (Exception error) {
+                System.err.println(
+                    "[ResolverChain] Failed to close " + resolver.name() + ": " + error.getMessage()
+                );
+            }
+        }
+        resolvers.clear();
+        missingBlockStates.clear();
+        missingModels.clear();
+        missingTextures.clear();
+        blockStateSources.clear();
+        modelSources.clear();
+        textureSources.clear();
+        if (CURRENT.get() == this) CURRENT.remove();
+    }
 }
