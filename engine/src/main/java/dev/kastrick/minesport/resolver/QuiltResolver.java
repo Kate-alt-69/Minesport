@@ -1,5 +1,8 @@
 package dev.kastrick.minesport.resolver;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import dev.kastrick.minesport.model.*;
 
 import javax.imageio.ImageIO;
@@ -163,83 +166,66 @@ public class QuiltResolver implements AssetResolver {
      * }
      */
     private ModInfo parseQuiltMeta(InputStream in, File jarFile) {
-        try {
-            String json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            String loaderObj = extractJsonObjectRegion(json, "quilt_loader");
-            if (loaderObj == null) return null;
+        try (InputStream source = in;
+             InputStreamReader reader = new InputStreamReader(source, java.nio.charset.StandardCharsets.UTF_8)) {
+            JsonElement parsed = JsonParser.parseReader(reader);
+            if (!parsed.isJsonObject()) return null;
+            JsonObject root = parsed.getAsJsonObject();
+            JsonObject loader = jsonObject(root, "quilt_loader");
+            if (loader == null) return null;
 
-            String modId = extractJsonString(loaderObj, "id");
-            String version = extractJsonString(loaderObj, "version");
-            if (modId == null) return null;
-
-            String name = modId;
-            String metaObj = extractJsonObjectRegion(loaderObj, "metadata");
-            if (metaObj != null) {
-                String metaName = extractJsonString(metaObj, "name");
-                if (metaName != null) name = metaName;
-            }
-
-            return new ModInfo(modId, name, version != null ? version : "?", jarFile, false);
+            String modId = jsonString(loader, "id");
+            if (modId == null || modId.isBlank()) return null;
+            String version = jsonString(loader, "version");
+            JsonObject metadata = jsonObject(loader, "metadata");
+            String name = jsonString(metadata, "name");
+            return new ModInfo(
+                modId,
+                name == null || name.isBlank() ? modId : name,
+                version == null || version.isBlank() ? "?" : version,
+                jarFile,
+                false
+            );
         } catch (Exception e) {
             return null;
         }
     }
 
-    /** Parses fabric.mod.json for a mod that's running under Quilt in Fabric-compat mode. */
+    /** Parses fabric.mod.json for a mod running under Quilt in Fabric-compat mode. */
     private ModInfo parseFabricCompatMeta(InputStream in, File jarFile) {
-        try {
-            String json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            String modId  = extractJsonString(json, "id");
-            String name   = extractJsonString(json, "name");
-            String version = extractJsonString(json, "version");
-            if (modId == null) return null;
-            return new ModInfo(modId, name != null ? name : modId, version != null ? version : "?", jarFile, true);
+        try (InputStream source = in;
+             InputStreamReader reader = new InputStreamReader(source, java.nio.charset.StandardCharsets.UTF_8)) {
+            JsonElement parsed = JsonParser.parseReader(reader);
+            if (!parsed.isJsonObject()) return null;
+            JsonObject root = parsed.getAsJsonObject();
+            String modId = jsonString(root, "id");
+            if (modId == null || modId.isBlank()) return null;
+            String name = jsonString(root, "name");
+            String version = jsonString(root, "version");
+            return new ModInfo(
+                modId,
+                name == null || name.isBlank() ? modId : name,
+                version == null || version.isBlank() ? "?" : version,
+                jarFile,
+                true
+            );
         } catch (Exception e) {
             return null;
         }
     }
 
-    /** Minimal JSON string extractor — avoids pulling in Gson for just metadata. */
-    private static String extractJsonString(String json, String key) {
-        String search = "\"" + key + "\"";
-        int idx = json.indexOf(search);
-        if (idx < 0) return null;
-        int colon = json.indexOf(':', idx + search.length());
-        if (colon < 0) return null;
-        int q1 = json.indexOf('"', colon + 1);
-        if (q1 < 0) return null;
-        int q2 = json.indexOf('"', q1 + 1);
-        if (q2 < 0) return null;
-        return json.substring(q1 + 1, q2);
+    private static JsonObject jsonObject(JsonObject object, String key) {
+        if (object == null || !object.has(key)) return null;
+        JsonElement value = object.get(key);
+        return value != null && value.isJsonObject() ? value.getAsJsonObject() : null;
     }
 
-    /**
-     * Finds the substring of a nested JSON object value for the given key,
-     * e.g. extractJsonObjectRegion(json, "quilt_loader") returns everything
-     * between (and including) the { } that follow "quilt_loader":.
-     * Uses simple brace counting — good enough since we never need to parse
-     * arbitrary/malformed JSON here, only the well-formed metadata Loom/Quilt
-     * itself generates.
-     */
-    private static String extractJsonObjectRegion(String json, String key) {
-        String search = "\"" + key + "\"";
-        int idx = json.indexOf(search);
-        if (idx < 0) return null;
-        int colon = json.indexOf(':', idx + search.length());
-        if (colon < 0) return null;
-        int braceStart = json.indexOf('{', colon);
-        if (braceStart < 0) return null;
-
-        int depth = 0;
-        for (int i = braceStart; i < json.length(); i++) {
-            char c = json.charAt(i);
-            if (c == '{') depth++;
-            else if (c == '}') {
-                depth--;
-                if (depth == 0) return json.substring(braceStart, i + 1);
-            }
-        }
-        return null; // unbalanced — shouldn't happen with valid metadata
+    private static String jsonString(JsonObject object, String key) {
+        if (object == null || !object.has(key)) return null;
+        JsonElement value = object.get(key);
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+            ? value.getAsString()
+            : null;
     }
 
     // ── AssetResolver impl ────────────────────────────────────────────────────

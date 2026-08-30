@@ -1,5 +1,8 @@
 package dev.kastrick.minesport.resolver;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import dev.kastrick.minesport.model.*;
 
 import javax.imageio.ImageIO;
@@ -79,26 +82,32 @@ public class FabricResolver implements AssetResolver {
     }
 
     private ModInfo parseFabricMeta(InputStream in, File jarFile) {
-        try {
-            String json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            String modId = extractJsonString(json, "id");
-            String name = extractJsonString(json, "name");
-            String version = extractJsonString(json, "version");
-            if (modId == null) return null;
-            return new ModInfo(modId, name != null ? name : modId, version != null ? version : "?", jarFile);
-        } catch (Exception e) { return null; }
+        try (InputStream source = in;
+             InputStreamReader reader = new InputStreamReader(source, StandardCharsets.UTF_8)) {
+            JsonElement parsed = JsonParser.parseReader(reader);
+            if (!parsed.isJsonObject()) return null;
+            JsonObject root = parsed.getAsJsonObject();
+            String modId = jsonString(root, "id");
+            if (modId == null || modId.isBlank()) return null;
+            String name = jsonString(root, "name");
+            String version = jsonString(root, "version");
+            return new ModInfo(
+                modId,
+                name == null || name.isBlank() ? modId : name,
+                version == null || version.isBlank() ? "?" : version,
+                jarFile
+            );
+        } catch (Exception e) {
+            return null;
+        }
     }
 
-    private static String extractJsonString(String json, String key) {
-        String search = "\"" + key + "\"";
-        int idx = json.indexOf(search);
-        if (idx < 0) return null;
-        int colon = json.indexOf(':', idx + search.length());
-        if (colon < 0) return null;
-        int q1 = json.indexOf('"', colon + 1);
-        if (q1 < 0) return null;
-        int q2 = json.indexOf('"', q1 + 1);
-        return q2 < 0 ? null : json.substring(q1 + 1, q2);
+    private static String jsonString(JsonObject object, String key) {
+        if (object == null || !object.has(key)) return null;
+        JsonElement value = object.get(key);
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+            ? value.getAsString()
+            : null;
     }
 
     @Override
