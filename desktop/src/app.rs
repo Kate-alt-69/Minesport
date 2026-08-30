@@ -277,8 +277,12 @@ fn sync_debug_console(ui: &MainWindow, state: SharedState) {
 
 fn persist_settings_snapshot(ui: &MainWindow, state: &SharedState) {
     let snapshot = collect_settings(ui, state);
+    // Reserve publication order before scheduling the worker. Thread scheduling
+    // can run snapshots out of order; save_reserved discards any snapshot that
+    // was superseded before it reaches the serialized publication point.
+    let generation = settings::reserve_save();
     thread::spawn(move || {
-        if let Err(error) = settings::save(&snapshot) {
+        if let Err(error) = settings::save_reserved(generation, &snapshot) {
             diagnostics::append(&format!("Could not persist Minesport desktop settings: {error:#}"));
         }
     });

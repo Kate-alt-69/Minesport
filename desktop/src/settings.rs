@@ -1,10 +1,11 @@
 use crate::runtime;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
+    sync::{Mutex, atomic::{AtomicU64, Ordering}},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -52,6 +53,48 @@ impl Default for DesktopSettings {
     }
 }
 
+struct SaveCoordinator {
+    latest_requested: AtomicU64,
+    publication_lock: Mutex<()>,
+}
+
+impl SaveCoordinator {
+    const fn new() -> Self {
+        Self {
+            latest_requested: AtomicU64::new(0),
+            publication_lock: Mutex::new(()),
+        }
+    }
+
+    fn reserve(&self) -> u64 {
+        self.latest_requested.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    fn publish_latest<F>(&self, generation: u64, publish: F) -> Result<bool>
+    where
+        F: FnOnce() -> Result<()>,
+    {
+        let _guard = self
+            .publication_lock
+            .lock()
+            .map_err(|_| anyhow!("Minesport settings publication lock is poisoned"))?;
+        if generation != self.latest_requested.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        publish()?;
+        Ok(true)
+    }
+}
+
+static SAVE_COORDINATOR: SaveCoordinator = SaveCoordinator::new();
+
+/// Reserve ordering for an asynchronous settings snapshot before its worker is
+/// spawned. Reserving on the UI thread guarantees that a newer snapshot can
+/// never be overwritten later by an older worker that happened to run slowly.
+pub fn reserve_save() -> u64 {
+    SAVE_COORDINATOR.reserve()
+}
+
 pub fn load() -> DesktopSettings {
     let path = settings_path();
     let _ = restore_backup_if_needed(&path);
@@ -60,13 +103,25 @@ pub fn load() -> DesktopSettings {
 }
 
 pub fn save(settings: &DesktopSettings) -> Result<()> {
-    let path = settings_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create settings directory {}", parent.display()))?;
-    }
-    restore_backup_if_needed(&path)?;
+    let generation = reserve_save();
+    let _ = save_reserved(generation, settings)?;
+    Ok(())
+}
+
+/// Publish a previously reserved snapshot only if it is still the newest
+/// requested state. All file-mutating recovery/replacement work is serialized
+/// behind the same lock, including the final synchronous shutdown save.
+pub fn save_reserved(generation: u64, settings: &DesktopSettings) -> Result<bool> {
     let bytes = serde_json::to_vec_pretty(settings).context("encode Rust desktop settings")?;
-    crash_safe_replace(&path, &bytes)
+    SAVE_COORDINATOR.publish_latest(generation, || {
+        let path = settings_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create settings directory {}", parent.display()))?;
+        }
+        restore_backup_if_needed(&path)?;
+        crash_safe_replace(&path, &bytes)
+    })
 }
 
 fn settings_path() -> PathBuf {
@@ -140,6 +195,27 @@ mod tests {
         assert_eq!(value.flatter_cell_index, 3);
         assert!(value.blender_export);
         assert!(!value.blender_translator_prompted);
+    }
+
+    #[test]
+    fn save_coordinator_rejects_stale_generations() {
+        let coordinator = SaveCoordinator::new();
+        let stale = coordinator.reserve();
+        let newest = coordinator.reserve();
+        let stale_published = std::sync::atomic::AtomicBool::new(false);
+        let newest_published = std::sync::atomic::AtomicBool::new(false);
+
+        assert!(!coordinator.publish_latest(stale, || {
+            stale_published.store(true, Ordering::Release);
+            Ok(())
+        }).unwrap());
+        assert!(!stale_published.load(Ordering::Acquire));
+
+        assert!(coordinator.publish_latest(newest, || {
+            newest_published.store(true, Ordering::Release);
+            Ok(())
+        }).unwrap());
+        assert!(newest_published.load(Ordering::Acquire));
     }
 
     #[test]
