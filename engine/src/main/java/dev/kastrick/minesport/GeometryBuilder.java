@@ -65,14 +65,24 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
 
     @Override
     public void enableFaceCulling(List<BlockData> allBlocks) {
+        // The base class needs its own opaque-face occlusion index, but this
+        // wrapper normally already owns the complete neighbour map published by
+        // MultipartResolver. Do not build a second wrapper map for the same
+        // hundreds of thousands of blocks.
         super.enableFaceCulling(allBlocks);
-        buildWorldIndex(allBlocks);
+        ensureWorldIndex(allBlocks);
     }
 
     /** Enables only the hidden-block visibility pass; does not enable face culling on surfaces. */
     public void enableHiddenBlockCulling(List<BlockData> allBlocks) {
         hiddenBlockCullingEnabled = true;
-        buildWorldIndex(allBlocks);
+        ensureWorldIndex(allBlocks);
+    }
+
+    private void ensureWorldIndex(List<BlockData> allBlocks) {
+        if (worldIndex == null || worldIndex.isEmpty()) {
+            buildWorldIndex(allBlocks);
+        }
     }
 
     private void buildWorldIndex(List<BlockData> allBlocks) {
