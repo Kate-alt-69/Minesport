@@ -1,3 +1,4 @@
+# Rerun after BUG-069 and BUG-070 cleared independent Rust test blockers.
 name: One Shot Ordered Settings Persistence
 
 on:
