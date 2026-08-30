@@ -1484,7 +1484,7 @@ mod tests {
             .compression_method(zip::CompressionMethod::Stored);
         writer.start_file("fabric.mod.json", options).unwrap();
         writer
-            .write_all(br#"{\"schemaVersion\":1,\"id\":\"crash_assistant\",\"version\":\"1.0.0\"}"#)
+            .write_all(br#"{"schemaVersion":1,"id":"crash_assistant","version":"1.0.0"}"#)
             .unwrap();
         writer.finish().unwrap();
 
