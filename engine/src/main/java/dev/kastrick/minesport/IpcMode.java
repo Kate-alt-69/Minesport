@@ -143,20 +143,20 @@ public class IpcMode {
                 return;
             }
 
-            File[] mcaFiles = regionDir.listFiles((directory, name) -> name.endsWith(".mca"));
-            if (mcaFiles == null || mcaFiles.length == 0) {
-                error("No .mca region files found");
+            File[] regionFiles = regionDir.listFiles((directory, name) -> isRegionFileName(name));
+            if (regionFiles == null || regionFiles.length == 0) {
+                error("No region files (.mca/.mcr) found");
                 return;
             }
 
-            Arrays.sort(mcaFiles, Comparator.comparing(File::getName));
-            log("Found " + mcaFiles.length + " selected region file(s)");
+            Arrays.sort(regionFiles, Comparator.comparing(File::getName));
+            log("Found " + regionFiles.length + " selected region file(s)");
 
             File[] entityFiles = new File[0];
             if (format.equals("litematic") && separateEntityRegions) {
                 File entityDir = new File(tempDir, "entities");
                 File[] listed = entityDir.listFiles(
-                    (directory, name) -> name.endsWith(".mca") || name.endsWith(".mcr")
+                    (directory, name) -> isRegionFileName(name)
                 );
                 if (listed != null) {
                     Arrays.sort(listed, Comparator.comparing(File::getName));
@@ -164,12 +164,12 @@ public class IpcMode {
                 }
             }
 
-            int[] blockChunkCounts = new int[mcaFiles.length];
+            int[] blockChunkCounts = new int[regionFiles.length];
             int[] entityChunkCounts = new int[entityFiles.length];
             int inputChunkTotal = 0;
-            for (int i = 0; i < mcaFiles.length; i++) {
+            for (int i = 0; i < regionFiles.length; i++) {
                 blockChunkCounts[i] = RegionReader.countSelectedChunks(
-                    mcaFiles[i], minX, minZ, maxX, maxZ
+                    regionFiles[i], minX, minZ, maxX, maxZ
                 );
                 inputChunkTotal += blockChunkCounts[i];
             }
@@ -188,20 +188,20 @@ public class IpcMode {
             var allFluidTicks = new ArrayList<ScheduledTickData>();
             int inputDoneBase = 0;
 
-            for (int fileIndex = 0; fileIndex < mcaFiles.length; fileIndex++) {
-                File mca = mcaFiles[fileIndex];
+            for (int fileIndex = 0; fileIndex < regionFiles.length; fileIndex++) {
+                File regionFile = regionFiles[fileIndex];
                 final int progressBase = inputDoneBase;
-                progressIndeterminate("Reading " + mca.getName());
+                progressIndeterminate("Reading " + regionFile.getName());
                 RegionReader.ProgressCallback chunkProgress = (doneCount, ignoredTotal, message) ->
                     reportChunkProgress(
                         progressBase + doneCount,
                         totalInputChunks,
-                        message + " · " + mca.getName()
+                        message + " · " + regionFile.getName()
                     );
 
                 if (format.equals("litematic")) {
                     RegionReader.RegionContents contents = RegionReader.readRegionContents(
-                        mca,
+                        regionFile,
                         minX, minY, minZ,
                         maxX, maxY, maxZ,
                         chunkProgress
@@ -215,7 +215,7 @@ public class IpcMode {
                     }
                 } else {
                     allBlocks.addAll(RegionReader.readRegion(
-                        mca,
+                        regionFile,
                         minX, minY, minZ,
                         maxX, maxY, maxZ,
                         chunkProgress
@@ -583,6 +583,17 @@ public class IpcMode {
             }
             if (tempDir != null) WorldCopier.cleanupTemp(tempDir);
         }
+    }
+
+    /**
+     * Minecraft has used both McRegion (.mcr) and Anvil (.mca) containers.
+     * Keep the extension check in one place so export/entity enumeration cannot
+     * silently diverge again. RegionReader handles the actual format details.
+     */
+    static boolean isRegionFileName(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".mca") || lower.endsWith(".mcr");
     }
 
     private static void commitStagedOutput(File staged, File output) throws IOException {
