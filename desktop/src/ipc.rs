@@ -1,4 +1,4 @@
-use crate::diagnostics;
+use crate::{diagnostics, runtime};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -251,13 +251,14 @@ impl Engine {
                 if let Ok(mut child) = self.inner.child.lock() {
                     logger.warn(
                         "IpcBackendWorkerShutdownTimeout",
-                        "backend did not exit within 3 seconds; terminating worker",
+                        "backend did not exit within 3 seconds; terminating worker tree",
                         &[("pid", child.id().to_string())],
                     );
-                    let _ = child.kill();
-                    let status = child.wait().ok().map(|status| status.to_string()).unwrap_or_else(|| "unknown".to_string());
+                    let status = runtime::terminate_process_tree(&mut child, Duration::from_secs(5))
+                        .map(|status| status.to_string())
+                        .unwrap_or_else(|| "not reaped before deadline".to_string());
                     operation.failure(
-                        "backend required forced termination",
+                        "backend required forced process-tree termination",
                         &[("status", status)],
                     );
                 } else {
@@ -777,7 +778,7 @@ fn java_major(java: &Path) -> u32 {
     let mut command = Command::new(java);
     command.arg("-version");
     hide_console_window(&mut command);
-    let Ok(output) = command.output() else { return 0; };
+    let Ok(Some(output)) = runtime::output_with_timeout(&mut command, Duration::from_secs(5)) else { return 0; };
     let text = format!("{} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     parse_java_major(&text).unwrap_or(0)
 }
