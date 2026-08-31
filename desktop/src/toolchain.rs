@@ -140,12 +140,15 @@ where
     #[derive(Deserialize)]
     struct Package {
         link: String,
-        #[serde(default)] checksum: String,
+        checksum: String,
         #[serde(default)] name: String,
     }
     let assets: Vec<Asset> = serde_json::from_slice(&metadata).context("parse Adoptium JDK metadata")?;
     let package = assets.into_iter().next().ok_or_else(|| anyhow!("Adoptium did not return a JDK {required} package"))?.binary.package;
     if package.link.is_empty() { bail!("Adoptium JDK {required} package does not contain a download link"); }
+    let checksum = package.checksum.trim();
+    validate_sha256_digest(checksum)
+        .with_context(|| format!("Adoptium JDK {required} package has no valid SHA-256 checksum"))?;
 
     check_cancelled(&cancel, "preparing JDK cache")?;
     let root = toolchain_root().join(format!("jdk-{required}"));
@@ -158,9 +161,7 @@ where
     progress(ToolchainProgress { percent: 48, message: format!("Downloading Eclipse Temurin JDK {required}…") });
     download_file(&package.link, &archive, cancel.clone())?;
     check_cancelled(&cancel, "verifying JDK download")?;
-    if !package.checksum.trim().is_empty() {
-        verify_sha256_cancellable(&archive, package.checksum.trim(), &cancel)?;
-    }
+    verify_sha256_cancellable(&archive, checksum, &cancel)?;
     check_cancelled(&cancel, "extracting JDK")?;
     progress(ToolchainProgress { percent: 51, message: format!("Verified JDK {required} · extracting…") });
 
@@ -314,12 +315,20 @@ fn retryable_http_status(code: u16) -> bool {
     matches!(code, 408 | 425 | 429) || (500..=599).contains(&code)
 }
 
+fn validate_sha256_digest(value: &str) -> Result<()> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("expected a 64-character hexadecimal SHA-256 digest");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     verify_sha256_cancellable(path, expected, &Arc::new(AtomicBool::new(false)))
 }
 
 fn verify_sha256_cancellable(path: &Path, expected: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
+    validate_sha256_digest(expected)?;
     let mut file = File::open(path)?;
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 128 * 1024];
@@ -516,6 +525,14 @@ mod tests {
     fn extraction_has_a_hard_timeout() {
         assert!(JDK_EXTRACTION_TIMEOUT <= Duration::from_secs(5 * 60));
         assert!(NETWORK_READ_SLICE <= Duration::from_secs(10));
+    }
+
+    #[test]
+    fn jdk_checksum_metadata_is_mandatory_and_sha256_shaped() {
+        assert!(validate_sha256_digest("").is_err());
+        assert!(validate_sha256_digest("abc").is_err());
+        assert!(validate_sha256_digest(&"g".repeat(64)).is_err());
+        assert!(validate_sha256_digest(&"A".repeat(64)).is_ok());
     }
 
     #[test]

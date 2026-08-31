@@ -80,14 +80,14 @@ A healthy `minesport-engine.exe` is a running child process for most of the desk
 
 ---
 
-## ENGINE-AUDIT-007 — Toolchain JDK metadata currently permits a missing checksum
+## ENGINE-AUDIT-007 — Toolchain JDK metadata originally permitted a missing checksum
 
 **Severity:** Medium  
 **Area:** Toolchain download integrity  
 **File:** `desktop/src/toolchain.rs`
 
-The Adoptium package metadata parser accepts an empty `checksum`, and the downloader only calls SHA-256 verification when that string is non-empty. Adoptium normally publishes the checksum, but the current code treats its absence as permission to continue.
+The Adoptium package parser previously defaulted a missing `checksum` to an empty string and skipped archive SHA-256 verification when that happened.
 
-**Impact:** The engine's new managed-Java path inherits a fail-open integrity edge case from the existing Bridge toolchain downloader. HTTPS still protects transport, but Minesport should not silently weaken from explicit package digest verification to transport-only trust.
+**Impact:** The engine's managed-Java path inherited a fail-open integrity edge case from the compatibility-worker toolchain downloader. HTTPS still protected transport, but missing digest metadata silently weakened the expected package verification boundary.
 
-**Direction:** Make a non-empty, valid SHA-256 checksum mandatory before downloading/extracting a JDK. Reject metadata without one and keep the old cached runtime/fallback path instead.
+**Control implemented:** Adoptium metadata must now include a non-empty, 64-character hexadecimal SHA-256 digest. Minesport validates the digest shape before downloading the archive and always hashes the downloaded file before extraction. Missing/malformed digest metadata is a terminal package-resolution error instead of a reason to skip verification.
