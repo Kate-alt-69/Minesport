@@ -37,27 +37,31 @@ jobs:
               raise SystemExit("runtime.rs engine-byte anchor moved; refusing automatic patch")
           text = text.replace(old, new, 1)
 
-          old = '''pub fn materialize_engine() -> Result<PathBuf> {
-              materialize_runtime_asset(
-                  "minesport-engine-0.2.1.jar",
-                  ".minesport-engine-0.2.1.tmp",
-                  ENGINE_BYTES,
-              )
-          }'''.replace("          ", "")
-          new = '''pub fn materialize_engine() -> Result<PathBuf> {
-              let version = ENGINE_VERSION_RAW.trim();
-              if version.is_empty() {
-                  bail!("engine/VERSION must not be empty");
-              }
-              if !version.bytes().all(|byte| {
-                  byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_')
-              }) {
-                  bail!("engine/VERSION contains unsafe cache-name characters");
-              }
-              let name = format!("minesport-engine-{version}.jar");
-              let temporary_name = format!(".minesport-engine-{version}.tmp");
-              materialize_runtime_asset(&name, &temporary_name, ENGINE_BYTES)
-          }'''.replace("          ", "")
+          old = (
+              'pub fn materialize_engine() -> Result<PathBuf> {\n'
+              '    materialize_runtime_asset(\n'
+              '        "minesport-engine-0.2.1.jar",\n'
+              '        ".minesport-engine-0.2.1.tmp",\n'
+              '        ENGINE_BYTES,\n'
+              '    )\n'
+              '}\n'
+          )
+          new = (
+              'pub fn materialize_engine() -> Result<PathBuf> {\n'
+              '    let version = ENGINE_VERSION_RAW.trim();\n'
+              '    if version.is_empty() {\n'
+              '        bail!("engine/VERSION must not be empty");\n'
+              '    }\n'
+              '    if !version.bytes().all(|byte| {\n'
+              "        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_')\n"
+              '    }) {\n'
+              '        bail!("engine/VERSION contains unsafe cache-name characters");\n'
+              '    }\n'
+              '    let name = format!("minesport-engine-{version}.jar");\n'
+              '    let temporary_name = format!(".minesport-engine-{version}.tmp");\n'
+              '    materialize_runtime_asset(&name, &temporary_name, ENGINE_BYTES)\n'
+              '}\n'
+          )
           if text.count(old) != 1:
               raise SystemExit("runtime.rs materialize_engine anchor moved; refusing automatic patch")
           runtime.write_text(text.replace(old, new, 1), encoding="utf-8")
@@ -65,43 +69,35 @@ jobs:
           app = Path("desktop/src/app.rs")
           text = app.read_text(encoding="utf-8")
           worker_old = '        "workerInfo" => append_diagnostic(&ui, &format!("[backend] {}", response.message)),\n'
-          worker_new = '''        "workerInfo" => {
-              let message = response.message.clone();
-              append_diagnostic(&ui, &format!("[backend] {message}"));
-              if response.percent > 0 {
-                  ui.set_engine_ready(false);
-                  ui.set_engine_status("ENGINE STARTING".into());
-                  ui.set_task_active(true);
-                  ui.set_task_progress((response.percent.clamp(0, 100) as f32) / 100.0);
-                  ui.set_task_title("ENGINE STARTING".into());
-                  ui.set_task_detail(message.into());
-              }
-          }
-          '''.replace("          ", "        ")
+          worker_new = (
+              '        "workerInfo" => {\n'
+              '            let message = response.message.clone();\n'
+              '            append_diagnostic(&ui, &format!("[backend] {message}"));\n'
+              '            if response.percent > 0 {\n'
+              '                ui.set_engine_ready(false);\n'
+              '                ui.set_engine_status("ENGINE STARTING".into());\n'
+              '                ui.set_task_active(true);\n'
+              '                ui.set_task_progress((response.percent.clamp(0, 100) as f32) / 100.0);\n'
+              '                ui.set_task_title("ENGINE STARTING".into());\n'
+              '                ui.set_task_detail(message.into());\n'
+              '            }\n'
+              '        }\n'
+          )
           if text.count(worker_old) != 1:
               raise SystemExit("app.rs workerInfo anchor moved; refusing automatic patch")
           text = text.replace(worker_old, worker_new, 1)
 
-          pong_old = '''        "pong" => {
-              ui.set_engine_ready(true);
-              ui.set_engine_status("ENGINE READY".into());
-              ui.set_task_title("READY".into());
-              ui.set_task_detail("Ready".into());
-              append_diagnostic(&ui, "IPC <- pong");
-          }'''.replace("          ", "        ")
-          pong_new = '''        "pong" => {
-              ui.set_engine_ready(true);
-              ui.set_engine_status("ENGINE READY".into());
-              ui.set_task_completing(false);
-              ui.set_task_active(false);
-              ui.set_task_progress(1.0);
-              ui.set_task_title("READY".into());
-              ui.set_task_detail("Ready".into());
-              append_diagnostic(&ui, "IPC <- pong");
-          }'''.replace("          ", "        ")
-          if text.count(pong_old) != 1:
-              raise SystemExit("app.rs pong anchor moved; refusing automatic patch")
-          app.write_text(text.replace(pong_old, pong_new, 1), encoding="utf-8")
+          ready_old = '            ui.set_engine_status("ENGINE READY".into());\n            ui.set_task_title("READY".into());\n'
+          ready_new = (
+              '            ui.set_engine_status("ENGINE READY".into());\n'
+              '            ui.set_task_completing(false);\n'
+              '            ui.set_task_active(false);\n'
+              '            ui.set_task_progress(1.0);\n'
+              '            ui.set_task_title("READY".into());\n'
+          )
+          if text.count(ready_old) != 1:
+              raise SystemExit("app.rs ENGINE READY anchor moved; refusing automatic patch")
+          app.write_text(text.replace(ready_old, ready_new, 1), encoding="utf-8")
 
       - name: Remove one-shot workflow
         run: rm -f .github/workflows/one-shot-bug-091-engine-identity.yml
@@ -112,7 +108,7 @@ jobs:
           grep -q 'ENGINE_VERSION_RAW.*engine/VERSION' desktop/src/runtime.rs
           grep -q 'minesport-engine-{version}.jar' desktop/src/runtime.rs
           grep -q 'ui.set_engine_status("ENGINE STARTING"' desktop/src/app.rs
-          grep -q 'ui.set_task_active(false)' desktop/src/app.rs
+          grep -q 'ui.set_task_progress(1.0)' desktop/src/app.rs
 
       - uses: dtolnay/rust-toolchain@master
         with:
