@@ -1,0 +1,279 @@
+name: Minesport Signed Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Green Minesport Compile Check run ID to release from
+        required: true
+        type: string
+      tag:
+        description: GitHub Release tag (for example v0.2.1)
+        required: true
+        type: string
+      prerelease:
+        description: Publish as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: minesport-signed-release
+  cancel-in-progress: false
+
+jobs:
+  signed-windows-release:
+    name: Sign, package and publish Windows release
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      SOURCE_RUN_ID: ${{ inputs.run_id }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+      SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+      SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+      TIMESTAMP_URL: http://timestamp.digicert.com
+    steps:
+      - name: Resolve and validate source CI run
+        id: source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_RUN_ID -notmatch '^\d+$') {
+            throw 'run_id must be a numeric GitHub Actions run ID.'
+          }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" | ConvertFrom-Json
+          if ($run.name -ne 'Minesport Compile Check') {
+            throw "Run $env:SOURCE_RUN_ID is not the Minesport Compile Check workflow."
+          }
+          if ($run.conclusion -ne 'success') {
+            throw "Run $env:SOURCE_RUN_ID is not green (conclusion: $($run.conclusion))."
+          }
+          if ($run.head_branch -ne 'main') {
+            throw "Run $env:SOURCE_RUN_ID did not build main (head branch: $($run.head_branch))."
+          }
+          if ([string]::IsNullOrWhiteSpace($run.head_sha)) {
+            throw 'Source workflow run did not expose a head SHA.'
+          }
+          "head_sha=$($run.head_sha)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Release source: $($run.head_sha)"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.source.outputs.head_sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: minesport-windows-standalone
+          path: dist/source
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          repository: ${{ github.repository }}
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Require Windows code-signing certificate
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64)) {
+            throw 'Missing repository secret WINDOWS_SIGNING_PFX_BASE64. Signed Releases are intentionally blocked.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_PASSWORD)) {
+            throw 'Missing repository secret WINDOWS_SIGNING_PFX_PASSWORD. Signed Releases are intentionally blocked.'
+          }
+
+      - name: Prepare signing certificate and SignTool
+        id: signing
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'minesport-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          if (-not (Test-Path $pfx) -or (Get-Item $pfx).Length -le 0) {
+            throw 'Decoded signing PFX is empty.'
+          }
+
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $signtool = Get-ChildItem -LiteralPath $kits -Recurse -File -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) {
+            throw 'Windows SDK SignTool x64 was not found on the runner.'
+          }
+          "pfx=$pfx" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "signtool=$($signtool.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Sign Minesport runtime binaries
+        shell: pwsh
+        env:
+          PFX_PATH: ${{ steps.signing.outputs.pfx }}
+          SIGNTOOL_EXE: ${{ steps.signing.outputs.signtool }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\source\Minesport.exe'),
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.exe')
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw "Missing release runtime binary: $file" }
+            & $env:SIGNTOOL_EXE sign /fd SHA256 /f $env:PFX_PATH /p $env:SIGNING_PFX_PASSWORD /tr $env:TIMESTAMP_URL /td SHA256 $file
+            if ($LASTEXITCODE -ne 0) { throw "SignTool failed for $file" }
+          }
+
+      - name: Regenerate engine manifest after signing
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $engine = Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.exe'
+          $manifest = Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.json'
+          $identityText = (& $engine --identity | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($identityText)) {
+            throw 'Signed minesport-engine.exe did not return an identity.'
+          }
+          $identity = $identityText | ConvertFrom-Json
+          if ($identity.name -ne 'minesport-engine') { throw "Unexpected engine identity: $($identity.name)" }
+          if ([int]$identity.protocolVersion -le 0) { throw 'Engine protocol version is invalid.' }
+          $hash = (Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant()
+          $file = Get-Item -LiteralPath $engine
+          $payload = [ordered]@{
+            schema = 1
+            version = [string]$identity.version
+            protocolVersion = [int]$identity.protocolVersion
+            sha256 = $hash
+            size = [int64]$file.Length
+          } | ConvertTo-Json
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [IO.File]::WriteAllText($manifest, $payload + [Environment]::NewLine, $utf8NoBom)
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          & choco install nsis --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey could not install NSIS.' }
+          $candidates = @('C:\Program Files (x86)\NSIS\makensis.exe','C:\Program Files\NSIS\makensis.exe')
+          $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) { throw 'NSIS makensis.exe was not found after installation.' }
+          "NSIS_EXE=$makensis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:GITHUB_WORKSPACE 'dist\installer') | Out-Null
+
+      - name: Build signed-payload MSI with WiX 7
+        shell: pwsh
+        run: |
+          $project = Join-Path $env:GITHUB_WORKSPACE 'installer\windows\Minesport.wixproj'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist\installer'
+          & dotnet build $project --configuration Release --output $output --no-incremental "-p:SourceDir=$env:GITHUB_WORKSPACE"
+          if ($LASTEXITCODE -ne 0) { throw 'WiX 7 MSI build failed.' }
+
+      - name: Build signed-payload NSIS setup
+        shell: pwsh
+        run: |
+          & $env:NSIS_EXE '/V2' "/DSourceDir=$env:GITHUB_WORKSPACE" (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\minesport.nsi')
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed.' }
+
+      - name: Sign Windows installer packages
+        shell: pwsh
+        env:
+          PFX_PATH: ${{ steps.signing.outputs.pfx }}
+          SIGNTOOL_EXE: ${{ steps.signing.outputs.signtool }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-Setup-x64.exe'),
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-x64.msi')
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw "Missing installer output: $file" }
+            & $env:SIGNTOOL_EXE sign /fd SHA256 /f $env:PFX_PATH /p $env:SIGNING_PFX_PASSWORD /tr $env:TIMESTAMP_URL /td SHA256 $file
+            if ($LASTEXITCODE -ne 0) { throw "SignTool failed for $file" }
+          }
+
+      - name: Verify release signatures and engine manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gui = Join-Path $env:GITHUB_WORKSPACE 'dist\source\Minesport.exe'
+          $engine = Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.exe'
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.json'
+          $setup = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-Setup-x64.exe'
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-x64.msi'
+
+          function Get-ValidSigner([string]$Path) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $Path
+            if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
+              throw "Invalid Authenticode signature for $Path (status: $($signature.Status))"
+            }
+            return $signature.SignerCertificate.Thumbprint.ToUpperInvariant()
+          }
+
+          $publisher = Get-ValidSigner $gui
+          foreach ($file in @($engine, $setup, $msi)) {
+            $signer = Get-ValidSigner $file
+            if ($signer -ne $publisher) {
+              throw "Publisher certificate mismatch for $file"
+            }
+          }
+
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $identityText = (& $engine --identity | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Signed engine identity check failed.' }
+          $identity = $identityText | ConvertFrom-Json
+          $actualHash = (Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant()
+          $actualSize = (Get-Item -LiteralPath $engine).Length
+          if ($manifest.version -ne $identity.version) { throw 'Engine manifest version mismatch.' }
+          if ([int]$manifest.protocolVersion -ne [int]$identity.protocolVersion) { throw 'Engine manifest protocol mismatch.' }
+          if ([string]$manifest.sha256 -ne $actualHash) { throw 'Engine manifest hash mismatch.' }
+          if ([int64]$manifest.size -ne [int64]$actualSize) { throw 'Engine manifest size mismatch.' }
+          Write-Host "Verified publisher certificate: $publisher"
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.head_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) { throw 'Release tag must not be empty.' }
+          & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release $env:RELEASE_TAG already exists; refusing to overwrite it."
+          }
+
+          $args = @(
+            'release', 'create', $env:RELEASE_TAG,
+            '--repo', $env:GITHUB_REPOSITORY,
+            '--target', $env:SOURCE_SHA,
+            '--title', "Minesport $env:RELEASE_TAG",
+            '--generate-notes'
+          )
+          if ($env:RELEASE_PRERELEASE -eq 'true') {
+            $args += '--prerelease'
+          }
+          $args += @(
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-Setup-x64.exe'),
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-x64.msi'),
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\source\Minesport.exe'),
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.exe'),
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.json')
+          )
+          & gh @args
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publication failed.' }
+
+      - name: Remove signing certificate file
+        if: always()
+        shell: pwsh
+        env:
+          PFX_PATH: ${{ steps.signing.outputs.pfx }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:PFX_PATH)) {
+            Remove-Item -LiteralPath $env:PFX_PATH -Force -ErrorAction SilentlyContinue
+          }
