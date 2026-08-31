@@ -21,6 +21,7 @@ mod launcher;
 mod preview;
 mod preview_picking;
 #[allow(dead_code)]
+#[path = "registry_stream.rs"]
 mod registry;
 mod runtime;
 #[allow(dead_code)]
