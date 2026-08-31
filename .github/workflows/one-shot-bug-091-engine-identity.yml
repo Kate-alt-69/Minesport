@@ -115,18 +115,12 @@ jobs:
           toolchain: 1.92.0
           components: rustfmt
 
-      - name: Install Slint dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
-            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
-
-      - name: Check and test Rust desktop
+      - name: Format, check, and test Rust desktop
         env:
           MINESPORT_FAST_CHECK: "1"
         run: |
-          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
           cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
 
