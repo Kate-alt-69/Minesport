@@ -8,7 +8,11 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{Arc, Mutex, mpsc::{self, Receiver, Sender}},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -70,6 +74,10 @@ pub enum EngineEvent {
 struct EngineInner {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
+    events: Sender<EngineEvent>,
+    executable: PathBuf,
+    restarting: AtomicBool,
+    shutting_down: AtomicBool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -130,7 +138,7 @@ impl Engine {
             process: executable.display().to_string(),
         });
         spawn_stdout_reader(stdout, tx.clone());
-        spawn_stderr_reader(stderr, tx);
+        spawn_stderr_reader(stderr, tx.clone());
 
         operation.success(
             "Minesport backend worker started",
@@ -141,10 +149,109 @@ impl Engine {
                 inner: Arc::new(EngineInner {
                     stdin: Mutex::new(stdin),
                     child: Mutex::new(child),
+                    events: tx,
+                    executable,
+                    restarting: AtomicBool::new(false),
+                    shutting_down: AtomicBool::new(false),
                 }),
             },
             rx,
         ))
+    }
+
+    pub fn restart(&self) -> Result<()> {
+        if self.is_shutting_down() {
+            bail!("backend shutdown is already in progress");
+        }
+        if self.inner.restarting.compare_exchange(
+            false,
+            true,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ).is_err() {
+            return Ok(());
+        }
+        let result = self.restart_inner();
+        self.inner.restarting.store(false, Ordering::Release);
+        result
+    }
+
+    fn restart_inner(&self) -> Result<()> {
+        if self.is_shutting_down() {
+            bail!("backend shutdown is already in progress");
+        }
+        let logger = diagnostics::Logger::new("IPC").child("UI");
+        let operation = logger.operation("IpcBackendWorkerRestart");
+
+        if let Ok(mut child) = self.inner.child.lock() {
+            match child.try_wait() {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    let _ = runtime::terminate_process_tree(&mut child, Duration::from_secs(2));
+                }
+                Err(error) => logger.warn(
+                    "IpcBackendWorkerRestartOldStateUnknown",
+                    "could not query previous backend before restart",
+                    &[("error", error.to_string())],
+                ),
+            }
+        }
+
+        let executable = self.inner.executable.clone();
+        operation.event(
+            "IpcBackendWorkerRespawn",
+            "restarting isolated Minesport backend worker",
+            &[("executable", executable.display().to_string())],
+        );
+        let mut command = Command::new(&executable);
+        command
+            .arg("--engine-worker")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        hide_console_window(&mut command);
+
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("restart Minesport backend worker {}", executable.display()))?;
+        let pid = child.id();
+        let stdin = child.stdin.take().context("open restarted Minesport backend stdin")?;
+        let stdout = child.stdout.take().context("open restarted Minesport backend stdout")?;
+        let stderr = child.stderr.take().context("open restarted Minesport backend stderr")?;
+
+        {
+            let mut current = self
+                .inner
+                .stdin
+                .lock()
+                .map_err(|_| anyhow!("Minesport backend stdin lock poisoned during restart"))?;
+            *current = stdin;
+        }
+        {
+            let mut current = self
+                .inner
+                .child
+                .lock()
+                .map_err(|_| anyhow!("Minesport backend child lock poisoned during restart"))?;
+            *current = child;
+        }
+
+        let tx = self.inner.events.clone();
+        let _ = tx.send(EngineEvent::Started {
+            pid,
+            process: executable.display().to_string(),
+        });
+        spawn_stdout_reader(stdout, tx.clone());
+        spawn_stderr_reader(stderr, tx);
+        operation.success(
+            "Minesport backend worker restarted",
+            &[("pid", pid.to_string()), ("executable", executable.display().to_string())],
+        );
+        Ok(())
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.inner.shutting_down.load(Ordering::Acquire)
     }
 
     pub fn send<T: Serialize>(&self, request: &T) -> Result<()> {
@@ -228,6 +335,7 @@ impl Engine {
     }
 
     pub fn shutdown(&self) {
+        self.inner.shutting_down.store(true, Ordering::Release);
         let logger = diagnostics::Logger::new("IPC").child("UI");
         let operation = logger.operation("IpcBackendWorkerShutdown");
         operation.event("IpcBackendWorkerQuitRequested", "requesting backend shutdown", &[]);

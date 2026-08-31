@@ -23,6 +23,7 @@ use std::{
 };
 
 const VERSION: &str = "0.2.1";
+const BACKEND_RESTART_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, Copy)]
 enum PreviewCameraAction {
@@ -101,7 +102,7 @@ pub fn run() -> Result<()> {
     refresh_asset_summaries(&ui, &state);
 
     let (engine, events) = JavaEngine::start()?;
-    pump_engine_events(ui.as_weak(), events, state.clone());
+    pump_engine_events(ui.as_weak(), events, state.clone(), engine.clone());
     wire_file_pickers(&ui, engine.clone(), state.clone(), cache.clone());
     wire_export(&ui, engine.clone(), state.clone(), cache.clone());
     wire_preflight(&ui, engine.clone(), state.clone());
@@ -1761,7 +1762,16 @@ fn start_blender_install(weak: slint::Weak<MainWindow>, state: SharedState, from
     });
 }
 
-fn pump_engine_events(weak: slint::Weak<MainWindow>, events: Receiver<EngineEvent>, state: SharedState) {
+fn backend_restart_allowed(shutting_down: bool, attempts_used: usize) -> bool {
+    !shutting_down && attempts_used < BACKEND_RESTART_ATTEMPTS
+}
+
+fn pump_engine_events(
+    weak: slint::Weak<MainWindow>,
+    events: Receiver<EngineEvent>,
+    state: SharedState,
+    engine: JavaEngine,
+) {
     thread::spawn(move || {
         let mut pending_logs: Vec<String> = Vec::with_capacity(64);
         loop {
@@ -1770,11 +1780,61 @@ fn pump_engine_events(weak: slint::Weak<MainWindow>, events: Receiver<EngineEven
                 Ok(EngineEvent::Stderr(line)) => pending_logs.push(format!("[backend] {line}")),
                 Ok(EngineEvent::ReadEnded(message)) => {
                     flush_logs(&weak, &mut pending_logs);
+                    let first_message = message.clone();
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_engine_ready(false);
+                        ui.set_engine_status("ENGINE RESTARTING".into());
+                        ui.set_task_completing(false);
+                        ui.set_task_active(false);
+                        if ui.get_map_loading() { ui.set_map_loading(false); }
+                        if ui.get_preview_loading() { ui.set_preview_loading(false); }
+                        ui.set_task_title("ENGINE RESTARTING".into());
+                        ui.set_task_detail("Previous engine operation was interrupted".into());
+                        append_diagnostic(&ui, &first_message);
+                    });
+
+                    let mut recovered = false;
+                    let mut last_error = String::new();
+                    for attempt in 0..BACKEND_RESTART_ATTEMPTS {
+                        if !backend_restart_allowed(engine.is_shutting_down(), attempt) {
+                            break;
+                        }
+                        if attempt > 0 {
+                            thread::sleep(Duration::from_millis(250 * attempt as u64));
+                        }
+                        match engine.restart() {
+                            Ok(()) => match engine.ping() {
+                                Ok(()) => {
+                                    pending_logs.push(format!(
+                                        "Minesport backend recovery dispatched on attempt {}",
+                                        attempt + 1
+                                    ));
+                                    recovered = true;
+                                    break;
+                                }
+                                Err(error) => {
+                                    last_error = format!("restart ping failed: {error:#}");
+                                }
+                            },
+                            Err(error) => {
+                                last_error = format!("restart attempt {} failed: {error:#}", attempt + 1);
+                            }
+                        }
+                    }
+                    if recovered {
+                        continue;
+                    }
+                    let detail = if last_error.is_empty() {
+                        message
+                    } else {
+                        format!("{message} · automatic recovery failed: {last_error}")
+                    };
                     let _ = weak.upgrade_in_event_loop(move |ui| {
                         ui.set_engine_ready(false);
                         ui.set_engine_status("ENGINE STOPPED".into());
+                        ui.set_task_completing(false);
                         ui.set_task_active(false);
-                        append_diagnostic(&ui, &message);
+                        append_diagnostic(&ui, &detail);
                     });
                     break;
                 }
@@ -2371,6 +2431,14 @@ mod tests {
         assert!(!response_has_stale_world_target(&current, &state));
         assert!(response_has_stale_world_target(&stale, &state));
         assert!(!response_has_stale_world_target(&missing, &state));
+    }
+
+    #[test]
+    fn backend_restart_policy_stops_after_three_attempts_or_shutdown() {
+        assert!(backend_restart_allowed(false, 0));
+        assert!(backend_restart_allowed(false, 2));
+        assert!(!backend_restart_allowed(false, 3));
+        assert!(!backend_restart_allowed(true, 0));
     }
 
     #[test]
