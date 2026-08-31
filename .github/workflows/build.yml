@@ -245,22 +245,49 @@ jobs:
           fi
       - name: Build Rust desktop release
         shell: bash
-        run: cargo build --release --manifest-path desktop/Cargo.toml --bin minesport
+        run: cargo build --release --manifest-path desktop/Cargo.toml --bin minesport --bin minesport-engine
       - name: Smoke test CLI and stage artifact
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
             ./desktop/target/release/minesport.exe --version
             ./desktop/target/release/minesport.exe --help
+            ./desktop/target/release/minesport-engine.exe --identity
             mkdir -p desktop/dist dist/source
             cp desktop/target/release/minesport.exe desktop/dist/minesport.exe
             cp desktop/target/release/minesport.exe dist/source/Minesport.exe
+            cp desktop/target/release/minesport-engine.exe dist/source/minesport-engine.exe
           else
             ./desktop/target/release/minesport --version
             ./desktop/target/release/minesport --help
+            ./desktop/target/release/minesport-engine --identity
             mkdir -p desktop/dist
             cp desktop/target/release/minesport desktop/dist/minesport
           fi
+      - name: Generate Windows engine manifest
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $engine = Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.exe'
+          $manifest = Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.json'
+          $identityText = (& $engine --identity | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($identityText)) {
+            throw 'minesport-engine.exe did not return an identity.'
+          }
+          $identity = $identityText | ConvertFrom-Json
+          if ($identity.name -ne 'minesport-engine') { throw "Unexpected engine identity: $($identity.name)" }
+          if ([int]$identity.protocolVersion -le 0) { throw 'Engine protocol version is invalid.' }
+          $hash = (Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant()
+          $file = Get-Item -LiteralPath $engine
+          $payload = [ordered]@{
+            schema = 1
+            version = [string]$identity.version
+            protocolVersion = [int]$identity.protocolVersion
+            sha256 = $hash
+            size = [int64]$file.Length
+          } | ConvertTo-Json
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [IO.File]::WriteAllText($manifest, $payload + [Environment]::NewLine, $utf8NoBom)
       - name: Validate Bash packaging scripts
         if: runner.os == 'Linux'
         shell: bash
@@ -299,7 +326,10 @@ jobs:
         if: runner.os == 'Windows'
         with:
           name: minesport-windows-standalone
-          path: dist/source/Minesport.exe
+          path: |
+            dist/source/Minesport.exe
+            dist/source/minesport-engine.exe
+            dist/source/minesport-engine.json
           if-no-files-found: error
           retention-days: 7
 
@@ -319,11 +349,19 @@ jobs:
         with:
           name: minesport-windows-standalone
           path: dist/source
-      - name: Smoke test Rust desktop artifact
+      - name: Smoke test Rust desktop + engine artifacts
         shell: pwsh
         run: |
           & .\dist\source\Minesport.exe --version
           if ($LASTEXITCODE -ne 0) { throw 'Rust desktop --version smoke test failed.' }
+          $identityText = (& .\dist\source\minesport-engine.exe --identity | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Engine sidecar identity smoke test failed.' }
+          $identity = $identityText | ConvertFrom-Json
+          $manifest = Get-Content -LiteralPath .\dist\source\minesport-engine.json -Raw | ConvertFrom-Json
+          if ($identity.version -ne $manifest.version) { throw 'Engine manifest version does not match sidecar identity.' }
+          if ([int]$identity.protocolVersion -ne [int]$manifest.protocolVersion) { throw 'Engine manifest protocol does not match sidecar identity.' }
+          $actual = (Get-FileHash -LiteralPath .\dist\source\minesport-engine.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne [string]$manifest.sha256) { throw 'Engine manifest SHA-256 does not match sidecar.' }
       - name: Install and locate NSIS
         shell: pwsh
         run: |
@@ -352,10 +390,14 @@ jobs:
           $msi = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-x64.msi'
           $exe = Join-Path $env:GITHUB_WORKSPACE 'dist\installer\Minesport-0.2.1-Setup-x64.exe'
           $standalone = Join-Path $env:GITHUB_WORKSPACE 'dist\source\Minesport.exe'
+          $engine = Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.exe'
+          $manifest = Join-Path $env:GITHUB_WORKSPACE 'dist\source\minesport-engine.json'
           if (-not (Test-Path $msi)) { throw "Missing MSI: $msi" }
           if (-not (Test-Path $exe)) { throw "Missing setup EXE: $exe" }
           if (-not (Test-Path $standalone)) { throw "Missing standalone executable: $standalone" }
-          if ((Get-Item $msi).Length -le 0 -or (Get-Item $exe).Length -le 0) { throw 'An installer output is empty.' }
+          if (-not (Test-Path $engine)) { throw "Missing engine sidecar: $engine" }
+          if (-not (Test-Path $manifest)) { throw "Missing engine manifest: $manifest" }
+          if ((Get-Item $msi).Length -le 0 -or (Get-Item $exe).Length -le 0 -or (Get-Item $engine).Length -le 0) { throw 'A Windows package input/output is empty.' }
       - uses: actions/upload-artifact@v7
         with:
           name: minesport-windows-installers
@@ -363,6 +405,8 @@ jobs:
             dist/installer/Minesport-0.2.1-x64.msi
             dist/installer/Minesport-0.2.1-Setup-x64.exe
             dist/source/Minesport.exe
+            dist/source/minesport-engine.exe
+            dist/source/minesport-engine.json
           if-no-files-found: error
           retention-days: 7
 

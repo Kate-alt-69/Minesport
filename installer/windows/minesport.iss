@@ -36,8 +36,11 @@ Name: "translator"; Description: "Install the Minesport 0.2.1 Blender translator
 Name: "{app}\tools"
 
 [Files]
-; Fabric, Forge, NeoForge and Quilt Bridge JARs are embedded in Minesport.exe.
+; Loader Bridge JARs remain embedded in Minesport.exe. The Java engine runtime
+; is owned by the independently replaceable minesport-engine.exe sidecar.
 Source: "{#SourceDir}\dist\source\Minesport.exe"; DestDir: "{app}"; DestName: "minesport.exe"; Flags: ignoreversion
+Source: "{#SourceDir}\dist\source\minesport-engine.exe"; DestDir: "{app}"; DestName: "minesport-engine.exe"; Flags: ignoreversion
+Source: "{#SourceDir}\dist\source\minesport-engine.json"; DestDir: "{app}"; DestName: "minesport-engine.json"; Flags: ignoreversion
 Source: "{#SourceDir}\installer\windows\install-blender.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
@@ -49,6 +52,9 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
 Filename: "{app}\minesport.exe"; Parameters: "--install-blender-translator"; StatusMsg: "Installing Minesport 0.2.1 Blender translator..."; Flags: waituntilterminated runhidden runascurrentuser; Tasks: translator
 
 [UninstallDelete]
+; Remove rollback copies left by a completed engine-only repair/update.
+Type: files; Name: "{app}\minesport-engine.exe.prev"
+Type: files; Name: "{app}\minesport-engine.json.prev"
 ; Remove bridge-data left by older pre-embedded installs.
 Type: filesandordirs; Name: "{commonpf64}\kastrick's_software\minesport\bridge-data"
 Type: filesandordirs; Name: "{app}\tools"
