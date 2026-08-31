@@ -1,32 +1,60 @@
 package dev.kastrick.minesport.region;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Completes legacy block states whose pre-flattening metadata is split across
- * neighbouring blocks.
+ * Completes pre-flattening block states that depend on neighbouring blocks.
  *
- * Minecraft 1.2+ doors store facing/open on the lower block and hinge (plus
- * powered in later pre-flattening versions) on the upper block. RegionReader
- * invokes this after the full region has been decoded so door halves can be
- * paired even when they cross chunk or section boundaries.
+ * This runs once during legacy chunk decoding so information such as a door's
+ * split upper/lower metadata is captured before later selection filters remove
+ * neighbours. Mesh exports run it again on the final selected world list so
+ * states that can cross chunk/region boundaries (notably double chests) are
+ * corrected globally.
  */
 public final class LegacyStateResolver {
     private LegacyStateResolver() {}
 
-    /** Resolve neighbour-dependent legacy state and return the number of completed pairs. */
+    /** Resolve neighbour-derived legacy structures and return completed pair count. */
     public static int resolve(List<BlockData> blocks) {
         if (blocks == null || blocks.isEmpty()) return 0;
 
+        Map<Position, BlockData> world = new HashMap<>(Math.max(16, blocks.size() * 2));
         Map<Position, BlockData> doors = new HashMap<>();
+        Map<Position, BlockData> chests = new HashMap<>();
+
         for (BlockData block : blocks) {
-            if (!isLegacyDoor(block)) continue;
-            applyStandaloneDoorState(block);
-            doors.put(new Position(block.x, block.y, block.z), block);
+            if (block == null) continue;
+            Position position = new Position(block.x, block.y, block.z);
+            world.put(position, block);
+
+            if (isLegacyDoor(block)) {
+                // Do not overwrite a complete state recovered by an earlier
+                // chunk-local pass if a later cropped selection omits its mate.
+                if (!hasCompleteDoorState(block)) applyStandaloneDoorState(block);
+                doors.put(position, block);
+            }
+            if (isLegacyChest(block)) {
+                // Chest type is selection-topology-dependent and is therefore
+                // safe to recompute on every pass.
+                block.properties.put("type", "single");
+                block.properties.put("waterlogged", "false");
+                chests.put(position, block);
+            }
         }
 
+        resolveLegacySnow(world);
+
+        int resolved = resolveDoors(doors);
+        resolved += resolveChests(chests);
+        return resolved;
+    }
+
+    private static int resolveDoors(Map<Position, BlockData> doors) {
         int resolved = 0;
         for (BlockData lower : doors.values()) {
             int lowerData = legacyData(lower);
@@ -43,15 +71,122 @@ public final class LegacyStateResolver {
         return resolved;
     }
 
+    private static void resolveLegacySnow(Map<Position, BlockData> world) {
+        for (BlockData block : world.values()) {
+            if (!isLegacySnowyDirt(block) || block.properties.containsKey("snowy")) continue;
+            BlockData above = block.y == Integer.MAX_VALUE
+                ? null
+                : world.get(new Position(block.x, block.y + 1, block.z));
+            block.properties.put("snowy", boolText(isSnowCover(above)));
+        }
+    }
+
+    private static int resolveChests(Map<Position, BlockData> chests) {
+        Set<Position> paired = new HashSet<>();
+        int resolved = 0;
+
+        for (Map.Entry<Position, BlockData> entry : chests.entrySet()) {
+            Position position = entry.getKey();
+            BlockData chest = entry.getValue();
+            if (paired.contains(position)) continue;
+
+            List<Position> candidates = chestPartners(position, chest, chests);
+            if (candidates.size() != 1) continue;
+
+            Position partnerPosition = candidates.getFirst();
+            if (paired.contains(partnerPosition)) continue;
+            BlockData partner = chests.get(partnerPosition);
+            if (partner == null) continue;
+
+            // A malformed triple chest can make an end block see one neighbour
+            // while the middle sees two. Require the relationship to be unique
+            // from both sides before assigning modern left/right state.
+            List<Position> reverse = chestPartners(partnerPosition, partner, chests);
+            if (reverse.size() != 1 || !reverse.getFirst().equals(position)) continue;
+
+            int dx = partner.x - chest.x;
+            int dz = partner.z - chest.z;
+            chest.properties.put("type", chestTypeForPartner(chest.prop("facing"), dx, dz));
+            partner.properties.put("type", chestTypeForPartner(partner.prop("facing"), -dx, -dz));
+            paired.add(position);
+            paired.add(partnerPosition);
+            resolved++;
+        }
+        return resolved;
+    }
+
+    private static List<Position> chestPartners(
+        Position position,
+        BlockData chest,
+        Map<Position, BlockData> chests
+    ) {
+        String facing = chest.prop("facing");
+        int[][] offsets = switch (facing) {
+            case "north", "south" -> new int[][]{{-1, 0}, {1, 0}};
+            case "east", "west" -> new int[][]{{0, -1}, {0, 1}};
+            default -> new int[0][0];
+        };
+
+        List<Position> result = new ArrayList<>(2);
+        for (int[] offset : offsets) {
+            Position candidatePosition = new Position(
+                position.x + offset[0],
+                position.y,
+                position.z + offset[1]
+            );
+            BlockData candidate = chests.get(candidatePosition);
+            if (candidate == null || !sameLegacyChest(chest, candidate)) continue;
+            if (!facing.equals(candidate.prop("facing"))) continue;
+            result.add(candidatePosition);
+        }
+        return result;
+    }
+
+    private static String chestTypeForPartner(String facing, int dx, int dz) {
+        int clockwiseX;
+        int clockwiseZ;
+        switch (facing) {
+            case "north" -> { clockwiseX = 1; clockwiseZ = 0; }
+            case "east" -> { clockwiseX = 0; clockwiseZ = 1; }
+            case "south" -> { clockwiseX = -1; clockwiseZ = 0; }
+            case "west" -> { clockwiseX = 0; clockwiseZ = -1; }
+            default -> { return "single"; }
+        }
+        return dx == clockwiseX && dz == clockwiseZ ? "left" : "right";
+    }
+
     private static boolean isLegacyDoor(BlockData block) {
         if (block == null || block.properties == null) return false;
         String legacyId = block.properties.get("legacy_id");
         return "64".equals(legacyId) || "71".equals(legacyId);
     }
 
+    private static boolean isLegacyChest(BlockData block) {
+        if (block == null || block.properties == null) return false;
+        String legacyId = block.properties.get("legacy_id");
+        return "54".equals(legacyId) || "146".equals(legacyId);
+    }
+
+    private static boolean isLegacySnowyDirt(BlockData block) {
+        if (block == null || block.properties == null) return false;
+        String legacyId = block.properties.get("legacy_id");
+        return "2".equals(legacyId) || "110".equals(legacyId);
+    }
+
+    private static boolean isSnowCover(BlockData block) {
+        if (block == null) return false;
+        return "minecraft:snow".equals(block.blockId)
+            || "minecraft:snow_block".equals(block.blockId);
+    }
+
     private static boolean sameLegacyDoor(BlockData lower, BlockData upper) {
         return lower.blockId.equals(upper.blockId)
             && lower.properties.get("legacy_id").equals(upper.properties.get("legacy_id"));
+    }
+
+    private static boolean sameLegacyChest(BlockData first, BlockData second) {
+        return first.blockId.equals(second.blockId)
+            && first.properties.get("legacy_id").equals(second.properties.get("legacy_id"));
     }
 
     private static int legacyData(BlockData block) {
@@ -62,11 +197,14 @@ public final class LegacyStateResolver {
         }
     }
 
-    /**
-     * A cropped selection can contain only one door half. Populate a complete,
-     * renderable state from the metadata available on that half, then overwrite
-     * the guessed cross-half fields when its neighbour is present.
-     */
+    private static boolean hasCompleteDoorState(BlockData block) {
+        return block.properties.containsKey("half")
+            && block.properties.containsKey("facing")
+            && block.properties.containsKey("open")
+            && block.properties.containsKey("hinge")
+            && block.properties.containsKey("powered");
+    }
+
     private static void applyStandaloneDoorState(BlockData block) {
         int data = legacyData(block);
         if ((data & 0x8) != 0) {

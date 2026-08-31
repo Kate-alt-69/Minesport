@@ -77,6 +77,11 @@ public class MultipartResolver {
 
     /** Resolve from a block list, optionally using resolved model geometry. */
     public static void resolve(List<BlockData> blocks, BlockGeometryClassifier classifier) {
+        // This is the first full-selection pass shared by OBJ/glTF exports.
+        // Re-run legacy neighbour reconstruction here so structures such as a
+        // double chest can be paired even when its two halves cross a chunk or
+        // region boundary.
+        LegacyStateResolver.resolve(blocks);
         ExportWorldContext.set(blocks);
         resolveIndex(ExportWorldContext.currentIndex(), classifier);
     }
