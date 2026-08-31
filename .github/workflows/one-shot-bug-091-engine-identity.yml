@@ -113,6 +113,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92.0
+          components: rustfmt
 
       - name: Install Slint dependencies
         run: |
