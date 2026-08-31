@@ -917,6 +917,10 @@ public class IpcMode {
         return context + ": " + message + "\n" + stack;
     }
 
+    static boolean listBlocksNeedsPreviewAssets(String purpose) {
+        return purpose == null || !purpose.trim().equalsIgnoreCase("preflight");
+    }
+
     private static void handleListBlocks(JsonObject request) {
         String worldPath = getString(request, "worldPath", "");
         int minX = getInt(request, "minX", -256);
@@ -937,9 +941,14 @@ public class IpcMode {
             return;
         }
 
+        String purpose = getString(request, "clientPurpose", "preview");
+        boolean includePreviewAssets = listBlocksNeedsPreviewAssets(purpose);
+
         File tempWorldCopy = null;
         try {
-            log("Preparing block list for 3D preview...");
+            log(includePreviewAssets
+                ? "Preparing block list for 3D preview..."
+                : "Preparing block list for preflight...");
             tempWorldCopy = WorldCopier.copyToTemp(
                 worldFolder,
                 minX, minZ,
@@ -991,11 +1000,17 @@ public class IpcMode {
             allBlocks.removeIf(BlockData::isAir);
             log("Block list: " + allBlocks.size() + " solid block(s)");
 
-            ResolverChain previewResolvers = buildPreviewResolverChain(request, worldFolder, tempWorldCopy);
-            File previewTextureDir = Files.createTempDirectory("minesport_preview_textures_").toFile();
-            previewTextureDir.deleteOnExit();
-            Map<String, PreviewTextures> previewTextures = writePreviewTextures(allBlocks, previewResolvers, previewTextureDir);
-            log("3D preview textures: " + previewTextures.size() + " block type(s) resolved");
+            Map<String, PreviewTextures> previewTextures = Collections.emptyMap();
+            if (includePreviewAssets) {
+                try (ResolverChain previewResolvers = buildPreviewResolverChain(request, worldFolder, tempWorldCopy)) {
+                    File previewTextureDir = Files.createTempDirectory("minesport_preview_textures_").toFile();
+                    previewTextureDir.deleteOnExit();
+                    previewTextures = writePreviewTextures(allBlocks, previewResolvers, previewTextureDir);
+                }
+                log("3D preview textures: " + previewTextures.size() + " block type(s) resolved");
+            } else {
+                log("Preflight block list: preview asset resolution skipped");
+            }
 
             File outFile = File.createTempFile("minesport_blocks_", ".json");
             outFile.deleteOnExit();
@@ -1005,21 +1020,25 @@ public class IpcMode {
                 writer.beginArray();
                 for (BlockData block : allBlocks) {
                     writer.beginObject();
-                    writer.name("x").value(block.x);
-                    writer.name("y").value(block.y);
-                    writer.name("z").value(block.z);
-                    writer.name("id").value(block.blockId);
-                    PreviewTextures blockTextures = previewTextures.get(blockTextureKey(block));
-                    if (blockTextures != null) {
-                        if (blockTextures.top() != null) writer.name("textureTop").value(blockTextures.top());
-                        if (blockTextures.side() != null) writer.name("textureSide").value(blockTextures.side());
-                        if (blockTextures.bottom() != null) writer.name("textureBottom").value(blockTextures.bottom());
+                    if (includePreviewAssets) {
+                        writer.name("x").value(block.x);
+                        writer.name("y").value(block.y);
+                        writer.name("z").value(block.z);
                     }
-                    int[] color = dev.kastrick.minesport.region.HeightmapGenerator
-                        .colorForBlock(block.blockId);
-                    writer.name("r").value(color[0]);
-                    writer.name("g").value(color[1]);
-                    writer.name("b").value(color[2]);
+                    writer.name("id").value(block.blockId);
+                    if (includePreviewAssets) {
+                        PreviewTextures blockTextures = previewTextures.get(blockTextureKey(block));
+                        if (blockTextures != null) {
+                            if (blockTextures.top() != null) writer.name("textureTop").value(blockTextures.top());
+                            if (blockTextures.side() != null) writer.name("textureSide").value(blockTextures.side());
+                            if (blockTextures.bottom() != null) writer.name("textureBottom").value(blockTextures.bottom());
+                        }
+                        int[] color = dev.kastrick.minesport.region.HeightmapGenerator
+                            .colorForBlock(block.blockId);
+                        writer.name("r").value(color[0]);
+                        writer.name("g").value(color[1]);
+                        writer.name("b").value(color[2]);
+                    }
                     writer.endObject();
                 }
                 writer.endArray();

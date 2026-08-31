@@ -770,7 +770,7 @@ fn wire_preflight(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
         ui.set_task_active(true);
         ui.set_task_progress(0.05);
         ui.set_task_title("PREFLIGHT".into());
-        ui.set_task_detail("Reading selected block set and preview assets…".into());
+        ui.set_task_detail("Reading selected block set…".into());
         append_diagnostic(&ui, "IPC -> listBlocks · preflight");
         if let Err(error) = engine.send_value(request) {
             ui.set_task_active(false);
