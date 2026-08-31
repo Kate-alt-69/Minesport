@@ -27,16 +27,14 @@ public final class LegacyBlockIds {
             case 5 -> wood("planks", data);
             case 6 -> wood("sapling", data);
             case 7 -> "minecraft:bedrock";
-            case 8 -> "minecraft:water";
-            case 9 -> "minecraft:water";
-            case 10 -> "minecraft:lava";
-            case 11 -> "minecraft:lava";
+            case 8, 9 -> "minecraft:water";
+            case 10, 11 -> "minecraft:lava";
             case 12 -> "minecraft:sand";
             case 13 -> "minecraft:gravel";
             case 14 -> "minecraft:gold_ore";
             case 15 -> "minecraft:iron_ore";
             case 16 -> "minecraft:coal_ore";
-            case 17 -> wood("log", data);
+            case 17 -> log(data);
             case 18 -> wood("leaves", data);
             case 19 -> "minecraft:sponge";
             case 20 -> "minecraft:glass";
@@ -62,14 +60,13 @@ public final class LegacyBlockIds {
             case 40 -> "minecraft:red_mushroom";
             case 41 -> "minecraft:gold_block";
             case 42 -> "minecraft:iron_block";
-            case 43 -> stoneSlab(data);
-            case 44 -> stoneSlab(data);
+            case 43, 44 -> stoneSlab(data);
             case 45 -> "minecraft:bricks";
             case 46 -> "minecraft:tnt";
             case 47 -> "minecraft:bookshelf";
             case 48 -> "minecraft:mossy_cobblestone";
             case 49 -> "minecraft:obsidian";
-            case 50 -> "minecraft:torch";
+            case 50 -> torch(data, "minecraft:torch", "minecraft:wall_torch");
             case 51 -> "minecraft:fire";
             case 52 -> "minecraft:spawner";
             case 53 -> "minecraft:oak_stairs";
@@ -92,7 +89,7 @@ public final class LegacyBlockIds {
             case 71 -> "minecraft:iron_door";
             case 72 -> "minecraft:oak_pressure_plate";
             case 73, 74 -> "minecraft:redstone_ore";
-            case 75, 76 -> "minecraft:redstone_torch";
+            case 75, 76 -> torch(data, "minecraft:redstone_torch", "minecraft:redstone_wall_torch");
             case 77 -> "minecraft:stone_button";
             case 78 -> "minecraft:snow";
             case 79 -> "minecraft:ice";
@@ -102,7 +99,7 @@ public final class LegacyBlockIds {
             case 83 -> "minecraft:sugar_cane";
             case 84 -> "minecraft:jukebox";
             case 85 -> "minecraft:oak_fence";
-            case 86 -> "minecraft:pumpkin";
+            case 86 -> "minecraft:carved_pumpkin";
             case 87 -> "minecraft:netherrack";
             case 88 -> "minecraft:soul_sand";
             case 89 -> "minecraft:glowstone";
@@ -133,14 +130,13 @@ public final class LegacyBlockIds {
             case 115 -> "minecraft:nether_wart";
             case 116 -> "minecraft:enchanting_table";
             case 117 -> "minecraft:brewing_stand";
-            case 118 -> "minecraft:cauldron";
+            case 118 -> data == 0 ? "minecraft:cauldron" : "minecraft:water_cauldron";
             case 119 -> "minecraft:end_portal";
             case 120 -> "minecraft:end_portal_frame";
             case 121 -> "minecraft:end_stone";
             case 122 -> "minecraft:dragon_egg";
             case 123, 124 -> "minecraft:redstone_lamp";
-            case 125 -> woodSlab(data);
-            case 126 -> woodSlab(data);
+            case 125, 126 -> woodSlab(data);
             case 127 -> "minecraft:cocoa";
             case 128 -> "minecraft:sandstone_stairs";
             case 129 -> "minecraft:emerald_ore";
@@ -178,17 +174,195 @@ public final class LegacyBlockIds {
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("legacy_id", Integer.toString(numericId));
         properties.put("legacy_data", Integer.toString(data));
+        addRenderState(numericId, data, properties);
         return new DecodedBlock(id, properties);
     }
 
+    private static void addRenderState(int numericId, int data, Map<String, String> properties) {
+        switch (numericId) {
+            case 6 -> properties.put("stage", (data & 8) != 0 ? "1" : "0");
+            case 8, 9, 10, 11 -> properties.put("level", Integer.toString(data));
+            case 17 -> properties.put("axis", logAxis(data));
+            case 23, 158 -> {
+                properties.put("facing", facing6(data & 7));
+                properties.put("triggered", boolText((data & 8) != 0));
+            }
+            case 26 -> {
+                properties.put("facing", southWestNorthEast(data & 3));
+                properties.put("part", (data & 8) != 0 ? "head" : "foot");
+                properties.put("occupied", boolText((data & 4) != 0));
+            }
+            case 27, 28, 157 -> {
+                properties.put("shape", poweredRailShape(data & 7));
+                properties.put("powered", boolText((data & 8) != 0));
+            }
+            case 29, 33 -> {
+                properties.put("facing", facing6(data & 7));
+                properties.put("extended", boolText((data & 8) != 0));
+            }
+            case 34 -> {
+                properties.put("facing", facing6(data & 7));
+                properties.put("type", (data & 8) != 0 ? "sticky" : "normal");
+                properties.put("short", "false");
+            }
+            case 43 -> slabState(properties, true, false);
+            case 44 -> slabState(properties, false, (data & 8) != 0);
+            case 50 -> wallTorchState(data, properties);
+            case 51 -> properties.put("age", Integer.toString(data));
+            case 53, 67, 108, 109, 114, 128, 134, 135, 136, 156 -> stairState(data, properties);
+            case 54, 95, 146 -> {
+                properties.put("facing", facingHorizontal2To5(data));
+                properties.put("type", "single");
+                properties.put("waterlogged", "false");
+            }
+            case 55 -> properties.put("power", Integer.toString(data));
+            case 59 -> properties.put("age", Integer.toString(data & 7));
+            case 60 -> properties.put("moisture", Integer.toString(Math.min(data, 7)));
+            case 61, 62 -> {
+                properties.put("facing", facingHorizontal2To5(data));
+                properties.put("lit", boolText(numericId == 62));
+            }
+            case 63 -> {
+                properties.put("rotation", Integer.toString(data));
+                properties.put("waterlogged", "false");
+            }
+            case 65 -> {
+                properties.put("facing", facingHorizontal2To5(data));
+                properties.put("waterlogged", "false");
+            }
+            case 66 -> {
+                properties.put("shape", railShape(data));
+                properties.put("waterlogged", "false");
+            }
+            case 68 -> {
+                properties.put("facing", facingHorizontal2To5(data));
+                properties.put("waterlogged", "false");
+            }
+            case 70, 72 -> properties.put("powered", boolText((data & 1) != 0));
+            case 75, 76 -> {
+                wallTorchState(data, properties);
+                properties.put("lit", boolText(numericId == 76));
+            }
+            case 78 -> properties.put("layers", Integer.toString(Math.min(8, data + 1)));
+            case 81, 83 -> properties.put("age", Integer.toString(data));
+            case 84 -> properties.put("has_record", boolText(data != 0));
+            case 86, 91 -> properties.put("facing", southWestNorthEast(data & 3));
+            case 92 -> properties.put("bites", Integer.toString(Math.min(6, data)));
+            case 93, 94 -> {
+                properties.put("facing", northEastSouthWest(data & 3));
+                properties.put("delay", Integer.toString(((data >> 2) & 3) + 1));
+                properties.put("locked", "false");
+                properties.put("powered", boolText(numericId == 94));
+            }
+            case 96 -> {
+                properties.put("facing", trapdoorFacing(data & 3));
+                properties.put("open", boolText((data & 4) != 0));
+                properties.put("half", (data & 8) != 0 ? "top" : "bottom");
+                properties.put("powered", "false");
+                properties.put("waterlogged", "false");
+            }
+            case 104, 105 -> properties.put("age", Integer.toString(data & 7));
+            case 106 -> {
+                properties.put("south", boolText((data & 1) != 0));
+                properties.put("west", boolText((data & 2) != 0));
+                properties.put("north", boolText((data & 4) != 0));
+                properties.put("east", boolText((data & 8) != 0));
+                properties.put("up", "false");
+            }
+            case 107 -> {
+                properties.put("facing", southWestNorthEast(data & 3));
+                properties.put("open", boolText((data & 4) != 0));
+                properties.put("powered", "false");
+                properties.put("in_wall", "false");
+            }
+            case 115 -> properties.put("age", Integer.toString(data & 3));
+            case 117 -> {
+                properties.put("has_bottle_0", boolText((data & 1) != 0));
+                properties.put("has_bottle_1", boolText((data & 2) != 0));
+                properties.put("has_bottle_2", boolText((data & 4) != 0));
+            }
+            case 118 -> {
+                if (data != 0) properties.put("level", Integer.toString(Math.min(3, data)));
+            }
+            case 120 -> {
+                properties.put("facing", southWestNorthEast(data & 3));
+                properties.put("eye", boolText((data & 4) != 0));
+            }
+            case 123, 124 -> properties.put("lit", boolText(numericId == 124));
+            case 125 -> slabState(properties, true, false);
+            case 126 -> slabState(properties, false, (data & 8) != 0);
+            case 127 -> {
+                properties.put("facing", southWestNorthEast(data & 3));
+                properties.put("age", Integer.toString(Math.min(2, (data >> 2) & 3)));
+            }
+            case 130 -> {
+                properties.put("facing", facingHorizontal2To5(data));
+                properties.put("waterlogged", "false");
+            }
+            case 141, 142 -> properties.put("age", Integer.toString(data & 7));
+            case 145 -> properties.put("facing", northEastSouthWest(data & 3));
+            case 147, 148 -> properties.put("power", Integer.toString(data));
+            case 149, 150 -> {
+                properties.put("facing", northEastSouthWest(data & 3));
+                properties.put("mode", (data & 4) != 0 ? "subtract" : "compare");
+                properties.put("powered", boolText(numericId == 150 || (data & 8) != 0));
+            }
+            case 151 -> properties.put("power", Integer.toString(data));
+            case 154 -> {
+                properties.put("facing", facing6(data & 7));
+                properties.put("enabled", boolText((data & 8) == 0));
+            }
+            case 155 -> {
+                if (data >= 2 && data <= 4) properties.put("axis", quartzAxis(data));
+            }
+            default -> { }
+        }
+    }
+
+    private static void slabState(Map<String, String> properties, boolean doubled, boolean top) {
+        properties.put("type", doubled ? "double" : (top ? "top" : "bottom"));
+        properties.put("waterlogged", "false");
+    }
+
+    private static void stairState(int data, Map<String, String> properties) {
+        properties.put("facing", stairsFacing(data & 3));
+        properties.put("half", (data & 4) != 0 ? "top" : "bottom");
+        properties.put("shape", "straight");
+        properties.put("waterlogged", "false");
+    }
+
+    private static void wallTorchState(int data, Map<String, String> properties) {
+        if (data >= 1 && data <= 4) properties.put("facing", torchFacing(data));
+    }
+
+    private static String torch(int data, String standing, String wall) {
+        return data >= 1 && data <= 4 ? wall : standing;
+    }
+
+    private static String log(int data) {
+        String species = woodSpecies(data);
+        return "minecraft:" + species + (((data & 12) == 12) ? "_wood" : "_log");
+    }
+
+    private static String logAxis(int data) {
+        return switch (data & 12) {
+            case 4 -> "x";
+            case 8 -> "z";
+            default -> "y";
+        };
+    }
+
     private static String wood(String suffix, int data) {
-        String species = switch (data & 3) {
+        return "minecraft:" + woodSpecies(data) + "_" + suffix;
+    }
+
+    private static String woodSpecies(int data) {
+        return switch (data & 3) {
             case 1 -> "spruce";
             case 2 -> "birch";
             case 3 -> "jungle";
             default -> "oak";
         };
-        return "minecraft:" + species + "_" + suffix;
     }
 
     private static String wool(int data) {
@@ -231,13 +405,7 @@ public final class LegacyBlockIds {
     }
 
     private static String woodSlab(int data) {
-        String species = switch (data & 3) {
-            case 1 -> "spruce";
-            case 2 -> "birch";
-            case 3 -> "jungle";
-            default -> "oak";
-        };
-        return "minecraft:" + species + "_slab";
+        return "minecraft:" + woodSpecies(data) + "_slab";
     }
 
     private static String infested(int data) {
@@ -269,10 +437,113 @@ public final class LegacyBlockIds {
     }
 
     private static String quartz(int data) {
-        return switch (data & 3) {
+        return switch (data) {
             case 1 -> "minecraft:chiseled_quartz_block";
-            case 2 -> "minecraft:quartz_pillar";
+            case 2, 3, 4 -> "minecraft:quartz_pillar";
             default -> "minecraft:quartz_block";
         };
+    }
+
+    private static String quartzAxis(int data) {
+        return switch (data) {
+            case 3 -> "x";
+            case 4 -> "z";
+            default -> "y";
+        };
+    }
+
+    private static String facing6(int value) {
+        return switch (value) {
+            case 0 -> "down";
+            case 1 -> "up";
+            case 3 -> "south";
+            case 4 -> "west";
+            case 5 -> "east";
+            default -> "north";
+        };
+    }
+
+    private static String facingHorizontal2To5(int value) {
+        return switch (value & 7) {
+            case 3 -> "south";
+            case 4 -> "west";
+            case 5 -> "east";
+            default -> "north";
+        };
+    }
+
+    private static String southWestNorthEast(int value) {
+        return switch (value & 3) {
+            case 1 -> "west";
+            case 2 -> "north";
+            case 3 -> "east";
+            default -> "south";
+        };
+    }
+
+    private static String northEastSouthWest(int value) {
+        return switch (value & 3) {
+            case 1 -> "east";
+            case 2 -> "south";
+            case 3 -> "west";
+            default -> "north";
+        };
+    }
+
+    private static String stairsFacing(int value) {
+        return switch (value & 3) {
+            case 1 -> "west";
+            case 2 -> "south";
+            case 3 -> "north";
+            default -> "east";
+        };
+    }
+
+    private static String torchFacing(int value) {
+        return switch (value) {
+            case 1 -> "east";
+            case 2 -> "west";
+            case 3 -> "south";
+            default -> "north";
+        };
+    }
+
+    private static String trapdoorFacing(int value) {
+        return switch (value & 3) {
+            case 1 -> "south";
+            case 2 -> "west";
+            case 3 -> "east";
+            default -> "north";
+        };
+    }
+
+    private static String railShape(int value) {
+        return switch (value) {
+            case 1 -> "east_west";
+            case 2 -> "ascending_east";
+            case 3 -> "ascending_west";
+            case 4 -> "ascending_north";
+            case 5 -> "ascending_south";
+            case 6 -> "south_east";
+            case 7 -> "south_west";
+            case 8 -> "north_west";
+            case 9 -> "north_east";
+            default -> "north_south";
+        };
+    }
+
+    private static String poweredRailShape(int value) {
+        return switch (value & 7) {
+            case 1 -> "east_west";
+            case 2 -> "ascending_east";
+            case 3 -> "ascending_west";
+            case 4 -> "ascending_north";
+            case 5 -> "ascending_south";
+            default -> "north_south";
+        };
+    }
+
+    private static String boolText(boolean value) {
+        return value ? "true" : "false";
     }
 }
