@@ -31,13 +31,8 @@ jobs:
 
           runtime = Path("desktop/src/runtime.rs")
           text = runtime.read_text(encoding="utf-8")
-          old = '''const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
-          const FABRIC_EXPORT_WORKER_BYTES: &[u8] =
-              include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-fabric.jar"));'''.replace("          ", "")
-          new = '''const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
-          const ENGINE_VERSION_RAW: &str = include_str!("../../engine/VERSION");
-          const FABRIC_EXPORT_WORKER_BYTES: &[u8] =
-              include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-fabric.jar"));'''.replace("          ", "")
+          old = 'const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));\nconst FABRIC_EXPORT_WORKER_BYTES: &[u8] =\n    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-fabric.jar"));'
+          new = 'const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));\nconst ENGINE_VERSION_RAW: &str = include_str!("../../engine/VERSION");\nconst FABRIC_EXPORT_WORKER_BYTES: &[u8] =\n    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-fabric.jar"));'
           if text.count(old) != 1:
               raise SystemExit("runtime.rs engine-byte anchor moved; refusing automatic patch")
           text = text.replace(old, new, 1)
@@ -69,41 +64,44 @@ jobs:
 
           app = Path("desktop/src/app.rs")
           text = app.read_text(encoding="utf-8")
-          old = '''        "workerInfo" => append_diagnostic(&ui, &format!("[backend] {}", response.message)),
-                  "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
-                  "pong" => {
-                      ui.set_engine_ready(true);
-                      ui.set_engine_status("ENGINE READY".into());
-                      ui.set_task_title("READY".into());
-                      ui.set_task_detail("Ready".into());
-                      append_diagnostic(&ui, "IPC <- pong");
-                  }'''.replace("          ", "")
-          new = '''        "workerInfo" => {
-                      let message = response.message.clone();
-                      append_diagnostic(&ui, &format!("[backend] {message}"));
-                      if response.percent > 0 {
-                          ui.set_engine_ready(false);
-                          ui.set_engine_status("ENGINE STARTING".into());
-                          ui.set_task_active(true);
-                          ui.set_task_progress((response.percent.clamp(0, 100) as f32) / 100.0);
-                          ui.set_task_title("ENGINE STARTING".into());
-                          ui.set_task_detail(message.into());
-                      }
-                  }
-                  "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
-                  "pong" => {
-                      ui.set_engine_ready(true);
-                      ui.set_engine_status("ENGINE READY".into());
-                      ui.set_task_completing(false);
-                      ui.set_task_active(false);
-                      ui.set_task_progress(1.0);
-                      ui.set_task_title("READY".into());
-                      ui.set_task_detail("Ready".into());
-                      append_diagnostic(&ui, "IPC <- pong");
-                  }'''.replace("          ", "")
-          if text.count(old) != 1:
-              raise SystemExit("app.rs workerInfo/pong anchor moved; refusing automatic patch")
-          app.write_text(text.replace(old, new, 1), encoding="utf-8")
+          worker_old = '        "workerInfo" => append_diagnostic(&ui, &format!("[backend] {}", response.message)),\n'
+          worker_new = '''        "workerInfo" => {
+              let message = response.message.clone();
+              append_diagnostic(&ui, &format!("[backend] {message}"));
+              if response.percent > 0 {
+                  ui.set_engine_ready(false);
+                  ui.set_engine_status("ENGINE STARTING".into());
+                  ui.set_task_active(true);
+                  ui.set_task_progress((response.percent.clamp(0, 100) as f32) / 100.0);
+                  ui.set_task_title("ENGINE STARTING".into());
+                  ui.set_task_detail(message.into());
+              }
+          }
+          '''.replace("          ", "        ")
+          if text.count(worker_old) != 1:
+              raise SystemExit("app.rs workerInfo anchor moved; refusing automatic patch")
+          text = text.replace(worker_old, worker_new, 1)
+
+          pong_old = '''        "pong" => {
+              ui.set_engine_ready(true);
+              ui.set_engine_status("ENGINE READY".into());
+              ui.set_task_title("READY".into());
+              ui.set_task_detail("Ready".into());
+              append_diagnostic(&ui, "IPC <- pong");
+          }'''.replace("          ", "        ")
+          pong_new = '''        "pong" => {
+              ui.set_engine_ready(true);
+              ui.set_engine_status("ENGINE READY".into());
+              ui.set_task_completing(false);
+              ui.set_task_active(false);
+              ui.set_task_progress(1.0);
+              ui.set_task_title("READY".into());
+              ui.set_task_detail("Ready".into());
+              append_diagnostic(&ui, "IPC <- pong");
+          }'''.replace("          ", "        ")
+          if text.count(pong_old) != 1:
+              raise SystemExit("app.rs pong anchor moved; refusing automatic patch")
+          app.write_text(text.replace(pong_old, pong_new, 1), encoding="utf-8")
 
       - name: Remove one-shot workflow
         run: rm -f .github/workflows/one-shot-bug-091-engine-identity.yml
