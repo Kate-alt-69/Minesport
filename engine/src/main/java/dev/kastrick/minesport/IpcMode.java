@@ -1001,11 +1001,12 @@ public class IpcMode {
                 return;
             }
 
-            File[] mcaFiles = regionDir.listFiles((directory, name) -> name.endsWith(".mca"));
-            if (mcaFiles == null || mcaFiles.length == 0) {
-                error("No .mca region files found");
+            File[] regionFiles = regionDir.listFiles((directory, name) -> isRegionFileName(name));
+            if (regionFiles == null || regionFiles.length == 0) {
+                error("No region files (.mca/.mcr) found");
                 return;
             }
+            Arrays.sort(regionFiles, Comparator.comparing(File::getName));
 
             Integer centerX = getOptionalInt(request, "centerX");
             Integer centerY = getOptionalInt(request, "centerY");
@@ -1022,11 +1023,11 @@ public class IpcMode {
                     new BufferedWriter(new FileWriter(outFile))
                 )) {
                     writer.beginArray();
-                    for (File mca : mcaFiles) {
+                    for (File regionFile : regionFiles) {
                         count += writePreflightBlockIds(
                             writer,
                             RegionReader.readRegion(
-                                mca,
+                                regionFile,
                                 minX, minY, minZ,
                                 maxX, maxY, maxZ,
                                 null
@@ -1047,9 +1048,9 @@ public class IpcMode {
             }
 
             var allBlocks = new ArrayList<BlockData>();
-            for (File mca : mcaFiles) {
+            for (File regionFile : regionFiles) {
                 allBlocks.addAll(RegionReader.readRegion(
-                    mca,
+                    regionFile,
                     minX, minY, minZ,
                     maxX, maxY, maxZ,
                     null
