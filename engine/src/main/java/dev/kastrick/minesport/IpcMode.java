@@ -921,6 +921,46 @@ public class IpcMode {
         return purpose == null || !purpose.trim().equalsIgnoreCase("preflight");
     }
 
+    static int writePreflightBlockIds(
+        com.google.gson.stream.JsonWriter writer,
+        Iterable<BlockData> blocks,
+        Integer centerX, Integer centerY, Integer centerZ,
+        Integer radiusX, Integer radiusY, Integer radiusZ
+    ) throws IOException {
+        int count = 0;
+        for (BlockData block : blocks) {
+            if (block == null || block.isAir()) continue;
+            if (!blockMatchesOptionalEllipsoid(
+                block,
+                centerX, centerY, centerZ,
+                radiusX, radiusY, radiusZ
+            )) continue;
+            writer.beginObject();
+            writer.name("id").value(block.blockId);
+            writer.endObject();
+            count++;
+        }
+        return count;
+    }
+
+    private static boolean blockMatchesOptionalEllipsoid(
+        BlockData block,
+        Integer centerX, Integer centerY, Integer centerZ,
+        Integer radiusX, Integer radiusY, Integer radiusZ
+    ) {
+        if (
+            centerX == null || centerY == null || centerZ == null ||
+            radiusX == null || radiusY == null || radiusZ == null
+        ) return true;
+        return insideEllipsoid(
+            block,
+            centerX, centerY, centerZ,
+            Math.max(radiusX, 1),
+            Math.max(radiusY, 1),
+            Math.max(radiusZ, 1)
+        );
+    }
+
     private static void handleListBlocks(JsonObject request) {
         String worldPath = getString(request, "worldPath", "");
         int minX = getInt(request, "minX", -256);
@@ -967,6 +1007,45 @@ public class IpcMode {
                 return;
             }
 
+            Integer centerX = getOptionalInt(request, "centerX");
+            Integer centerY = getOptionalInt(request, "centerY");
+            Integer centerZ = getOptionalInt(request, "centerZ");
+            Integer radiusX = getOptionalInt(request, "radiusX");
+            Integer radiusY = getOptionalInt(request, "radiusY");
+            Integer radiusZ = getOptionalInt(request, "radiusZ");
+
+            if (!includePreviewAssets) {
+                File outFile = File.createTempFile("minesport_blocks_", ".json");
+                outFile.deleteOnExit();
+                int count = 0;
+                try (var writer = new com.google.gson.stream.JsonWriter(
+                    new BufferedWriter(new FileWriter(outFile))
+                )) {
+                    writer.beginArray();
+                    for (File mca : mcaFiles) {
+                        count += writePreflightBlockIds(
+                            writer,
+                            RegionReader.readRegion(
+                                mca,
+                                minX, minY, minZ,
+                                maxX, maxY, maxZ,
+                                null
+                            ),
+                            centerX, centerY, centerZ,
+                            radiusX, radiusY, radiusZ
+                        );
+                    }
+                    writer.endArray();
+                }
+                final int preflightCount = count;
+                log("Preflight block list: " + preflightCount + " solid block(s) · region-at-a-time");
+                send("blocksReady", json -> {
+                    json.addProperty("file", outFile.getAbsolutePath());
+                    json.addProperty("count", preflightCount);
+                });
+                return;
+            }
+
             var allBlocks = new ArrayList<BlockData>();
             for (File mca : mcaFiles) {
                 allBlocks.addAll(RegionReader.readRegion(
@@ -976,13 +1055,6 @@ public class IpcMode {
                     null
                 ));
             }
-
-            Integer centerX = getOptionalInt(request, "centerX");
-            Integer centerY = getOptionalInt(request, "centerY");
-            Integer centerZ = getOptionalInt(request, "centerZ");
-            Integer radiusX = getOptionalInt(request, "radiusX");
-            Integer radiusY = getOptionalInt(request, "radiusY");
-            Integer radiusZ = getOptionalInt(request, "radiusZ");
 
             if (
                 centerX != null && centerY != null && centerZ != null &&
