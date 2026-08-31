@@ -11,7 +11,7 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -230,6 +230,7 @@ struct EngineInner {
     child: Mutex<Child>,
     events: Sender<EngineEvent>,
     launch: BackendLaunch,
+    generation: Arc<AtomicU64>,
     restarting: AtomicBool,
     shutting_down: AtomicBool,
 }
@@ -292,12 +293,13 @@ impl Engine {
         let stderr = child.stderr.take().context("open Minesport backend stderr")?;
 
         let (tx, rx) = mpsc::channel();
+        let generation = Arc::new(AtomicU64::new(1));
         let _ = tx.send(EngineEvent::Started {
             pid,
             process: launch.executable.display().to_string(),
         });
-        spawn_stdout_reader(stdout, tx.clone());
-        spawn_stderr_reader(stderr, tx.clone());
+        spawn_stdout_reader(stdout, tx.clone(), generation.clone(), 1);
+        spawn_stderr_reader(stderr, tx.clone(), generation.clone(), 1);
 
         operation.success(
             "Minesport backend worker started",
@@ -315,6 +317,7 @@ impl Engine {
                     child: Mutex::new(child),
                     events: tx,
                     launch,
+                    generation,
                     restarting: AtomicBool::new(false),
                     shutting_down: AtomicBool::new(false),
                 }),
@@ -346,6 +349,7 @@ impl Engine {
         }
         let logger = diagnostics::Logger::new("IPC").child("UI");
         let operation = logger.operation("IpcBackendWorkerRestart");
+        let reader_generation = self.inner.generation.fetch_add(1, Ordering::AcqRel) + 1;
 
         if let Ok(mut child) = self.inner.child.lock() {
             match child.try_wait() {
@@ -369,6 +373,7 @@ impl Engine {
                 ("executable", launch.executable.display().to_string()),
                 ("mode", launch.mode.to_string()),
                 ("engine_version", launch.engine_version.clone()),
+                ("generation", reader_generation.to_string()),
             ],
         );
         let mut command = launch.command();
@@ -403,8 +408,18 @@ impl Engine {
             pid,
             process: launch.executable.display().to_string(),
         });
-        spawn_stdout_reader(stdout, tx.clone());
-        spawn_stderr_reader(stderr, tx);
+        spawn_stdout_reader(
+            stdout,
+            tx.clone(),
+            self.inner.generation.clone(),
+            reader_generation,
+        );
+        spawn_stderr_reader(
+            stderr,
+            tx,
+            self.inner.generation.clone(),
+            reader_generation,
+        );
         operation.success(
             "Minesport backend worker restarted",
             &[
@@ -412,6 +427,7 @@ impl Engine {
                 ("executable", launch.executable.display().to_string()),
                 ("mode", launch.mode.to_string()),
                 ("engine_version", launch.engine_version),
+                ("generation", reader_generation.to_string()),
             ],
         );
         Ok(())
@@ -847,12 +863,24 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     Ok(())
 }
 
-fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<EngineEvent>) {
+fn reader_generation_is_current(generation: &AtomicU64, reader_generation: u64) -> bool {
+    generation.load(Ordering::Acquire) == reader_generation
+}
+
+fn spawn_stdout_reader(
+    stdout: impl std::io::Read + Send + 'static,
+    tx: Sender<EngineEvent>,
+    generation: Arc<AtomicU64>,
+    reader_generation: u64,
+) {
     thread::spawn(move || {
         let logger = diagnostics::Logger::new("IPC").child("RX");
         let reader = BufReader::new(stdout);
         let mut last_progress: Option<(String, String, i32, String)> = None;
         for line in reader.lines() {
+            if !reader_generation_is_current(&generation, reader_generation) {
+                return;
+            }
             match line {
                 Ok(line) if !line.trim().is_empty() => {
                     let response = serde_json::from_str::<Response>(&line).unwrap_or_else(|_| Response {
@@ -920,6 +948,9 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                             &[("type", kind.to_string())],
                         ),
                     }
+                    if !reader_generation_is_current(&generation, reader_generation) {
+                        return;
+                    }
                     if tx.send(EngineEvent::Response(response)).is_err() {
                         logger.warn("IpcResponseConsumerClosed", "UI event receiver closed", &[]);
                         return;
@@ -927,6 +958,9 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                 }
                 Ok(_) => {}
                 Err(error) => {
+                    if !reader_generation_is_current(&generation, reader_generation) {
+                        return;
+                    }
                     let message = format!("Minesport backend IPC read failed: {error}");
                     logger.error(
                         "IpcResponseReadFailed", &message, &[("error", error.to_string())],
@@ -936,22 +970,39 @@ fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static, tx: Sender<E
                 }
             }
         }
+        if !reader_generation_is_current(&generation, reader_generation) {
+            return;
+        }
         logger.info("IpcResponseStreamClosed", "Minesport backend output closed", &[]);
         let _ = tx.send(EngineEvent::ReadEnded("Minesport backend output closed".to_string()));
     });
 }
 
-fn spawn_stderr_reader(stderr: impl std::io::Read + Send + 'static, tx: Sender<EngineEvent>) {
+fn spawn_stderr_reader(
+    stderr: impl std::io::Read + Send + 'static,
+    tx: Sender<EngineEvent>,
+    generation: Arc<AtomicU64>,
+    reader_generation: u64,
+) {
     thread::spawn(move || {
         let logger = diagnostics::Logger::new("IPC").child("STDERR");
         for line in BufReader::new(stderr).lines() {
+            if !reader_generation_is_current(&generation, reader_generation) {
+                return;
+            }
             match line {
                 Ok(line) if !line.trim().is_empty() => {
                     logger.warn("IpcBackendStderrLine", &line, &[]);
+                    if !reader_generation_is_current(&generation, reader_generation) {
+                        return;
+                    }
                     if tx.send(EngineEvent::Stderr(line)).is_err() { return; }
                 }
                 Ok(_) => {}
                 Err(error) => {
+                    if !reader_generation_is_current(&generation, reader_generation) {
+                        return;
+                    }
                     let message = format!("backend stderr read failed: {error}");
                     logger.error(
                         "IpcBackendStderrReadFailed", &message, &[("error", error.to_string())],
@@ -1214,5 +1265,15 @@ mod tests {
         }).to_string();
         let (_, terminal) = annotate_java_response(&response, &correlation);
         assert!(!terminal);
+    }
+
+    #[test]
+    fn stale_backend_reader_generations_are_rejected() {
+        let generation = AtomicU64::new(7);
+        assert!(reader_generation_is_current(&generation, 7));
+        assert!(!reader_generation_is_current(&generation, 6));
+        generation.store(8, Ordering::Release);
+        assert!(!reader_generation_is_current(&generation, 7));
+        assert!(reader_generation_is_current(&generation, 8));
     }
 }
