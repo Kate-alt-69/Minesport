@@ -84,6 +84,40 @@ class WorldCopierTest {
     }
 
     @Test
+    void snapshotDirectoriesAreUniqueDirectChildrenOfSystemTemp() throws Exception {
+        Path world = temp.resolve("same-world");
+        Path region = world.resolve("region");
+        Files.createDirectories(region);
+        Files.writeString(world.resolve("level.dat"), "level");
+        Files.writeString(region.resolve("r.0.0.mca"), "region");
+
+        File first = WorldCopier.copyToTemp(world.toFile(), null);
+        File second = WorldCopier.copyToTemp(world.toFile(), null);
+        try {
+            assertNotEquals(first.getCanonicalFile(), second.getCanonicalFile());
+            Path systemTemp = Path.of(System.getProperty("java.io.tmpdir")).toRealPath();
+            assertEquals(systemTemp, first.toPath().getParent().toRealPath());
+            assertEquals(systemTemp, second.toPath().getParent().toRealPath());
+            assertTrue(first.getName().startsWith("minesport_same-world_"));
+            assertTrue(second.getName().startsWith("minesport_same-world_"));
+        } finally {
+            WorldCopier.cleanupTemp(first);
+            WorldCopier.cleanupTemp(second);
+        }
+    }
+
+    @Test
+    void cleanupRefusesNestedForeignDirectoryEvenWithMinesportName() throws Exception {
+        Path foreign = temp.resolve("minesport_foreign");
+        Files.createDirectories(foreign);
+        Files.writeString(foreign.resolve("keep.txt"), "keep");
+
+        WorldCopier.cleanupTemp(foreign.toFile());
+
+        assertTrue(Files.exists(foreign.resolve("keep.txt")));
+    }
+
+    @Test
     void rejectsWorldWithoutLevelMetadata() throws Exception {
         Path world = temp.resolve("missing-level");
         Path region = world.resolve("region");

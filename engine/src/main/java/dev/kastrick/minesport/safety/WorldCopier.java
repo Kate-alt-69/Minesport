@@ -39,11 +39,7 @@ public class WorldCopier {
             throw new IOException("World folder does not exist: " + worldFolder);
         }
 
-        String tempName = "minesport_" + worldFolder.getName() + "_" + System.currentTimeMillis();
-        File tempDir = new File(System.getProperty("java.io.tmpdir"), tempName);
-        if (!tempDir.mkdirs() && !tempDir.isDirectory()) {
-            throw new IOException("Could not create Minesport temp directory: " + tempDir);
-        }
+        File tempDir = createTempSnapshotDirectory(worldFolder);
 
         if (statusCallback != null) {
             statusCallback.accept("Preparing selected world data");
@@ -67,6 +63,19 @@ public class WorldCopier {
             statusCallback.accept("Selected world data ready");
         }
         return tempDir;
+    }
+
+    private static File createTempSnapshotDirectory(File worldFolder) throws IOException {
+        Path tempRoot = systemTempRoot();
+        String worldName = worldFolder.getName().replaceAll("[^A-Za-z0-9._-]", "_");
+        if (worldName.isBlank()) worldName = "world";
+        return Files.createTempDirectory(tempRoot, "minesport_" + worldName + "_").toFile();
+    }
+
+    private static Path systemTempRoot() throws IOException {
+        Path root = Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize();
+        Files.createDirectories(root);
+        return root.toRealPath();
     }
 
     public static File findOverworldRegionDir(File worldFolder) throws IOException {
@@ -330,10 +339,16 @@ public class WorldCopier {
 
     public static void cleanupTemp(File tempDir) {
         if (tempDir == null || !tempDir.exists()) return;
-        if (!tempDir.getAbsolutePath().contains("minesport_")) return;
 
+        Path candidate = tempDir.toPath().toAbsolutePath().normalize();
         try {
-            Files.walkFileTree(tempDir.toPath(), new SimpleFileVisitor<>() {
+            Path parent = candidate.getParent();
+            if (parent == null || !parent.toRealPath().equals(systemTempRoot())) return;
+            Path fileName = candidate.getFileName();
+            if (fileName == null || !fileName.toString().startsWith("minesport_")) return;
+            if (!Files.isDirectory(candidate, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(candidate)) return;
+
+            Files.walkFileTree(candidate, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                     Files.delete(file);
