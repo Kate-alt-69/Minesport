@@ -8,6 +8,7 @@ import dev.kastrick.minesport.export.LiquidGeometryBuilder;
 import dev.kastrick.minesport.export.Quad;
 import dev.kastrick.minesport.export.SpatialKey;
 import dev.kastrick.minesport.region.BlockData;
+import dev.kastrick.minesport.region.MultipartResolver;
 import dev.kastrick.minesport.resolver.ResolverChain;
 import dev.kastrick.minesport.resolver.RuntimeModelRegistry;
 
@@ -61,6 +62,11 @@ public final class GeometryBuilder extends dev.kastrick.minesport.export.Geometr
         // stale settings.json value turn culling on behind the UI's back.
         this.hiddenBlockCullingEnabled = false;
         this.worldIndex = ExportWorldContext.takeIndex();
+        // The early multipart pass runs before asset resolvers exist and only
+        // publishes topology. Now that the resolver chain is complete, reuse
+        // that exact world index and allow only verified full-cube neighbours
+        // to satisfy the generic "solid" connection target.
+        MultipartResolver.resolveIndex(this.worldIndex, this.classifier);
     }
 
     @Override

@@ -28,7 +28,15 @@ public final class BlockGeometryClassifier {
         BlockState state = resolvers.resolveBlockState(block.blockId);
         if (state == null) return BlockGeometryKind.UNKNOWN;
 
-        List<BlockState.ModelApplication> applications = state.resolve(block.properties);
+        // Weighted variants are position-dependent in Minecraft. Use the same
+        // coordinate-aware selection as the real geometry builder so a block is
+        // never classified from a different model than the one later exported.
+        List<BlockState.ModelApplication> applications = state.resolve(
+            block.properties,
+            block.x,
+            block.y,
+            block.z
+        );
         if (applications.isEmpty()) return BlockGeometryKind.UNKNOWN;
 
         if (state.format == BlockState.Format.MULTIPART && applications.size() > 1) {
