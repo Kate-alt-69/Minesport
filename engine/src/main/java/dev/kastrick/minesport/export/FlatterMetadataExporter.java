@@ -232,9 +232,6 @@ public final class FlatterMetadataExporter {
     }
 
     private static void writeJson(File file, JsonObject root) throws IOException {
-        if (file.getParentFile() != null) file.getParentFile().mkdirs();
-        try (Writer writer = new BufferedWriter(new FileWriter(file))) {
-            GSON.toJson(root, writer);
-        }
+        AtomicFileWriter.write(file, writer -> GSON.toJson(root, writer));
     }
 }

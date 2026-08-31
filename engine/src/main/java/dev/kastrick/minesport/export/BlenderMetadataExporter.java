@@ -114,9 +114,7 @@ public final class BlenderMetadataExporter {
         capabilities.addProperty("flatterLightPlacement", root.has("flatterObjects"));
         root.add("capabilities", capabilities);
 
-        try (Writer writer = new BufferedWriter(new FileWriter(sidecar))) {
-            GSON.toJson(root, writer);
-        }
+        AtomicFileWriter.write(sidecar, writer -> GSON.toJson(root, writer));
         return sidecar;
     }
 
