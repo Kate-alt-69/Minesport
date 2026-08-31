@@ -86,10 +86,12 @@ fn main() -> anyhow::Result<()> {
     diagnostics::append(&format!("Persistent diagnostics log: {}", log.display()));
     install_panic_hook();
 
+    let engine_worker_mode = std::env::args().nth(1).as_deref() == Some("--engine-worker");
+
     // The legacy self-worker fallback must be just as self-contained as the
     // installed sidecar. Provision/select the engine JDK before app::handle_cli
     // hands --engine-worker to the IPC relay.
-    if std::env::args().nth(1).as_deref() == Some("--engine-worker") {
+    if engine_worker_mode {
         let _ = engine_java::prepare_engine_java()?;
     }
 
@@ -105,11 +107,13 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // A network check never blocks Workbench startup. If an earlier session
-    // already staged a fully verified engine-only installer, apply it now while
-    // no sidecar process is alive, then check for future updates in background.
+    // Only the real GUI process owns update policy. A self-worker must never
+    // apply/stage updates or raise UAC while acting as the backend fallback.
+    // A network check never blocks Workbench startup: verified packages are
+    // staged in background and applied by a later GUI launch before it starts
+    // any engine process.
     #[cfg(windows)]
-    {
+    if !engine_worker_mode {
         if let Err(error) = engine_update::apply_staged_update() {
             diagnostics::Logger::new("ENGINE").child("UPDATE").warn(
                 "EngineStagedUpdateUnavailable",
