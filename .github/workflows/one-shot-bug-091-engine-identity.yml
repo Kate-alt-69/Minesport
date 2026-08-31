@@ -1,0 +1,146 @@
+name: One Shot Engine Identity Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-bug-091-engine-identity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync latest main
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - name: Patch engine identity contracts
+        shell: python
+        run: |
+          from pathlib import Path
+
+          runtime = Path("desktop/src/runtime.rs")
+          text = runtime.read_text(encoding="utf-8")
+          old = '''const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
+          const FABRIC_EXPORT_WORKER_BYTES: &[u8] =
+              include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-fabric.jar"));'''.replace("          ", "")
+          new = '''const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
+          const ENGINE_VERSION_RAW: &str = include_str!("../../engine/VERSION");
+          const FABRIC_EXPORT_WORKER_BYTES: &[u8] =
+              include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-fabric.jar"));'''.replace("          ", "")
+          if text.count(old) != 1:
+              raise SystemExit("runtime.rs engine-byte anchor moved; refusing automatic patch")
+          text = text.replace(old, new, 1)
+
+          old = '''pub fn materialize_engine() -> Result<PathBuf> {
+              materialize_runtime_asset(
+                  "minesport-engine-0.2.1.jar",
+                  ".minesport-engine-0.2.1.tmp",
+                  ENGINE_BYTES,
+              )
+          }'''.replace("          ", "")
+          new = '''pub fn materialize_engine() -> Result<PathBuf> {
+              let version = ENGINE_VERSION_RAW.trim();
+              if version.is_empty() {
+                  bail!("engine/VERSION must not be empty");
+              }
+              if !version.bytes().all(|byte| {
+                  byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_')
+              }) {
+                  bail!("engine/VERSION contains unsafe cache-name characters");
+              }
+              let name = format!("minesport-engine-{version}.jar");
+              let temporary_name = format!(".minesport-engine-{version}.tmp");
+              materialize_runtime_asset(&name, &temporary_name, ENGINE_BYTES)
+          }'''.replace("          ", "")
+          if text.count(old) != 1:
+              raise SystemExit("runtime.rs materialize_engine anchor moved; refusing automatic patch")
+          runtime.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          app = Path("desktop/src/app.rs")
+          text = app.read_text(encoding="utf-8")
+          old = '''        "workerInfo" => append_diagnostic(&ui, &format!("[backend] {}", response.message)),
+                  "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
+                  "pong" => {
+                      ui.set_engine_ready(true);
+                      ui.set_engine_status("ENGINE READY".into());
+                      ui.set_task_title("READY".into());
+                      ui.set_task_detail("Ready".into());
+                      append_diagnostic(&ui, "IPC <- pong");
+                  }'''.replace("          ", "")
+          new = '''        "workerInfo" => {
+                      let message = response.message.clone();
+                      append_diagnostic(&ui, &format!("[backend] {message}"));
+                      if response.percent > 0 {
+                          ui.set_engine_ready(false);
+                          ui.set_engine_status("ENGINE STARTING".into());
+                          ui.set_task_active(true);
+                          ui.set_task_progress((response.percent.clamp(0, 100) as f32) / 100.0);
+                          ui.set_task_title("ENGINE STARTING".into());
+                          ui.set_task_detail(message.into());
+                      }
+                  }
+                  "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
+                  "pong" => {
+                      ui.set_engine_ready(true);
+                      ui.set_engine_status("ENGINE READY".into());
+                      ui.set_task_completing(false);
+                      ui.set_task_active(false);
+                      ui.set_task_progress(1.0);
+                      ui.set_task_title("READY".into());
+                      ui.set_task_detail("Ready".into());
+                      append_diagnostic(&ui, "IPC <- pong");
+                  }'''.replace("          ", "")
+          if text.count(old) != 1:
+              raise SystemExit("app.rs workerInfo/pong anchor moved; refusing automatic patch")
+          app.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+      - name: Remove one-shot workflow
+        run: rm -f .github/workflows/one-shot-bug-091-engine-identity.yml
+
+      - name: Validate patch
+        run: |
+          git diff --check
+          grep -q 'ENGINE_VERSION_RAW.*engine/VERSION' desktop/src/runtime.rs
+          grep -q 'minesport-engine-{version}.jar' desktop/src/runtime.rs
+          grep -q 'ui.set_engine_status("ENGINE STARTING"' desktop/src/app.rs
+          grep -q 'ui.set_task_active(false)' desktop/src/app.rs
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
+      - name: Install Slint dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+
+      - name: Check and test Rust desktop
+        env:
+          MINESPORT_FAST_CHECK: "1"
+        run: |
+          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+      - name: Commit tested fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "FIX | BUG-091 Align engine startup and payload identity"
+          git pull --rebase origin main
+          git push origin HEAD:main
