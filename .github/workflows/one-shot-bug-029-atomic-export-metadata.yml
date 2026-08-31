@@ -1,0 +1,56 @@
+name: One Shot BUG-029 Atomic Export Metadata
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/bug_029_atomic_export_metadata.py"
+      - ".github/workflows/one-shot-bug-029-atomic-export-metadata.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: |
+          python3 -m py_compile .github/bug_029_atomic_export_metadata.py
+          python3 .github/bug_029_atomic_export_metadata.py
+          git diff --check
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Test Java engine
+        working-directory: engine
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace test
+
+      - name: Commit tested source fix and remove one-shot gate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            engine/src/main/java/dev/kastrick/minesport/export/AtomicFileWriter.java \
+            engine/src/main/java/dev/kastrick/minesport/export/BlenderMetadataExporter.java \
+            engine/src/main/java/dev/kastrick/minesport/export/FlatterMetadataExporter.java \
+            engine/src/test/java/dev/kastrick/minesport/export/AtomicFileWriterTest.java
+          git rm \
+            .github/bug_029_atomic_export_metadata.py \
+            .github/workflows/one-shot-bug-029-atomic-export-metadata.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-029 Publish export metadata atomically"
+          git push origin HEAD:main
