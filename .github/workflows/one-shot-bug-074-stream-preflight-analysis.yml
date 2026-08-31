@@ -1,0 +1,64 @@
+name: One Shot BUG-074 Streaming Preflight Analysis
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/bug_074_stream_preflight_analysis.py"
+      - ".github/workflows/one-shot-bug-074-stream-preflight-analysis.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: |
+          python3 -m py_compile .github/bug_074_stream_preflight_analysis.py
+          python3 .github/bug_074_stream_preflight_analysis.py
+          git diff --check
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
+      - name: Install Slint build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev
+
+      - name: Test Rust desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: "1"
+        run: |
+          cargo check --locked --all-targets
+          cargo test --locked --all-targets
+
+      - name: Commit tested source fix and remove one-shot gate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add desktop/src/app.rs
+          git rm \
+            .github/bug_074_stream_preflight_analysis.py \
+            .github/workflows/one-shot-bug-074-stream-preflight-analysis.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-074 Stream preflight analysis"
+          git push origin HEAD:main
