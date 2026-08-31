@@ -280,8 +280,6 @@ public final class GltfPostProcessor {
     }
 
     private static JsonArray array(JsonObject root, String key) {
-        if (root.has("nodes") && "nodes".equals(key) && root.get("nodes").isJsonArray()) return root.getAsJsonArray("nodes");
-        if (root.has("scenes") && "scenes".equals(key) && root.get("scenes").isJsonArray()) return root.getAsJsonArray("scenes");
         if (root.has(key) && root.get(key).isJsonArray()) return root.getAsJsonArray(key);
         JsonArray result = new JsonArray();
         root.add(key, result);
