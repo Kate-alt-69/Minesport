@@ -352,8 +352,8 @@ jobs:
       - name: Smoke test Rust desktop + engine artifacts
         shell: pwsh
         run: |
-          & .\dist\source\Minesport.exe --version
-          if ($LASTEXITCODE -ne 0) { throw 'Rust desktop --version smoke test failed.' }
+          $desktop = Start-Process -FilePath .\dist\source\Minesport.exe -ArgumentList '--version' -Wait -PassThru
+          if ($desktop.ExitCode -ne 0) { throw "Rust desktop --version smoke test failed with exit code $($desktop.ExitCode)." }
           $identityText = (& .\dist\source\minesport-engine.exe --identity | Out-String).Trim()
           if ($LASTEXITCODE -ne 0) { throw 'Engine sidecar identity smoke test failed.' }
           $identity = $identityText | ConvertFrom-Json
