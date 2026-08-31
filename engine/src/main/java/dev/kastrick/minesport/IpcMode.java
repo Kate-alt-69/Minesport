@@ -857,52 +857,25 @@ public class IpcMode {
 
         try {
             log("Generating heightmap (scale=" + scale + ")...");
-            String base64 = dev.kastrick.minesport.region.HeightmapGenerator
-                .generateBase64Png(regionDir, scale);
-            if (base64 == null) {
+            HeightmapGenerator.HeightmapResult heightmap = HeightmapGenerator.generate(regionDir, scale);
+            if (heightmap == null) {
                 error("No region files found");
                 return;
             }
-
-            File[] mcaFiles = regionDir.listFiles((directory, name) -> name.endsWith(".mca"));
-            int minRegionX = Integer.MAX_VALUE;
-            int minRegionZ = Integer.MAX_VALUE;
-            int maxRegionX = Integer.MIN_VALUE;
-            int maxRegionZ = Integer.MIN_VALUE;
-
-            if (mcaFiles != null) {
-                for (File file : mcaFiles) {
-                    String[] parts = file.getName().split("\\.");
-                    if (parts.length < 4) continue;
-                    try {
-                        int regionX = Integer.parseInt(parts[1]);
-                        int regionZ = Integer.parseInt(parts[2]);
-                        minRegionX = Math.min(minRegionX, regionX);
-                        minRegionZ = Math.min(minRegionZ, regionZ);
-                        maxRegionX = Math.max(maxRegionX, regionX);
-                        maxRegionZ = Math.max(maxRegionZ, regionZ);
-                    } catch (NumberFormatException ignored) {}
-                }
+            if (heightmap.scale() != scale) {
+                log(
+                    "Heightmap scale increased from " + scale + " to " + heightmap.scale()
+                        + " to stay inside the safe raster budget"
+                );
             }
-
-            if (minRegionX == Integer.MAX_VALUE) {
-                error("No valid region coordinates found");
-                return;
-            }
-
-            final int minX = minRegionX * 512;
-            final int minZ = minRegionZ * 512;
-            final int maxX = (maxRegionX + 1) * 512;
-            final int maxZ = (maxRegionZ + 1) * 512;
-            final String imageData = base64;
 
             send("heightmap", json -> {
-                json.addProperty("image", imageData);
-                json.addProperty("minX", minX);
-                json.addProperty("minZ", minZ);
-                json.addProperty("maxX", maxX);
-                json.addProperty("maxZ", maxZ);
-                json.addProperty("scale", scale);
+                json.addProperty("image", heightmap.base64Png());
+                json.addProperty("minX", heightmap.minX());
+                json.addProperty("minZ", heightmap.minZ());
+                json.addProperty("maxX", heightmap.maxX());
+                json.addProperty("maxZ", heightmap.maxZ());
+                json.addProperty("scale", heightmap.scale());
             });
         } catch (Exception exception) {
             error(failureDetails("Heightmap failed", exception));

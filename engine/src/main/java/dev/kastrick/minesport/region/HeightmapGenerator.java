@@ -116,9 +116,38 @@ public class HeightmapGenerator {
     }
 
     private static final int[] DEFAULT_COLOR = {130, 90, 140};
+    // TYPE_INT_RGB uses an int per pixel. Keep the raw raster near 64 MiB so
+    // PNG encoding/base64 and the Rust RGBA copy still have comfortable headroom.
+    static final long MAX_HEIGHTMAP_PIXELS = 16L * 1024L * 1024L;
+
+    public record HeightmapResult(
+        String base64Png,
+        int scale,
+        int minX,
+        int minZ,
+        int maxX,
+        int maxZ
+    ) {}
+
+    record HeightmapLayout(
+        int scale,
+        int regionPx,
+        int width,
+        int height,
+        int minX,
+        int minZ,
+        int maxX,
+        int maxZ
+    ) {}
 
     /** Generate a top-down PNG image of the world as a base64 string. */
     public static String generateBase64Png(File regionDir, int scale) throws IOException {
+        HeightmapResult result = generate(regionDir, scale);
+        return result == null ? null : result.base64Png();
+    }
+
+    /** Generate a bounded heightmap and return the effective raster scale/bounds. */
+    public static HeightmapResult generate(File regionDir, int scale) throws IOException {
         if (scale < 1 || scale > 512) {
             throw new IllegalArgumentException("Heightmap scale must be between 1 and 512 blocks per pixel");
         }
@@ -146,15 +175,11 @@ public class HeightmapGenerator {
 
         if (regions.isEmpty()) return null;
 
-        final int regionBlocks = 512;
-        final int regionPx = (regionBlocks + scale - 1) / scale;
-        long imgWLong = (long) (maxRX - minRX + 1) * regionPx;
-        long imgHLong = (long) (maxRZ - minRZ + 1) * regionPx;
-        if (imgWLong <= 0 || imgHLong <= 0 || imgWLong > Integer.MAX_VALUE || imgHLong > Integer.MAX_VALUE) {
-            throw new IOException("Heightmap dimensions exceed supported image bounds: " + imgWLong + "x" + imgHLong);
-        }
-        int imgW = (int) imgWLong;
-        int imgH = (int) imgHLong;
+        HeightmapLayout layout = chooseLayout(minRX, minRZ, maxRX, maxRZ, scale);
+        final int effectiveScale = layout.scale();
+        final int regionPx = layout.regionPx();
+        int imgW = layout.width();
+        int imgH = layout.height();
 
         BufferedImage img = new BufferedImage(imgW, imgH, BufferedImage.TYPE_INT_RGB);
         for (int y = 0; y < imgH; y++) {
@@ -174,7 +199,7 @@ public class HeightmapGenerator {
                     (r.x() - minRX) * regionPx,
                     (r.z() - minRZ) * regionPx,
                     regionPx,
-                    scale
+                    effectiveScale
                 );
             } catch (IOException e) {
                 failedRegions++;
@@ -188,10 +213,80 @@ public class HeightmapGenerator {
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageIO.write(img, "PNG", baos);
-        return java.util.Base64.getEncoder().encodeToString(baos.toByteArray());
+        String encoded = java.util.Base64.getEncoder().encodeToString(baos.toByteArray());
+        return new HeightmapResult(
+            encoded,
+            effectiveScale,
+            layout.minX(),
+            layout.minZ(),
+            layout.maxX(),
+            layout.maxZ()
+        );
     }
 
-    private static boolean isRegionFile(String name) {
+    static HeightmapLayout chooseLayout(
+        int minRX,
+        int minRZ,
+        int maxRX,
+        int maxRZ,
+        int requestedScale
+    ) throws IOException {
+        if (requestedScale < 1 || requestedScale > 512) {
+            throw new IllegalArgumentException("Heightmap scale must be between 1 and 512 blocks per pixel");
+        }
+
+        long spanX = (long)maxRX - (long)minRX + 1L;
+        long spanZ = (long)maxRZ - (long)minRZ + 1L;
+        if (spanX <= 0L || spanZ <= 0L) {
+            throw new IOException("Heightmap region bounds are invalid");
+        }
+
+        long minXLong = (long)minRX * 512L;
+        long minZLong = (long)minRZ * 512L;
+        long maxXLong = ((long)maxRX + 1L) * 512L;
+        long maxZLong = ((long)maxRZ + 1L) * 512L;
+        if (
+            minXLong < Integer.MIN_VALUE || minZLong < Integer.MIN_VALUE ||
+            maxXLong > Integer.MAX_VALUE || maxZLong > Integer.MAX_VALUE
+        ) {
+            throw new IOException(
+                "Heightmap region coordinates exceed supported world bounds: "
+                    + minRX + "," + minRZ + " to " + maxRX + "," + maxRZ
+            );
+        }
+
+        int effectiveScale = requestedScale;
+        while (true) {
+            int regionPx = (512 + effectiveScale - 1) / effectiveScale;
+            long width = spanX * (long)regionPx;
+            long height = spanZ * (long)regionPx;
+            boolean dimensionsFit = width > 0L && height > 0L
+                && width <= Integer.MAX_VALUE && height <= Integer.MAX_VALUE;
+            boolean pixelsFit = dimensionsFit && width <= MAX_HEIGHTMAP_PIXELS / height;
+            if (pixelsFit) {
+                return new HeightmapLayout(
+                    effectiveScale,
+                    regionPx,
+                    (int)width,
+                    (int)height,
+                    (int)minXLong,
+                    (int)minZLong,
+                    (int)maxXLong,
+                    (int)maxZLong
+                );
+            }
+
+            if (effectiveScale >= 512) break;
+            effectiveScale = Math.min(512, effectiveScale * 2);
+        }
+
+        throw new IOException(
+            "Heightmap world span is too large for the safe raster budget even at scale 512: "
+                + spanX + "x" + spanZ + " regions"
+        );
+    }
+
+    static boolean isRegionFile(String name) {
         String lower = name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".mca") || lower.endsWith(".mcr");
     }
