@@ -10,6 +10,8 @@ mod bridge_compat;
 mod bridge_family;
 mod bridge_java;
 mod diagnostics;
+#[cfg(windows)]
+mod engine_update;
 mod error_reporter;
 mod heightmap_cache;
 #[cfg_attr(not(windows), allow(dead_code, unused_imports))]
@@ -93,6 +95,21 @@ fn main() -> anyhow::Result<()> {
             diagnostics::append(&format!("Minesport Rust CLI command failed: {error:#}"));
             return Err(error);
         }
+    }
+
+    // A network check never blocks Workbench startup. If an earlier session
+    // already staged a fully verified engine-only installer, apply it now while
+    // no sidecar process is alive, then check for future updates in background.
+    #[cfg(windows)]
+    {
+        if let Err(error) = engine_update::apply_staged_update() {
+            diagnostics::Logger::new("ENGINE").child("UPDATE").warn(
+                "EngineStagedUpdateUnavailable",
+                "staged engine update could not be applied; Minesport will use the verified local engine or embedded fallback",
+                &[("error", format!("{error:#}"))],
+            );
+        }
+        engine_update::spawn_background_check();
     }
 
     if error_reporter::should_supervise_current_invocation() {

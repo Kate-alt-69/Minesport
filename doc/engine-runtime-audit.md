@@ -53,3 +53,29 @@ The engine worker enumerates `JAVA_HOME`, PATH, launcher runtimes, and standard 
 Export first calls `RegionReader.countSelectedChunks()` across every selected block/entity region and then makes a second pass to actually decode those regions. The count gives accurate progress, but it is an extra pass over region metadata before useful export work begins.
 
 **Direction:** Consider returning discovered chunk totals from the normal read pipeline or using a cheap region-header estimate for progress so parsing and progress accounting share one traversal.
+
+---
+
+## ENGINE-AUDIT-005 — Engine requires Java 22+ but does not provision a known-good runtime
+
+**Severity:** High  
+**Area:** Engine runtime availability  
+**File:** `desktop/src/ipc.rs`
+
+The engine worker requires Java 22+ and searches `JAVA_HOME`, PATH, launcher runtimes, and standard Windows JDK folders. If none of those locations contains a suitable runtime, backend startup fails even though Minesport itself installed correctly.
+
+**Impact:** A clean machine can have a valid `Minesport.exe` and `minesport-engine.exe` but still be unable to start the Java engine. Users are forced to understand and repair a Java dependency that should ideally be owned by Minesport.
+
+**Direction:** Add a Minesport-managed Java runtime path with verified download/hash metadata and prefer that runtime before probing arbitrary machine installations. Keep external Java discovery as a fallback for developers and advanced users.
+
+---
+
+## ENGINE-AUDIT-006 — Updating a live sidecar would conflict with Windows executable locking and elevation
+
+**Severity:** High  
+**Area:** Engine updater / process control  
+**Files:** `desktop/src/engine_update.rs`, `installer/windows/minesport.nsi`
+
+A healthy `minesport-engine.exe` is a running child process for most of the desktop session. Windows can prevent the installer from renaming/replacing that executable while it is live, and the per-machine NSIS installer also requires elevation. Triggering replacement during an export would therefore be both unreliable and poor UX.
+
+**Control implemented:** Engine update discovery/download runs in the background and only stages a package after GitHub SHA-256 and Authenticode publisher verification. The staged package is applied on the next launch before `app::run()` starts the sidecar. Missing/corrupt engines continue to use the embedded self-worker fallback until that clean install point, so an update never tears down an active export merely to replace the executable.
