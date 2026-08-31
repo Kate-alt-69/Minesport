@@ -12,6 +12,7 @@ mod bridge_java;
 mod diagnostics;
 mod error_reporter;
 mod heightmap_cache;
+#[cfg_attr(not(windows), allow(dead_code, unused_imports))]
 mod ipc;
 mod launcher;
 mod preview;

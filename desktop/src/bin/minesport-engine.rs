@@ -5,6 +5,7 @@ mod runtime;
 #[path = "../diagnostics.rs"]
 mod diagnostics;
 #[allow(dead_code)]
+#[cfg_attr(not(windows), allow(unused_imports))]
 #[path = "../ipc.rs"]
 mod ipc;
 
