@@ -4,7 +4,16 @@ plugins {
 }
 
 group = 'dev.kastrick'
-version = '0.2.1'
+
+def engineVersionFile = file('VERSION')
+if (!engineVersionFile.isFile()) {
+    throw new GradleException("Missing engine/VERSION")
+}
+def engineVersion = engineVersionFile.getText('UTF-8').trim()
+if (engineVersion.isEmpty()) {
+    throw new GradleException("engine/VERSION must not be empty")
+}
+version = engineVersion
 
 java {
     sourceCompatibility = JavaVersion.VERSION_22
@@ -40,7 +49,10 @@ test {
 
 jar {
     manifest {
-        attributes 'Main-Class': 'dev.kastrick.minesport.Main'
+        attributes(
+            'Main-Class': 'dev.kastrick.minesport.Main',
+            'Implementation-Version': project.version
+        )
     }
     // Fat jar - include all deps
     from {

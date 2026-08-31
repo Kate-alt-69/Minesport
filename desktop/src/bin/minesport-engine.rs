@@ -12,7 +12,9 @@ mod ipc;
 use anyhow::{Result, bail};
 
 const ENGINE_NAME: &str = "minesport-engine";
-const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+// The sidecar owns an independent version from the desktop package. Keep this
+// file byte-exact (no trailing newline) so the value is usable as a const.
+const ENGINE_VERSION: &str = include_str!("../../../engine/VERSION");
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
