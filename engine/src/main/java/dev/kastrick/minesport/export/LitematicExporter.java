@@ -4,6 +4,7 @@ import dev.kastrick.minesport.nbt.NbtWriter;
 import dev.kastrick.minesport.region.BlockData;
 import dev.kastrick.minesport.region.BlockEntityData;
 import dev.kastrick.minesport.region.EntityData;
+import dev.kastrick.minesport.region.LegacyStateResolver;
 import dev.kastrick.minesport.region.ScheduledTickData;
 
 import java.io.File;
@@ -38,9 +39,15 @@ public final class LitematicExporter {
 
     private record StateKey(String blockId, SortedMap<String, String> properties) {
         static StateKey of(BlockData block) {
+            TreeMap<String, String> properties = new TreeMap<>(block.properties);
+            // These keys are Minesport decoder bookkeeping, not Minecraft
+            // block-state properties. Emitting them makes old-world litematic
+            // palettes contain states Minecraft/Litematica cannot resolve.
+            properties.remove("legacy_id");
+            properties.remove("legacy_data");
             return new StateKey(
                 block.blockId,
-                Collections.unmodifiableSortedMap(new TreeMap<>(block.properties))
+                Collections.unmodifiableSortedMap(properties)
             );
         }
 
@@ -175,6 +182,10 @@ public final class LitematicExporter {
         File output,
         NbtWriter.ProgressCallback writeProgress
     ) throws IOException {
+        // Litematica bypasses GeometryBuilder/MultipartResolver entirely, so
+        // finish legacy neighbour-derived state before palette construction.
+        LegacyStateResolver.resolve(blocks);
+
         int minX = Math.min(firstX, secondX);
         int minY = Math.min(firstY, secondY);
         int minZ = Math.min(firstZ, secondZ);
