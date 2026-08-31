@@ -222,6 +222,7 @@ public final class ChunkBlockDecoder {
     ) {
         NbtCompound level = chunk.has("Level") ? chunk.getCompound("Level") : chunk;
         if (!level.has("Sections")) return;
+        int legacyStart = out.size();
 
         for (Object sectionObject : level.getList("Sections")) {
             if (!(sectionObject instanceof NbtCompound section)) continue;
@@ -263,6 +264,11 @@ public final class ChunkBlockDecoder {
                 ));
             }
         }
+
+        // Pre-flattening neighbour-derived state (currently two-block doors)
+        // must be resolved after every section in this chunk has been decoded.
+        // Door halves share X/Z, so they cannot cross a chunk boundary.
+        LegacyStateResolver.resolve(out.subList(legacyStart, out.size()));
     }
 
     private static byte[] safeByteArray(NbtCompound compound, String key) {
