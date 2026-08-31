@@ -10,7 +10,7 @@ import javax.swing.*;
 public class Main {
 
     public static void main(String[] args) {
-        // IPC mode — launched by Go wrapper
+        // IPC mode — launched by Minesport's Rust backend worker
         if (args.length > 0 && args[0].equals("--ipc")) {
             IpcMode.run();
             return;

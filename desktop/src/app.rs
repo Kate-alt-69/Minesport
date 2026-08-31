@@ -22,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-const VERSION: &str = "0.2.1";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BACKEND_RESTART_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, Copy)]
@@ -119,7 +119,7 @@ pub fn run() -> Result<()> {
     append_diagnostic(&ui, "Runtime registry: Rust binary registry.data capture + isolated loader worker");
     append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover supported loader/version families");
     append_diagnostic(&ui, "World context: launcher/instance discovery is authoritative when available; folder inference is fallback-only");
-    append_diagnostic(&ui, "3D selection: camera-derived voxel DDA + Fyne point A / point B box workflow");
+    append_diagnostic(&ui, "3D selection: Rust voxel picking + point A / point B box workflow");
     append_diagnostic(&ui, "3D camera: retained Rust scene supports MMB orbit, Shift+MMB pan, wheel dolly and F6 fit without IPC reruns");
 
     let ping_engine = engine.clone();

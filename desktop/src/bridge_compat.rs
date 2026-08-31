@@ -281,7 +281,7 @@ where
     set_property(
         &safe_join(workspace, Path::new("gradle.properties"))?,
         "mod_version",
-        "0.2.1",
+        env!("CARGO_PKG_VERSION"),
     )?;
     set_property(
         &safe_join(workspace, Path::new("gradle.properties"))?,

@@ -272,7 +272,7 @@ pub fn initialize() -> Result<PathBuf> {
 
     Logger::new("DESKTOP").info(
         "DesktopSessionStart",
-        "Minesport 0.2.0 Rust/Slint session started",
+        format!("Minesport {} Rust/Slint session started", env!("CARGO_PKG_VERSION")),
         &[
             ("pid", std::process::id().to_string()),
             ("operations_log", operations.display().to_string()),
