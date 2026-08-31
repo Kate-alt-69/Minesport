@@ -376,7 +376,7 @@ if (-not $DesktopOnly) {
     Write-Host ''
 }
 
-Write-Host '[3/3] Rust + Slint desktop...' -ForegroundColor Yellow
+Write-Host '[3/3] Rust + Slint desktop + engine sidecar...' -ForegroundColor Yellow
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     throw 'Rust/Cargo was not found. Install rustup from https://rustup.rs, reopen PowerShell, then rerun.'
 }
@@ -385,6 +385,7 @@ if (-not (Get-Command rustc -ErrorAction SilentlyContinue)) {
 }
 
 $desktopOut = Join-Path $Root 'desktop\dist\minesport.exe'
+$engineSidecarBuildOut = Join-Path $Root 'desktop\target\release\minesport-engine.exe'
 $desktopFingerprint = Get-CompositeFingerprint @(
     (Join-Path $Root 'desktop'),
     (Join-Path $Root 'doc')
@@ -409,7 +410,13 @@ foreach ($bridge in $bridgeSpecs) {
 }
 
 try {
-    if (-not (Test-NeedsRebuild 'desktop' $desktopFingerprint $desktopOut (Join-Path $Root 'desktop'))) {
+    $desktopNeedsBuild = Test-NeedsRebuild 'desktop' $desktopFingerprint $desktopOut (Join-Path $Root 'desktop')
+    if (-not $desktopNeedsBuild -and -not (Test-Path $engineSidecarBuildOut)) {
+        Write-Host '  -> engine sidecar output missing, forcing Cargo build' -ForegroundColor Yellow
+        $desktopNeedsBuild = $true
+    }
+
+    if (-not $desktopNeedsBuild) {
         Write-Host '  -> desktop inputs unchanged, SKIP Cargo test/build' -ForegroundColor Green
     } else {
         Push-Location (Join-Path $Root 'desktop')
@@ -424,13 +431,16 @@ try {
             & cargo test
             if ($LASTEXITCODE -ne 0) { throw 'Rust/Slint desktop tests failed.' }
 
-            Write-Host '  -> building optimized Rust + Slint desktop...' -ForegroundColor DarkGray
-            & cargo build --release --bin minesport
-            if ($LASTEXITCODE -ne 0) { throw 'Rust/Slint desktop release build failed.' }
+            Write-Host '  -> building optimized Minesport desktop + engine sidecar...' -ForegroundColor DarkGray
+            & cargo build --release --bin minesport --bin minesport-engine
+            if ($LASTEXITCODE -ne 0) { throw 'Rust/Slint desktop + engine sidecar release build failed.' }
 
             $rustExe = Join-Path $Root 'desktop\target\release\minesport.exe'
             if (-not (Test-Path $rustExe)) {
                 throw "Rust build completed but did not produce $rustExe"
+            }
+            if (-not (Test-Path $engineSidecarBuildOut)) {
+                throw "Rust build completed but did not produce $engineSidecarBuildOut"
             }
 
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $desktopOut) | Out-Null
@@ -450,11 +460,50 @@ try {
 }
 
 if (-not (Test-Path $desktopOut)) { throw "Desktop output is missing: $desktopOut" }
+if (-not (Test-Path $engineSidecarBuildOut)) { throw "Engine sidecar output is missing: $engineSidecarBuildOut" }
 $sourceOut = Join-Path $Root 'dist\source'
 New-Item -ItemType Directory -Force -Path $sourceOut | Out-Null
 $standaloneExe = Join-Path $sourceOut 'Minesport.exe'
+$engineSidecarOut = Join-Path $sourceOut 'minesport-engine.exe'
+$engineManifestOut = Join-Path $sourceOut 'minesport-engine.json'
 Copy-Item -Force $desktopOut $standaloneExe
+Copy-Item -Force $engineSidecarBuildOut $engineSidecarOut
+
+$identityText = (& $engineSidecarOut --identity | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($identityText)) {
+    throw 'minesport-engine.exe did not return a valid --identity response.'
+}
+try {
+    $engineIdentity = $identityText | ConvertFrom-Json
+} catch {
+    throw "Could not parse minesport-engine.exe --identity output: $identityText"
+}
+if ($engineIdentity.name -ne 'minesport-engine') {
+    throw "Unexpected engine identity name: $($engineIdentity.name)"
+}
+if ([string]::IsNullOrWhiteSpace([string]$engineIdentity.version)) {
+    throw 'Engine identity did not include a version.'
+}
+if ([int]$engineIdentity.protocolVersion -le 0) {
+    throw 'Engine identity did not include a valid protocolVersion.'
+}
+
+$engineFile = Get-Item -LiteralPath $engineSidecarOut
+$engineHash = (Get-FileHash -LiteralPath $engineSidecarOut -Algorithm SHA256).Hash.ToLowerInvariant()
+$engineManifest = [ordered]@{
+    schema = 1
+    version = [string]$engineIdentity.version
+    protocolVersion = [int]$engineIdentity.protocolVersion
+    sha256 = $engineHash
+    size = [int64]$engineFile.Length
+}
+$engineManifestJson = $engineManifest | ConvertTo-Json
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[IO.File]::WriteAllText($engineManifestOut, $engineManifestJson + [Environment]::NewLine, $utf8NoBom)
+
 Write-Host '  Minesport.exe ready.' -ForegroundColor Green
+Write-Host "  minesport-engine.exe ready (v$($engineIdentity.version), protocol $($engineIdentity.protocolVersion))." -ForegroundColor Green
+Write-Host "  Engine SHA-256: $engineHash" -ForegroundColor DarkGray
 
 function Find-NSIS {
     $command = Get-Command makensis.exe -ErrorAction SilentlyContinue
@@ -523,6 +572,8 @@ Write-Host ' Build complete!' -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
 Write-Host ' desktop\dist\minesport.exe' -ForegroundColor Green
 Write-Host ' dist\source\Minesport.exe' -ForegroundColor Green
+Write-Host ' dist\source\minesport-engine.exe' -ForegroundColor Green
+Write-Host ' dist\source\minesport-engine.json' -ForegroundColor Green
 if ($BuildNsisInstaller) { Write-Host " dist\installer\Minesport-$AppVersion-Setup-x64.exe" -ForegroundColor Green }
 if ($BuildInnoInstaller) { Write-Host " dist\installer\Minesport-$AppVersion-Inno-Setup-x64.exe" -ForegroundColor Green }
 if ($BuildMsiInstaller) { Write-Host " dist\installer\Minesport-$AppVersion-x64.msi" -ForegroundColor Green }

@@ -2,10 +2,11 @@ use crate::{diagnostics, runtime};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     env, fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -18,6 +19,8 @@ use std::{
 };
 
 const ENGINE_JAVA_MAJOR: u32 = 22;
+pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
+const ENGINE_SIDECAR_MANIFEST_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Response {
@@ -71,11 +74,162 @@ pub enum EngineEvent {
     ReadEnded(String),
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineSidecarManifest {
+    schema: u32,
+    version: String,
+    protocol_version: u32,
+    sha256: String,
+    size: u64,
+}
+
+#[derive(Debug, Clone)]
+struct BackendLaunch {
+    executable: PathBuf,
+    args: Vec<String>,
+    mode: &'static str,
+    engine_version: String,
+}
+
+impl BackendLaunch {
+    fn resolve() -> Result<Self> {
+        let desktop = env::current_exe().context("resolve current Minesport executable")?;
+
+        #[cfg(windows)]
+        {
+            let sidecar = desktop
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("minesport-engine.exe");
+            if sidecar.is_file() {
+                match validate_engine_sidecar(&sidecar) {
+                    Ok(manifest) => {
+                        diagnostics::Logger::new("IPC").child("UI").info(
+                            "EngineSidecarAccepted",
+                            "verified installed Minesport engine sidecar",
+                            &[
+                                ("executable", sidecar.display().to_string()),
+                                ("version", manifest.version.clone()),
+                                ("protocol", manifest.protocol_version.to_string()),
+                            ],
+                        );
+                        return Ok(Self {
+                            executable: sidecar,
+                            args: Vec::new(),
+                            mode: "sidecar",
+                            engine_version: manifest.version,
+                        });
+                    }
+                    Err(error) => {
+                        diagnostics::Logger::new("IPC").child("UI").warn(
+                            "EngineSidecarRejected",
+                            "installed engine sidecar failed local verification; using embedded fallback worker",
+                            &[
+                                ("executable", sidecar.display().to_string()),
+                                ("error", format!("{error:#}")),
+                            ],
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(Self {
+            executable: desktop,
+            args: vec!["--engine-worker".to_string()],
+            mode: "self-worker-fallback",
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+        })
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.executable);
+        command
+            .args(&self.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        hide_console_window(&mut command);
+        command
+    }
+}
+
+fn validate_engine_sidecar(sidecar: &Path) -> Result<EngineSidecarManifest> {
+    if !sidecar.is_file() {
+        bail!("engine sidecar is unavailable: {}", sidecar.display());
+    }
+    let manifest_path = sidecar.with_file_name("minesport-engine.json");
+    let manifest_bytes = fs::read(&manifest_path)
+        .with_context(|| format!("read engine manifest {}", manifest_path.display()))?;
+    let manifest: EngineSidecarManifest = serde_json::from_slice(&manifest_bytes)
+        .with_context(|| format!("parse engine manifest {}", manifest_path.display()))?;
+    if manifest.schema != ENGINE_SIDECAR_MANIFEST_SCHEMA {
+        bail!(
+            "unsupported engine manifest schema {}; expected {}",
+            manifest.schema,
+            ENGINE_SIDECAR_MANIFEST_SCHEMA
+        );
+    }
+    if manifest.protocol_version != ENGINE_PROTOCOL_VERSION {
+        bail!(
+            "engine IPC protocol {} is incompatible with GUI protocol {}",
+            manifest.protocol_version,
+            ENGINE_PROTOCOL_VERSION
+        );
+    }
+    if manifest.version.trim().is_empty() {
+        bail!("engine manifest version is empty");
+    }
+    let metadata = fs::metadata(sidecar)
+        .with_context(|| format!("inspect engine sidecar {}", sidecar.display()))?;
+    if metadata.len() != manifest.size {
+        bail!(
+            "engine sidecar size mismatch: installed={} manifest={}",
+            metadata.len(),
+            manifest.size
+        );
+    }
+    let expected = manifest.sha256.trim().to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("engine manifest contains an invalid SHA-256 digest");
+    }
+    let actual = sha256_file(sidecar)?;
+    if actual != expected {
+        bail!("engine sidecar SHA-256 mismatch: installed={actual} manifest={expected}");
+    }
+    Ok(manifest)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("open engine sidecar for hashing {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("hash engine sidecar {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hasher.finalize();
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(encoded)
+}
+
 struct EngineInner {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
     events: Sender<EngineEvent>,
-    executable: PathBuf,
+    launch: BackendLaunch,
     restarting: AtomicBool,
     shutting_down: AtomicBool,
 }
@@ -90,9 +244,11 @@ struct RequestCorrelation {
 
 /// UI-side handle to the isolated Minesport backend worker.
 ///
-/// The Slint process never owns Java directly. It starts another copy of the
-/// same Minesport executable in `--engine-worker` mode and speaks the existing
-/// newline JSON protocol to that process. The worker owns the JVM lifecycle.
+/// On Windows, installed builds prefer the independently replaceable
+/// `minesport-engine.exe` sidecar after validating its manifest, protocol, size,
+/// and SHA-256 digest. Development/legacy installs fall back to another copy of
+/// Minesport.exe in `--engine-worker` mode so a missing sidecar never bricks the
+/// desktop during the migration.
 #[derive(Clone)]
 pub struct Engine {
     inner: Arc<EngineInner>,
@@ -102,29 +258,32 @@ impl Engine {
     pub fn start() -> Result<(Self, Receiver<EngineEvent>)> {
         let logger = diagnostics::Logger::new("IPC").child("UI");
         let operation = logger.operation("IpcBackendWorkerStart");
-        let executable = env::current_exe().context("resolve current Minesport executable")?;
+        let launch = BackendLaunch::resolve()?;
         operation.event(
             "IpcBackendWorkerSpawn",
             "starting isolated Minesport backend worker",
-            &[("executable", executable.display().to_string())],
+            &[
+                ("executable", launch.executable.display().to_string()),
+                ("mode", launch.mode.to_string()),
+                ("engine_version", launch.engine_version.clone()),
+            ],
         );
 
-        let mut command = Command::new(&executable);
-        command
-            .arg("--engine-worker")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        hide_console_window(&mut command);
-
+        let mut command = launch.command();
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 operation.failure(
                     "failed to start Minesport backend worker",
-                    &[("error", error.to_string()), ("executable", executable.display().to_string())],
+                    &[
+                        ("error", error.to_string()),
+                        ("executable", launch.executable.display().to_string()),
+                        ("mode", launch.mode.to_string()),
+                    ],
                 );
-                return Err(error).with_context(|| format!("start Minesport backend worker {}", executable.display()));
+                return Err(error).with_context(|| {
+                    format!("start Minesport backend worker {}", launch.executable.display())
+                });
             }
         };
         let pid = child.id();
@@ -135,14 +294,19 @@ impl Engine {
         let (tx, rx) = mpsc::channel();
         let _ = tx.send(EngineEvent::Started {
             pid,
-            process: executable.display().to_string(),
+            process: launch.executable.display().to_string(),
         });
         spawn_stdout_reader(stdout, tx.clone());
         spawn_stderr_reader(stderr, tx.clone());
 
         operation.success(
             "Minesport backend worker started",
-            &[("pid", pid.to_string()), ("executable", executable.display().to_string())],
+            &[
+                ("pid", pid.to_string()),
+                ("executable", launch.executable.display().to_string()),
+                ("mode", launch.mode.to_string()),
+                ("engine_version", launch.engine_version.clone()),
+            ],
         );
         Ok((
             Self {
@@ -150,7 +314,7 @@ impl Engine {
                     stdin: Mutex::new(stdin),
                     child: Mutex::new(child),
                     events: tx,
-                    executable,
+                    launch,
                     restarting: AtomicBool::new(false),
                     shutting_down: AtomicBool::new(false),
                 }),
@@ -197,23 +361,21 @@ impl Engine {
             }
         }
 
-        let executable = self.inner.executable.clone();
+        let launch = self.inner.launch.clone();
         operation.event(
             "IpcBackendWorkerRespawn",
             "restarting isolated Minesport backend worker",
-            &[("executable", executable.display().to_string())],
+            &[
+                ("executable", launch.executable.display().to_string()),
+                ("mode", launch.mode.to_string()),
+                ("engine_version", launch.engine_version.clone()),
+            ],
         );
-        let mut command = Command::new(&executable);
-        command
-            .arg("--engine-worker")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        hide_console_window(&mut command);
+        let mut command = launch.command();
 
         let mut child = command
             .spawn()
-            .with_context(|| format!("restart Minesport backend worker {}", executable.display()))?;
+            .with_context(|| format!("restart Minesport backend worker {}", launch.executable.display()))?;
         let pid = child.id();
         let stdin = child.stdin.take().context("open restarted Minesport backend stdin")?;
         let stdout = child.stdout.take().context("open restarted Minesport backend stdout")?;
@@ -239,13 +401,18 @@ impl Engine {
         let tx = self.inner.events.clone();
         let _ = tx.send(EngineEvent::Started {
             pid,
-            process: executable.display().to_string(),
+            process: launch.executable.display().to_string(),
         });
         spawn_stdout_reader(stdout, tx.clone());
         spawn_stderr_reader(stderr, tx);
         operation.success(
             "Minesport backend worker restarted",
-            &[("pid", pid.to_string()), ("executable", executable.display().to_string())],
+            &[
+                ("pid", pid.to_string()),
+                ("executable", launch.executable.display().to_string()),
+                ("mode", launch.mode.to_string()),
+                ("engine_version", launch.engine_version),
+            ],
         );
         Ok(())
     }

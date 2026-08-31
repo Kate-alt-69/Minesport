@@ -9,6 +9,10 @@ build = "build.rs"
 name = "minesport"
 path = "src/main.rs"
 
+[[bin]]
+name = "minesport-engine"
+path = "src/bin/minesport-engine.rs"
+
 [lints.rust]
 warnings = "deny"
 
