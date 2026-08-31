@@ -34,13 +34,13 @@ This note records engine/runtime concerns found while introducing the independen
 
 **Severity:** Medium  
 **Area:** Rust engine worker startup  
-**File:** `desktop/src/ipc.rs`
+**Files:** `desktop/src/ipc.rs`, `desktop/src/engine_java.rs`, `desktop/src/toolchain.rs`
 
-The engine worker enumerates `JAVA_HOME`, PATH, launcher runtimes, and standard JDK directories, then launches `java -version` with a timeout for candidates until Java 22+ is found. This work repeats after every sidecar process restart.
+The IPC resolver can enumerate several Java candidates and launch version probes until Java 22+ is found. This can be noticeable on machines with multiple old runtimes or aggressive antivirus scanning.
 
-**Impact:** Machines with multiple old Java installs, slow antivirus scanning, or unhealthy launchers can make engine startup/recovery noticeably slower.
+**Control implemented:** Engine-worker startup now resolves/provisions JDK 22 through Minesport's shared toolchain manager first and sets process-local `JAVA_HOME` before the IPC Java resolver runs. That gives `ipc::resolve_java()` a known-good first candidate and keeps the path consistent for both the installed sidecar and the `Minesport.exe --engine-worker` fallback.
 
-**Direction:** Persist the last verified Java executable and its version/file identity, try it first on later starts, and invalidate the cache only when the executable changes or the probe fails.
+**Remaining direction:** The shared toolchain manager still checks ordinary installed JDK locations before its cache. If startup profiling shows those probes are meaningful, persist/validate the last managed runtime identity or prefer an already-valid Minesport cache before broad machine discovery.
 
 ---
 
@@ -56,21 +56,19 @@ Export first calls `RegionReader.countSelectedChunks()` across every selected bl
 
 ---
 
-## ENGINE-AUDIT-005 — Engine requires Java 22+ but does not provision a known-good runtime
+## ENGINE-AUDIT-005 — Engine requires Java 22+ and originally depended on machine Java state
 
 **Severity:** High  
 **Area:** Engine runtime availability  
-**File:** `desktop/src/ipc.rs`
+**Files:** `desktop/src/engine_java.rs`, `desktop/src/toolchain.rs`, `desktop/src/ipc.rs`
 
-The engine worker requires Java 22+ and searches `JAVA_HOME`, PATH, launcher runtimes, and standard Windows JDK folders. If none of those locations contains a suitable runtime, backend startup fails even though Minesport itself installed correctly.
+The Java engine requires Java 22+. Previously the engine worker only searched `JAVA_HOME`, PATH, launcher runtimes, and standard JDK folders, so a clean machine could have valid Minesport binaries but still fail backend startup.
 
-**Impact:** A clean machine can have a valid `Minesport.exe` and `minesport-engine.exe` but still be unable to start the Java engine. Users are forced to understand and repair a Java dependency that should ideally be owned by Minesport.
-
-**Direction:** Add a Minesport-managed Java runtime path with verified download/hash metadata and prefer that runtime before probing arbitrary machine installations. Keep external Java discovery as a fallback for developers and advanced users.
+**Control implemented:** Both `minesport-engine` and the legacy self-worker fallback now call the existing Minesport toolchain manager before the IPC relay starts. It reuses a compatible installed/cached JDK or downloads Eclipse Temurin JDK 22 into Minesport's own toolchain cache, then exposes that home only to the worker process through `JAVA_HOME`.
 
 ---
 
-## ENGINE-AUDIT-006 — Updating a live sidecar would conflict with Windows executable locking and elevation
+## ENGINE-AUDIT-006 — Updating a live sidecar conflicts with Windows executable locking and elevation
 
 **Severity:** High  
 **Area:** Engine updater / process control  
@@ -79,3 +77,17 @@ The engine worker requires Java 22+ and searches `JAVA_HOME`, PATH, launcher run
 A healthy `minesport-engine.exe` is a running child process for most of the desktop session. Windows can prevent the installer from renaming/replacing that executable while it is live, and the per-machine NSIS installer also requires elevation. Triggering replacement during an export would therefore be both unreliable and poor UX.
 
 **Control implemented:** Engine update discovery/download runs in the background and only stages a package after GitHub SHA-256 and Authenticode publisher verification. The staged package is applied on the next launch before `app::run()` starts the sidecar. Missing/corrupt engines continue to use the embedded self-worker fallback until that clean install point, so an update never tears down an active export merely to replace the executable.
+
+---
+
+## ENGINE-AUDIT-007 — Toolchain JDK metadata currently permits a missing checksum
+
+**Severity:** Medium  
+**Area:** Toolchain download integrity  
+**File:** `desktop/src/toolchain.rs`
+
+The Adoptium package metadata parser accepts an empty `checksum`, and the downloader only calls SHA-256 verification when that string is non-empty. Adoptium normally publishes the checksum, but the current code treats its absence as permission to continue.
+
+**Impact:** The engine's new managed-Java path inherits a fail-open integrity edge case from the existing Bridge toolchain downloader. HTTPS still protects transport, but Minesport should not silently weaken from explicit package digest verification to transport-only trust.
+
+**Direction:** Make a non-empty, valid SHA-256 checksum mandatory before downloading/extracting a JDK. Reject metadata without one and keep the old cached runtime/fallback path instead.

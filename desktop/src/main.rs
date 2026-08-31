@@ -10,6 +10,7 @@ mod bridge_compat;
 mod bridge_family;
 mod bridge_java;
 mod diagnostics;
+mod engine_java;
 #[cfg(windows)]
 mod engine_update;
 mod error_reporter;
@@ -84,6 +85,13 @@ fn main() -> anyhow::Result<()> {
     let log = diagnostics::initialize()?;
     diagnostics::append(&format!("Persistent diagnostics log: {}", log.display()));
     install_panic_hook();
+
+    // The legacy self-worker fallback must be just as self-contained as the
+    // installed sidecar. Provision/select the engine JDK before app::handle_cli
+    // hands --engine-worker to the IPC relay.
+    if std::env::args().nth(1).as_deref() == Some("--engine-worker") {
+        let _ = engine_java::prepare_engine_java()?;
+    }
 
     match bridge_cli::handle() {
         Ok(true) => {

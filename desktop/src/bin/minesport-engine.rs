@@ -5,6 +5,12 @@ mod runtime;
 #[path = "../diagnostics.rs"]
 mod diagnostics;
 #[allow(dead_code)]
+#[path = "../toolchain.rs"]
+mod toolchain;
+#[allow(dead_code)]
+#[path = "../engine_java.rs"]
+mod engine_java;
+#[allow(dead_code)]
 #[cfg_attr(not(windows), allow(unused_imports))]
 #[path = "../ipc.rs"]
 mod ipc;
@@ -56,12 +62,14 @@ fn main() -> Result<()> {
 
 fn run_worker() -> Result<()> {
     let log = diagnostics::initialize()?;
+    let java = engine_java::prepare_engine_java()?;
     diagnostics::Logger::new("ENGINE").info(
         "EngineSidecarProcessStart",
         "Minesport engine sidecar started",
         &[
             ("version", ENGINE_VERSION.to_string()),
             ("protocol", ipc::ENGINE_PROTOCOL_VERSION.to_string()),
+            ("java", java.display().to_string()),
             ("diagnostics", log.display().to_string()),
         ],
     );
