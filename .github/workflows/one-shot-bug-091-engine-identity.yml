@@ -115,6 +115,13 @@ jobs:
           toolchain: 1.92.0
           components: rustfmt
 
+      - name: Install Slint dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+
       - name: Format, check, and test Rust desktop
         env:
           MINESPORT_FAST_CHECK: "1"
