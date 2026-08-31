@@ -1,0 +1,72 @@
+name: One Shot BUG-071 Preflight Preview Cleanup
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/bug_071_preflight_preview_cleanup.py"
+      - ".github/workflows/one-shot-bug-071-preflight-preview-cleanup.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: |
+          python3 -m py_compile .github/bug_071_preflight_preview_cleanup.py
+          python3 .github/bug_071_preflight_preview_cleanup.py
+          git diff --check
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Test Java engine
+        working-directory: engine
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace test
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+      - name: Install Slint build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+      - name: Test Rust desktop
+        working-directory: desktop
+        env:
+          MINESPORT_FAST_CHECK: "1"
+        run: |
+          cargo check --locked --all-targets
+          cargo test --locked --all-targets
+
+      - name: Commit tested source fix and remove one-shot gate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            engine/src/main/java/dev/kastrick/minesport/IpcMode.java \
+            engine/src/test/java/dev/kastrick/minesport/IpcModeBlockListPurposeTest.java \
+            desktop/src/preview.rs \
+            desktop/src/app.rs
+          git rm \
+            .github/bug_071_preflight_preview_cleanup.py \
+            .github/workflows/one-shot-bug-071-preflight-preview-cleanup.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-071 Skip preflight preview assets"
+          git push origin HEAD:main
