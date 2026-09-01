@@ -250,7 +250,8 @@ public final class LegacyStateResolver {
 
     private static boolean isLegacyStair(BlockData block) {
         if (block == null || block.properties == null) return false;
-        return LEGACY_STAIR_IDS.contains(block.properties.get("legacy_id"));
+        String legacyId = block.properties.get("legacy_id");
+        return legacyId != null && LEGACY_STAIR_IDS.contains(legacyId);
     }
 
     private static boolean isLegacySnowyDirt(BlockData block) {
