@@ -72,21 +72,30 @@ public class IpcMode {
         int maxY = getInt(request, "maxY", 320);
         int maxZ = getInt(request, "maxZ", 256);
 
+        Integer centerX = getOptionalInt(request, "centerX");
+        Integer centerY = getOptionalInt(request, "centerY");
+        Integer centerZ = getOptionalInt(request, "centerZ");
+        Integer radiusX = getOptionalInt(request, "radiusX");
+        Integer radiusY = getOptionalInt(request, "radiusY");
+        Integer radiusZ = getOptionalInt(request, "radiusZ");
+        boolean hasBubbleSelection =
+            centerX != null && centerY != null && centerZ != null &&
+            radiusX != null && radiusY != null && radiusZ != null;
+        String customSelectionFile = getStringOption(request, "customSelectionFile", null);
+        boolean exactSelectionRequested =
+            customSelectionFile != null && !customSelectionFile.isBlank();
+
         int copyMinX = minX;
         int copyMinZ = minZ;
         int copyMaxX = maxX;
         int copyMaxZ = maxZ;
-        Integer copyCenterX = getOptionalInt(request, "centerX");
-        Integer copyCenterZ = getOptionalInt(request, "centerZ");
-        Integer copyRadiusX = getOptionalInt(request, "radiusX");
-        Integer copyRadiusZ = getOptionalInt(request, "radiusZ");
-        if (copyCenterX != null && copyCenterZ != null && copyRadiusX != null && copyRadiusZ != null) {
-            int rx = Math.max(copyRadiusX, 1);
-            int rz = Math.max(copyRadiusZ, 1);
-            copyMinX = copyCenterX - rx;
-            copyMaxX = copyCenterX + rx;
-            copyMinZ = copyCenterZ - rz;
-            copyMaxZ = copyCenterZ + rz;
+        if (centerX != null && centerZ != null && radiusX != null && radiusZ != null) {
+            int rx = Math.max(radiusX, 1);
+            int rz = Math.max(radiusZ, 1);
+            copyMinX = centerX - rx;
+            copyMaxX = centerX + rx;
+            copyMinZ = centerZ - rz;
+            copyMaxZ = centerZ + rz;
         }
 
         String format = getString(request, "format", "gltf").toLowerCase();
@@ -124,6 +133,12 @@ public class IpcMode {
         File stagedOutput = null;
         ResolverChain chain = null;
         try {
+            final Set<Long> exactSelection = exactSelectionRequested
+                ? loadCustomSelection(new File(customSelectionFile))
+                : Collections.emptySet();
+            if (exactSelectionRequested) {
+                log("Loaded exact selection with " + exactSelection.size() + " coordinate(s)");
+            }
             progressIndeterminate("Preparing selected world data");
             tempDir = WorldCopier.copyToTemp(
                 worldFolder,
@@ -191,6 +206,7 @@ public class IpcMode {
             var allEntities = new ArrayList<EntityData>();
             var allBlockTicks = new ArrayList<ScheduledTickData>();
             var allFluidTicks = new ArrayList<ScheduledTickData>();
+            long decodedBlockCount = 0L;
             int inputDoneBase = 0;
 
             for (int fileIndex = 0; fileIndex < regionFiles.length; fileIndex++) {
@@ -211,6 +227,17 @@ public class IpcMode {
                         maxX, maxY, maxZ,
                         chunkProgress
                     );
+                    decodedBlockCount += contents.blocks().size();
+                    filterDecodedSelection(
+                        contents.blocks(),
+                        contents.blockEntities(),
+                        separateEntityRegions ? null : contents.entities(),
+                        contents.blockTicks(),
+                        contents.fluidTicks(),
+                        centerX, centerY, centerZ,
+                        radiusX, radiusY, radiusZ,
+                        exactSelectionRequested, exactSelection
+                    );
                     allBlocks.addAll(contents.blocks());
                     allBlockEntities.addAll(contents.blockEntities());
                     allBlockTicks.addAll(contents.blockTicks());
@@ -219,12 +246,20 @@ public class IpcMode {
                         allEntities.addAll(contents.entities());
                     }
                 } else {
-                    allBlocks.addAll(RegionReader.readRegion(
+                    List<BlockData> regionBlocks = RegionReader.readRegion(
                         regionFile,
                         minX, minY, minZ,
                         maxX, maxY, maxZ,
                         chunkProgress
-                    ));
+                    );
+                    decodedBlockCount += regionBlocks.size();
+                    filterDecodedSelection(
+                        regionBlocks, null, null, null, null,
+                        centerX, centerY, centerZ,
+                        radiusX, radiusY, radiusZ,
+                        exactSelectionRequested, exactSelection
+                    );
+                    allBlocks.addAll(regionBlocks);
                 }
                 inputDoneBase += blockChunkCounts[fileIndex];
             }
@@ -240,12 +275,19 @@ public class IpcMode {
                             totalInputChunks,
                             "Reading entities " + entityFile.getName()
                         );
-                    allEntities.addAll(RegionReader.readEntityRegion(
+                    List<EntityData> regionEntities = RegionReader.readEntityRegion(
                         entityFile,
                         minX, minY, minZ,
                         maxX, maxY, maxZ,
                         chunkProgress
-                    ));
+                    );
+                    filterDecodedSelection(
+                        null, null, regionEntities, null, null,
+                        centerX, centerY, centerZ,
+                        radiusX, radiusY, radiusZ,
+                        exactSelectionRequested, exactSelection
+                    );
+                    allEntities.addAll(regionEntities);
                     inputDoneBase += entityChunkCounts[fileIndex];
                 }
             }
@@ -260,86 +302,21 @@ public class IpcMode {
                     : "")
             );
 
-            Integer centerX = getOptionalInt(request, "centerX");
-            Integer centerY = getOptionalInt(request, "centerY");
-            Integer centerZ = getOptionalInt(request, "centerZ");
-            Integer radiusX = getOptionalInt(request, "radiusX");
-            Integer radiusY = getOptionalInt(request, "radiusY");
-            Integer radiusZ = getOptionalInt(request, "radiusZ");
-
-            if (
-                centerX != null && centerY != null && centerZ != null &&
-                radiusX != null && radiusY != null && radiusZ != null
-            ) {
-                int before = allBlocks.size();
-                allBlocks.removeIf(block -> !insideEllipsoid(
-                    block,
-                    centerX, centerY, centerZ,
-                    Math.max(radiusX, 1),
-                    Math.max(radiusY, 1),
-                    Math.max(radiusZ, 1)
-                ));
-                allBlockEntities.removeIf(entity -> !insideEllipsoid(
-                    entity.x(), entity.y(), entity.z(),
-                    centerX, centerY, centerZ,
-                    Math.max(radiusX, 1),
-                    Math.max(radiusY, 1),
-                    Math.max(radiusZ, 1)
-                ));
-                allEntities.removeIf(entity -> !insideEllipsoidPoint(
-                    entity.x(), entity.y(), entity.z(),
-                    centerX, centerY, centerZ,
-                    Math.max(radiusX, 1),
-                    Math.max(radiusY, 1),
-                    Math.max(radiusZ, 1)
-                ));
-                allBlockTicks.removeIf(tick -> !insideEllipsoidPoint(
-                    tick.x() + 0.5, tick.y() + 0.5, tick.z() + 0.5,
-                    centerX, centerY, centerZ,
-                    Math.max(radiusX, 1),
-                    Math.max(radiusY, 1),
-                    Math.max(radiusZ, 1)
-                ));
-                allFluidTicks.removeIf(tick -> !insideEllipsoidPoint(
-                    tick.x() + 0.5, tick.y() + 0.5, tick.z() + 0.5,
-                    centerX, centerY, centerZ,
-                    Math.max(radiusX, 1),
-                    Math.max(radiusY, 1),
-                    Math.max(radiusZ, 1)
-                ));
-                log(
-                    "Bubble selection: " + allBlocks.size() + " / " + before
-                    + " blocks kept (center " + centerX + "," + centerY + "," + centerZ
-                    + " · radius " + radiusX + "," + radiusY + "," + radiusZ + ")"
+            if (hasBubbleSelection || exactSelectionRequested) {
+                StringBuilder selectionSummary = new StringBuilder(
+                    "Selection filtering: " + allBlocks.size() + " / " + decodedBlockCount
+                        + " decoded blocks retained"
                 );
+                if (hasBubbleSelection) selectionSummary.append(" · bubble");
+                if (exactSelectionRequested) {
+                    selectionSummary
+                        .append(" · exact ")
+                        .append(exactSelection.size())
+                        .append(" coordinate(s)");
+                }
+                log(selectionSummary.toString());
             }
 
-            String customSelectionFile = getStringOption(request, "customSelectionFile", null);
-            if (customSelectionFile != null && !customSelectionFile.isBlank()) {
-                Set<Long> exact = loadCustomSelection(new File(customSelectionFile));
-                int before = allBlocks.size();
-                allBlocks.removeIf(block -> !exact.contains(SpatialKey.of(block.x, block.y, block.z)));
-                allBlockEntities.removeIf(entity ->
-                    !exact.contains(SpatialKey.of(entity.x(), entity.y(), entity.z()))
-                );
-                allEntities.removeIf(entity ->
-                    !exact.contains(SpatialKey.of(
-                        (int)Math.floor(entity.x()),
-                        (int)Math.floor(entity.y()),
-                        (int)Math.floor(entity.z())
-                    ))
-                );
-                allBlockTicks.removeIf(tick ->
-                    !exact.contains(SpatialKey.of(tick.x(), tick.y(), tick.z()))
-                );
-                allFluidTicks.removeIf(tick ->
-                    !exact.contains(SpatialKey.of(tick.x(), tick.y(), tick.z()))
-                );
-                log(
-                    "Custom selection: " + allBlocks.size() + " / " + before
-                    + " blocks kept (" + exact.size() + " coordinate(s) requested)"
-                );
-            }
             progressIndeterminate("Preparing export data");
 
             if (format.equals("litematic")) {
@@ -812,6 +789,90 @@ public class IpcMode {
         return dx * dx + dy * dy + dz * dz <= 1.0;
     }
 
+    private static void filterDecodedSelection(
+        List<BlockData> blocks,
+        List<BlockEntityData> blockEntities,
+        List<EntityData> entities,
+        List<ScheduledTickData> blockTicks,
+        List<ScheduledTickData> fluidTicks,
+        Integer centerX, Integer centerY, Integer centerZ,
+        Integer radiusX, Integer radiusY, Integer radiusZ,
+        boolean exactSelectionRequested,
+        Set<Long> exactSelection
+    ) {
+        boolean bubble =
+            centerX != null && centerY != null && centerZ != null &&
+            radiusX != null && radiusY != null && radiusZ != null;
+        if (bubble) {
+            int cx = centerX;
+            int cy = centerY;
+            int cz = centerZ;
+            int rx = Math.max(radiusX, 1);
+            int ry = Math.max(radiusY, 1);
+            int rz = Math.max(radiusZ, 1);
+            if (blocks != null) {
+                blocks.removeIf(block -> !insideEllipsoid(block, cx, cy, cz, rx, ry, rz));
+            }
+            if (blockEntities != null) {
+                blockEntities.removeIf(entity ->
+                    !insideEllipsoid(entity.x(), entity.y(), entity.z(), cx, cy, cz, rx, ry, rz)
+                );
+            }
+            if (entities != null) {
+                entities.removeIf(entity ->
+                    !insideEllipsoidPoint(entity.x(), entity.y(), entity.z(), cx, cy, cz, rx, ry, rz)
+                );
+            }
+            if (blockTicks != null) {
+                blockTicks.removeIf(tick ->
+                    !insideEllipsoidPoint(
+                        tick.x() + 0.5, tick.y() + 0.5, tick.z() + 0.5,
+                        cx, cy, cz, rx, ry, rz
+                    )
+                );
+            }
+            if (fluidTicks != null) {
+                fluidTicks.removeIf(tick ->
+                    !insideEllipsoidPoint(
+                        tick.x() + 0.5, tick.y() + 0.5, tick.z() + 0.5,
+                        cx, cy, cz, rx, ry, rz
+                    )
+                );
+            }
+        }
+
+        if (!exactSelectionRequested) return;
+        if (blocks != null) {
+            blocks.removeIf(block ->
+                !exactSelection.contains(SpatialKey.of(block.x, block.y, block.z))
+            );
+        }
+        if (blockEntities != null) {
+            blockEntities.removeIf(entity ->
+                !exactSelection.contains(SpatialKey.of(entity.x(), entity.y(), entity.z()))
+            );
+        }
+        if (entities != null) {
+            entities.removeIf(entity ->
+                !exactSelection.contains(SpatialKey.of(
+                    (int)Math.floor(entity.x()),
+                    (int)Math.floor(entity.y()),
+                    (int)Math.floor(entity.z())
+                ))
+            );
+        }
+        if (blockTicks != null) {
+            blockTicks.removeIf(tick ->
+                !exactSelection.contains(SpatialKey.of(tick.x(), tick.y(), tick.z()))
+            );
+        }
+        if (fluidTicks != null) {
+            fluidTicks.removeIf(tick ->
+                !exactSelection.contains(SpatialKey.of(tick.x(), tick.y(), tick.z()))
+            );
+        }
+    }
+
     private static boolean getBoolOption(JsonObject request, String key, boolean fallback) {
         String value = getStringOption(request, key, null);
         return value == null ? fallback : Boolean.parseBoolean(value);
@@ -1026,30 +1087,29 @@ public class IpcMode {
             }
 
             var allBlocks = new ArrayList<BlockData>();
+            long previewDecodedBlocks = 0L;
             for (File regionFile : regionFiles) {
-                allBlocks.addAll(RegionReader.readRegion(
+                List<BlockData> regionBlocks = RegionReader.readRegion(
                     regionFile,
                     minX, minY, minZ,
                     maxX, maxY, maxZ,
                     null
-                ));
+                );
+                previewDecodedBlocks += regionBlocks.size();
+                filterDecodedSelection(
+                    regionBlocks, null, null, null, null,
+                    centerX, centerY, centerZ,
+                    radiusX, radiusY, radiusZ,
+                    false, Collections.emptySet()
+                );
+                regionBlocks.removeIf(BlockData::isAir);
+                allBlocks.addAll(regionBlocks);
             }
 
-            if (
-                centerX != null && centerY != null && centerZ != null &&
-                radiusX != null && radiusY != null && radiusZ != null
-            ) {
-                int cx = centerX;
-                int cy = centerY;
-                int cz = centerZ;
-                int rx = Math.max(radiusX, 1);
-                int ry = Math.max(radiusY, 1);
-                int rz = Math.max(radiusZ, 1);
-                allBlocks.removeIf(block -> !insideEllipsoid(block, cx, cy, cz, rx, ry, rz));
-            }
-
-            allBlocks.removeIf(BlockData::isAir);
-            log("Block list: " + allBlocks.size() + " solid block(s)");
+            log(
+                "Block list: " + allBlocks.size() + " solid block(s) retained from "
+                    + previewDecodedBlocks + " decoded block(s)"
+            );
 
             Map<String, PreviewTextures> previewTextures = Collections.emptyMap();
             if (includePreviewAssets) {

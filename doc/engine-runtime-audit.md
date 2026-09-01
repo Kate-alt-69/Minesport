@@ -22,11 +22,13 @@ This note records engine/runtime concerns found while introducing the independen
 **Area:** Java engine / export scalability  
 **File:** `engine/src/main/java/dev/kastrick/minesport/IpcMode.java`
 
-`handleExport()` accumulates blocks, block entities, entities, scheduled block ticks, and fluid ticks into `ArrayList`s for the complete selection before later selection filtering and export work.
+`handleExport()` still retains the blocks and Litematica metadata that survive selection filtering in whole-export `ArrayList`s because later multipart resolution, face culling and export writers expect global spatial context.
 
-**Impact:** Multi-million-block selections can create heavy heap usage and GC pressure and can fail from memory exhaustion even when the final output could be produced with a more compact intermediate representation.
+**Impact:** Multi-million-block retained selections can still create heavy heap usage and GC pressure. Sparse bubble/exact selections previously made this worse by first accumulating every decoded block and only filtering after all selected regions had been read.
 
-**Direction:** Move selection rejection as close to chunk decoding as possible and replace object-heavy whole-world accumulation with chunk/section batches plus compact spatial state needed by multipart resolution and face culling.
+**Control implemented:** Bubble and exact-coordinate filters now run on each decoded region before its blocks, block entities, entities and scheduled ticks are appended to the whole-export lists. The 3D preview block-list path likewise removes bubble-excluded and air blocks region-by-region. Sparse selections therefore no longer pay whole-bounds peak heap merely to discard most objects later.
+
+**Remaining direction:** Replace the retained whole-export object lists with chunk/section batches plus compact spatial state needed by multipart resolution and face culling, so peak memory scales with the active working set instead of the final retained selection.
 
 ---
 
