@@ -30,6 +30,21 @@ const QUILT_EXPORT_WORKER_BYTES: &[u8] = include_bytes!(concat!(
 ));
 static GENERATED_CACHE_USE: RwLock<()> = RwLock::new(());
 
+#[derive(Debug)]
+pub(crate) struct ProcessLease {
+    _file: fs::File,
+}
+
+pub(crate) struct GeneratedCacheLease {
+    _local: RwLockReadGuard<'static, ()>,
+    _process: ProcessLease,
+}
+
+struct GeneratedCacheCleanup {
+    _local: RwLockWriteGuard<'static, ()>,
+    _process: ProcessLease,
+}
+
 pub fn materialize_engine() -> Result<PathBuf> {
     let version = ENGINE_VERSION_RAW.trim();
     if version.is_empty() {
@@ -88,6 +103,7 @@ fn materialize_runtime_asset(name: &str, temporary_name: &str, bytes: &[u8]) -> 
     if bytes.is_empty() {
         bail!("embedded runtime asset {name} is empty");
     }
+    let _publish_lease = acquire_process_lease("runtime-assets", name, Duration::from_secs(30))?;
     let root = data_root().join("runtime");
     fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
     let destination = root.join(name);
@@ -172,15 +188,20 @@ pub fn bridge_data_root() -> PathBuf {
     cache_root().join("bridge-data")
 }
 
-pub(crate) fn acquire_generated_cache_lease() -> Result<RwLockReadGuard<'static, ()>> {
-    GENERATED_CACHE_USE
+pub(crate) fn acquire_generated_cache_lease() -> Result<GeneratedCacheLease> {
+    let local = GENERATED_CACHE_USE
         .read()
-        .map_err(|_| anyhow!("Minesport generated-cache lease lock is poisoned"))
+        .map_err(|_| anyhow!("Minesport generated-cache lease lock is poisoned"))?;
+    let process = acquire_shared_process_lease("generated-cache", "use")?;
+    Ok(GeneratedCacheLease {
+        _local: local,
+        _process: process,
+    })
 }
 
-fn acquire_generated_cache_cleanup() -> Result<RwLockWriteGuard<'static, ()>> {
-    match GENERATED_CACHE_USE.try_write() {
-        Ok(guard) => Ok(guard),
+fn acquire_generated_cache_cleanup() -> Result<GeneratedCacheCleanup> {
+    let local = match GENERATED_CACHE_USE.try_write() {
+        Ok(guard) => guard,
         Err(TryLockError::WouldBlock) => {
             bail!(
                 "Minesport generated cache is currently in use; stop runtime preparation before clearing it"
@@ -189,7 +210,105 @@ fn acquire_generated_cache_cleanup() -> Result<RwLockWriteGuard<'static, ()>> {
         Err(TryLockError::Poisoned(_)) => {
             bail!("Minesport generated-cache cleanup lock is poisoned")
         }
+    };
+    let Some(process) = try_acquire_exclusive_process_lease("generated-cache", "use")? else {
+        bail!(
+            "Minesport generated cache is currently in use by another process; stop runtime preparation before clearing it"
+        );
+    };
+    Ok(GeneratedCacheCleanup {
+        _local: local,
+        _process: process,
+    })
+}
+
+pub(crate) fn acquire_process_lease(
+    namespace: &str,
+    name: &str,
+    timeout: Duration,
+) -> Result<ProcessLease> {
+    let path = process_lock_path(namespace, name)?;
+    let file = open_process_lock(&path)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(ProcessLease { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    bail!(
+                        "timed out waiting for Minesport process lease {}",
+                        path.display()
+                    );
+                }
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(error).with_context(|| {
+                    format!("acquire Minesport process lease {}", path.display())
+                });
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn acquire_shared_process_lease(namespace: &str, name: &str) -> Result<ProcessLease> {
+    let path = process_lock_path(namespace, name)?;
+    let file = open_process_lock(&path)?;
+    file.lock_shared()
+        .with_context(|| format!("acquire shared Minesport process lease {}", path.display()))?;
+    Ok(ProcessLease { _file: file })
+}
+
+fn try_acquire_exclusive_process_lease(
+    namespace: &str,
+    name: &str,
+) -> Result<Option<ProcessLease>> {
+    let path = process_lock_path(namespace, name)?;
+    let file = open_process_lock(&path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(ProcessLease { _file: file })),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error).with_context(|| {
+            format!(
+                "acquire exclusive Minesport process lease {}",
+                path.display()
+            )
+        }),
+    }
+}
+
+fn process_lock_path(namespace: &str, name: &str) -> Result<PathBuf> {
+    for (label, value) in [("namespace", namespace), ("name", name)] {
+        if value.is_empty()
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        {
+            bail!("unsafe Minesport process-lock {label}: {value:?}");
+        }
+    }
+    Ok(data_root()
+        .join("locks")
+        .join("runtime")
+        .join(namespace)
+        .join(format!("{name}.lock")))
+}
+
+fn open_process_lock(path: &Path) -> Result<fs::File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "create Minesport process-lock directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .with_context(|| format!("open Minesport process lock {}", path.display()))
 }
 
 pub fn remove_generated_cache() -> Result<()> {

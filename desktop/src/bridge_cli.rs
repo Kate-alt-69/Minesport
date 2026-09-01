@@ -10,6 +10,7 @@ use std::{
     env, fs,
     io::Read,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 const VERSION: &str = "0.2.1";
@@ -78,6 +79,21 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
         );
         return Ok(jar);
     }
+
+    let _cache_lease = runtime::acquire_generated_cache_lease()?;
+    let build_key = format!(
+        "{}-{}",
+        family.label().to_ascii_lowercase(),
+        safe_version(&version)
+    );
+    let _build_lease =
+        runtime::acquire_process_lease("bridge-build", &build_key, Duration::from_secs(20 * 60))
+            .with_context(|| {
+                format!(
+                    "coordinate {} Export Worker build for Minecraft {version}",
+                    family.label()
+                )
+            })?;
 
     let destination = compiled_bridge_path(family, &version);
     let fingerprint_path = compiled_bridge_fingerprint_path(&destination);
