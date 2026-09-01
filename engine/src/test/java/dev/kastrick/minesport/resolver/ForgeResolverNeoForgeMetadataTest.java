@@ -55,4 +55,40 @@ class ForgeResolverNeoForgeMetadataTest {
             resolver.close();
         }
     }
+
+    @Test
+    void recognizedForgeMetadataKeepsAssetsWhenFriendlyMetadataIsUnparsed() throws Exception {
+        Path mods = Files.createDirectories(tempDir.resolve("literal-mods"));
+        Path jar = mods.resolve("literal-example.jar");
+        // Single-quoted literal strings are valid TOML, but the lightweight
+        // friendly metadata parser intentionally only understands the common
+        // double-quoted form. Asset availability must not depend on that parser.
+        String metadata = "modLoader='javafml'\n"
+            + "loaderVersion='[47,)'\n"
+            + "[[mods]]\n"
+            + "modId='literal_example'\n"
+            + "version='1.0.0'\n"
+            + "displayName='Literal Example'\n";
+        String blockstate = "{\"variants\":{\"\":{"
+            + "\"model\":\"literal_example:block/example\"}}}";
+
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(jar))) {
+            zip.putNextEntry(new ZipEntry("META-INF/mods.toml"));
+            zip.write(metadata.getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+
+            zip.putNextEntry(new ZipEntry("assets/literal_example/blockstates/test.json"));
+            zip.write(blockstate.getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+
+        ForgeResolver resolver = ForgeResolver.load(mods.toFile(), null);
+        try {
+            assertEquals(0, resolver.getDetectedMods().size());
+            assertTrue(resolver.canResolve("literal_example:test"));
+            assertNotNull(resolver.resolveBlockState("literal_example:test"));
+        } finally {
+            resolver.close();
+        }
+    }
 }

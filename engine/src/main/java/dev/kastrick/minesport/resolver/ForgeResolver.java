@@ -58,10 +58,10 @@ public class ForgeResolver implements AssetResolver {
     private ForgeResolver() {}
 
     /**
-     * Scan a mods folder and load all Forge/NeoForge mod jars.
-     * A jar only registers with this resolver if it has a valid
-     * META-INF/mods.toml or META-INF/neoforge.mods.toml with at least one
-     * [[mods]] entry.
+     * Scan a mods folder and load Forge/NeoForge asset jars.
+     * A jar belongs to this resolver when it carries a recognized Forge-family
+     * metadata file. Parsing [[mods]] records is best-effort metadata discovery;
+     * it must never gate standard assets/<namespace>/... lookup.
      *
      * @param modsFolder  e.g. .minecraft/mods or an instance's mods folder
      * @param log         optional logger
@@ -124,17 +124,21 @@ public class ForgeResolver implements AssetResolver {
         if (mods.isEmpty()) {
             if (log != null) log.accept(
                 "[ForgeResolver] " + metadataPath
-                    + " present but no [[mods]] entries in " + jarFile.getName()
+                    + " present but mod metadata could not be parsed in " + jarFile.getName()
+                    + "; indexing asset namespaces without detected-mod metadata"
             );
-            zip.close();
-            return;
+        } else {
+            for (ModInfo info : mods) {
+                detectedMods.put(info.modId(), info);
+                if (log != null) log.accept("  [mod] " + info.modId() + " v" + info.version() + " (" + jarFile.getName() + ")");
+            }
         }
 
-        for (ModInfo info : mods) {
-            detectedMods.put(info.modId(), info);
-            if (log != null) log.accept("  [mod] " + info.modId() + " v" + info.version() + " (" + jarFile.getName() + ")");
-        }
-
+        // Asset discovery is intentionally independent from the tiny TOML
+        // metadata parser above. Once a recognized Forge-family metadata file
+        // identifies the JAR, valid assets/<namespace>/... resources remain
+        // usable even when optional display metadata uses TOML syntax that the
+        // lightweight parser does not understand.
         scanNamespaces(zip);
         openJars.add(zip);
     }
