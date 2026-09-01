@@ -46,7 +46,7 @@ fn stage_lock_path() -> PathBuf {
 }
 
 fn lock_root() -> PathBuf {
-    runtime::cache_root().join("engine-update")
+    runtime::data_root().join("locks").join("engine-update")
 }
 
 fn open_lock(path: &Path) -> Result<File> {
