@@ -173,7 +173,7 @@ pub fn run() -> Result<()> {
 
     append_diagnostic(
         &ui,
-        "Backend boundary: Minesport.exe --engine-worker → embedded Java engine",
+        "Backend boundary: verified minesport-engine sidecar → embedded Java engine · Minesport.exe self-worker fallback available",
     );
     append_diagnostic(
         &ui,
@@ -203,10 +203,17 @@ pub fn run() -> Result<()> {
     let ping_engine = engine.clone();
     let ping_weak = ui.as_weak();
     thread::spawn(move || {
-        if let Err(error) = ping_engine.ping() {
+        if let Err(error) = ping_engine.ping_confirmed(Duration::from_secs(10)) {
             let _ = ping_weak.upgrade_in_event_loop(move |ui| {
-                ui.set_engine_status("ENGINE ERROR".into());
-                append_diagnostic(&ui, &format!("Could not ping Minesport backend: {error:#}"));
+                if !ui.get_engine_ready() {
+                    ui.set_engine_status("ENGINE ERROR".into());
+                    ui.set_task_title("ENGINE ERROR".into());
+                    ui.set_task_detail("Backend readiness check failed".into());
+                }
+                append_diagnostic(
+                    &ui,
+                    &format!("Minesport backend did not confirm startup readiness: {error:#}"),
+                );
             });
         }
     });
