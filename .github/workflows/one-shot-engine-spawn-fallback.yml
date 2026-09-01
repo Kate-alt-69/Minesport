@@ -1,0 +1,94 @@
+name: One Shot Engine Spawn Fallback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-engine-spawn-fallback.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minesport-engine-spawn-fallback
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Sync latest main
+        shell: pwsh
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - name: Patch rollback retention and sidecar spawn fallback
+        shell: pwsh
+        run: python .github/engine_spawn_fallback_patch.py
+
+      - name: Remove one-shot integration files
+        shell: pwsh
+        run: |
+          Remove-Item -Force .github/engine_spawn_fallback_patch.py
+          Remove-Item -Force .github/workflows/one-shot-engine-spawn-fallback.yml
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Format and validate patch
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path desktop/Cargo.toml --all
+          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
+          if (Select-String -Quiet -Path desktop/src/engine_update.rs -SimpleMatch 'discard_previous_engine(&executable)') { throw 'successful update still deletes rollback engine' }
+          if (-not (Select-String -Quiet -Path desktop/src/ipc.rs -SimpleMatch 'EngineSidecarSpawnFailedFallback')) { throw 'sidecar spawn fallback diagnostic missing' }
+          if (-not (Select-String -Quiet -Path desktop/src/ipc.rs -SimpleMatch 'BackendLaunch::self_worker')) { throw 'embedded fallback helper is not used' }
+          if (Select-String -Quiet -Path desktop/src/ipc.rs -SimpleMatch 'engine_version: env!("CARGO_PKG_VERSION").to_string()') { throw 'fallback engine identity still follows GUI package version' }
+
+      - name: Test Windows engine fallback paths
+        shell: pwsh
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'Windows all-target tests failed' }
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'Windows release check failed' }
+
+      - name: Commit tested fixes with collision-free IDs
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git stash push -u -m engine-spawn-fallback-tested
+          git pull --rebase origin main
+          git stash pop
+          if ($LASTEXITCODE -ne 0) { throw 'tested patch no longer rebases cleanly on current main' }
+
+          $subjects = git log origin/main --format=%s
+          $ids = [regex]::Matches(($subjects -join "`n"), 'BUG-(\d+)') | ForEach-Object { [int]$_.Groups[1].Value }
+          $max = if ($ids) { ($ids | Measure-Object -Maximum).Maximum } else { 0 }
+          $first = $max + 1
+          $second = $max + 2
+
+          git add desktop/src/engine_update.rs
+          git diff --cached --check
+          git commit -m "FIX | BUG-$first Preserve previous engine rollback generation"
+
+          git add desktop/src/ipc.rs .github/engine_spawn_fallback_patch.py .github/workflows/one-shot-engine-spawn-fallback.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-$second Fall back when engine sidecar cannot spawn"
+
+          git push origin HEAD:main
