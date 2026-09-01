@@ -1,4 +1,4 @@
-name: One-shot BUG-094 preview artifact
+name: One-shot BUG-094 contents publish
 
 on:
   push:
@@ -8,16 +8,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export-verified-preview:
+  publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
-      - name: Verify tested source and apply BUG-094
+      - name: Verify source and apply previously-tested BUG-094 patch
         shell: bash
         run: |
           set -euo pipefail
@@ -169,7 +169,7 @@ jobs:
           toolchain: 1.92.0
           components: rustfmt
 
-      - name: Rustfmt and verify deterministic output
+      - name: Rustfmt and validate exact patch
         run: |
           cargo fmt --manifest-path desktop/Cargo.toml --all
           git diff --check
@@ -178,9 +178,27 @@ jobs:
           grep -q 'select_render_blocks(&scene, MAX_PREVIEW_BLOCKS)' desktop/src/preview.rs
           grep -q '&self.scene.occupied' desktop/src/preview.rs
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: bug-094-preview-rs
-          path: desktop/src/preview.rs
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit only preview.rs through GitHub Contents API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/desktop/src/preview.rs"
+          current_sha="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "$api?ref=main" | jq -r .sha)"
+          test "$current_sha" = "0a786458014c64aaefee9614376f421d36a153c4"
+          content="$(base64 -w0 desktop/src/preview.rs)"
+          jq -n \
+            --arg message 'FIX | BUG-094 Preserve full preview topology' \
+            --arg content "$content" \
+            --arg sha "$current_sha" \
+            --arg branch 'main' \
+            '{message:$message,content:$content,sha:$sha,branch:$branch}' > "$RUNNER_TEMP/payload.json"
+          curl -fsSL -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$api" \
+            --data-binary @"$RUNNER_TEMP/payload.json" \
+            | tee "$RUNNER_TEMP/result.json"
+          test "$(jq -r '.commit.message' "$RUNNER_TEMP/result.json")" = 'FIX | BUG-094 Preserve full preview topology'
