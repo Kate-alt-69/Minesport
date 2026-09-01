@@ -236,7 +236,8 @@ struct EngineInner {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
     events: Sender<EngineEvent>,
-    launch: BackendLaunch,
+    launch: Mutex<BackendLaunch>,
+    pong_count: Arc<AtomicU64>,
     #[cfg(windows)]
     _engine_use_lease: engine_lease::Lease,
     generation: Arc<AtomicU64>,
@@ -362,11 +363,18 @@ impl Engine {
 
         let (tx, rx) = mpsc::channel();
         let generation = Arc::new(AtomicU64::new(1));
+        let pong_count = Arc::new(AtomicU64::new(0));
         let _ = tx.send(EngineEvent::Started {
             pid,
             process: launch.executable.display().to_string(),
         });
-        spawn_stdout_reader(stdout, tx.clone(), generation.clone(), 1);
+        spawn_stdout_reader(
+            stdout,
+            tx.clone(),
+            generation.clone(),
+            pong_count.clone(),
+            1,
+        );
         spawn_stderr_reader(stderr, tx.clone(), generation.clone(), 1);
 
         operation.success(
@@ -384,7 +392,8 @@ impl Engine {
                     stdin: Mutex::new(stdin),
                     child: Mutex::new(child),
                     events: tx,
-                    launch,
+                    launch: Mutex::new(launch),
+                    pong_count,
                     #[cfg(windows)]
                     _engine_use_lease: engine_use_lease,
                     generation,
@@ -435,7 +444,12 @@ impl Engine {
             }
         }
 
-        let launch = self.inner.launch.clone();
+        let mut launch = self
+            .inner
+            .launch
+            .lock()
+            .map_err(|_| anyhow!("Minesport backend launch lock poisoned during restart"))?
+            .clone();
         operation.event(
             "IpcBackendWorkerRespawn",
             "restarting isolated Minesport backend worker",
@@ -448,12 +462,58 @@ impl Engine {
         );
         let mut command = launch.command();
 
-        let mut child = command.spawn().with_context(|| {
-            format!(
-                "restart Minesport backend worker {}",
-                launch.executable.display()
-            )
-        })?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(sidecar_error) if launch.mode == "sidecar" => {
+                logger.warn(
+                    "EngineSidecarRespawnFailedFallback",
+                    "engine sidecar could not be restarted; using embedded fallback worker",
+                    &[
+                        ("error", sidecar_error.to_string()),
+                        ("executable", launch.executable.display().to_string()),
+                        ("engine_version", launch.engine_version.clone()),
+                    ],
+                );
+                let fallback = BackendLaunch::self_worker(
+                    env::current_exe()
+                        .context("resolve Minesport executable for restart fallback")?,
+                );
+                let mut fallback_command = fallback.command();
+                match fallback_command.spawn() {
+                    Ok(child) => {
+                        launch = fallback;
+                        child
+                    }
+                    Err(fallback_error) => {
+                        operation.failure(
+                            "failed to restart both the sidecar and embedded fallback worker",
+                            &[
+                                ("sidecar_error", sidecar_error.to_string()),
+                                ("fallback_error", fallback_error.to_string()),
+                                (
+                                    "fallback_executable",
+                                    fallback.executable.display().to_string(),
+                                ),
+                            ],
+                        );
+                        return Err(fallback_error).with_context(|| {
+                            format!(
+                                "restart embedded Minesport backend fallback {} after sidecar error: {sidecar_error}",
+                                fallback.executable.display()
+                            )
+                        });
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "restart Minesport backend worker {}",
+                        launch.executable.display()
+                    )
+                });
+            }
+        };
         let pid = child.id();
         let stdin = child
             .stdin
@@ -484,6 +544,13 @@ impl Engine {
                 .map_err(|_| anyhow!("Minesport backend child lock poisoned during restart"))?;
             *current = child;
         }
+        {
+            let mut current =
+                self.inner.launch.lock().map_err(|_| {
+                    anyhow!("Minesport backend launch lock poisoned during restart")
+                })?;
+            *current = launch.clone();
+        }
 
         let tx = self.inner.events.clone();
         let _ = tx.send(EngineEvent::Started {
@@ -494,6 +561,7 @@ impl Engine {
             stdout,
             tx.clone(),
             self.inner.generation.clone(),
+            self.inner.pong_count.clone(),
             reader_generation,
         );
         spawn_stderr_reader(stderr, tx, self.inner.generation.clone(), reader_generation);
@@ -597,6 +665,33 @@ impl Engine {
 
     pub fn ping(&self) -> Result<()> {
         self.send_value(serde_json::json!({ "command": "ping" }))
+    }
+
+    pub fn ping_confirmed(&self, timeout: Duration) -> Result<()> {
+        let generation = self.inner.generation.load(Ordering::Acquire);
+        let observed = self.inner.pong_count.load(Ordering::Acquire);
+        self.ping()?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.inner.generation.load(Ordering::Acquire) != generation {
+                bail!("backend generation changed while waiting for ping response");
+            }
+            if self.inner.pong_count.load(Ordering::Acquire) > observed {
+                return Ok(());
+            }
+            if let Ok(mut child) = self.inner.child.lock() {
+                if let Ok(Some(status)) = child.try_wait() {
+                    bail!("backend exited with status {status} before answering ping");
+                }
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "backend did not answer ping within {} ms",
+                    timeout.as_millis()
+                );
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     pub fn shutdown(&self) {
@@ -1006,6 +1101,7 @@ fn spawn_stdout_reader(
     stdout: impl std::io::Read + Send + 'static,
     tx: Sender<EngineEvent>,
     generation: Arc<AtomicU64>,
+    pong_count: Arc<AtomicU64>,
     reader_generation: u64,
 ) {
     thread::spawn(move || {
@@ -1024,6 +1120,9 @@ fn spawn_stdout_reader(
                             message: line,
                             ..Response::default()
                         });
+                    if response.kind == "pong" {
+                        pong_count.fetch_add(1, Ordering::AcqRel);
+                    }
                     match response.kind.as_str() {
                         "log" => diagnostics::append_correlated(
                             &response.message,
