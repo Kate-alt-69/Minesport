@@ -2281,7 +2281,7 @@ fn pump_engine_events(
                             thread::sleep(Duration::from_millis(250 * attempt as u64));
                         }
                         match engine.restart() {
-                            Ok(()) => match engine.ping() {
+                            Ok(()) => match engine.ping_confirmed(Duration::from_secs(10)) {
                                 Ok(()) => {
                                     pending_logs.push(format!(
                                         "Minesport backend recovery dispatched on attempt {}",
@@ -2291,7 +2291,8 @@ fn pump_engine_events(
                                     break;
                                 }
                                 Err(error) => {
-                                    last_error = format!("restart ping failed: {error:#}");
+                                    last_error =
+                                        format!("restart readiness check failed: {error:#}");
                                 }
                             },
                             Err(error) => {
