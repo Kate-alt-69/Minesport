@@ -23,6 +23,7 @@ use std::{
 const ENGINE_JAVA_MAJOR: u32 = 22;
 pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
 const ENGINE_SIDECAR_MANIFEST_SCHEMA: u32 = 1;
+const EMBEDDED_ENGINE_VERSION_RAW: &str = include_str!("../../engine/VERSION");
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Response {
@@ -95,6 +96,15 @@ struct BackendLaunch {
 }
 
 impl BackendLaunch {
+    fn self_worker(desktop: PathBuf) -> Self {
+        Self {
+            executable: desktop,
+            args: vec!["--engine-worker".to_string()],
+            mode: "self-worker-fallback",
+            engine_version: EMBEDDED_ENGINE_VERSION_RAW.trim().to_string(),
+        }
+    }
+
     fn resolve() -> Result<Self> {
         let desktop = env::current_exe().context("resolve current Minesport executable")?;
 
@@ -137,12 +147,7 @@ impl BackendLaunch {
             }
         }
 
-        Ok(Self {
-            executable: desktop,
-            args: vec!["--engine-worker".to_string()],
-            mode: "self-worker-fallback",
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-        })
+        Ok(Self::self_worker(desktop))
     }
 
     fn command(&self) -> Command {
@@ -266,7 +271,7 @@ impl Engine {
             .context("coordinate Minesport engine sidecar use")?;
         let logger = diagnostics::Logger::new("IPC").child("UI");
         let operation = logger.operation("IpcBackendWorkerStart");
-        let launch = BackendLaunch::resolve()?;
+        let mut launch = BackendLaunch::resolve()?;
         operation.event(
             "IpcBackendWorkerSpawn",
             "starting isolated Minesport backend worker",
@@ -280,6 +285,53 @@ impl Engine {
         let mut command = launch.command();
         let mut child = match command.spawn() {
             Ok(child) => child,
+            Err(sidecar_error) if launch.mode == "sidecar" => {
+                logger.warn(
+                    "EngineSidecarSpawnFailedFallback",
+                    "verified engine sidecar could not be launched; using embedded fallback worker",
+                    &[
+                        ("error", sidecar_error.to_string()),
+                        ("executable", launch.executable.display().to_string()),
+                        ("engine_version", launch.engine_version.clone()),
+                    ],
+                );
+                let fallback = BackendLaunch::self_worker(
+                    env::current_exe()
+                        .context("resolve Minesport executable for backend fallback")?,
+                );
+                operation.event(
+                    "IpcBackendWorkerFallbackSpawn",
+                    "starting embedded Minesport backend fallback after sidecar launch failure",
+                    &[
+                        ("executable", fallback.executable.display().to_string()),
+                        ("mode", fallback.mode.to_string()),
+                        ("engine_version", fallback.engine_version.clone()),
+                    ],
+                );
+                let mut fallback_command = fallback.command();
+                match fallback_command.spawn() {
+                    Ok(child) => {
+                        launch = fallback;
+                        child
+                    }
+                    Err(fallback_error) => {
+                        operation.failure(
+                            "failed to start both the verified sidecar and embedded fallback worker",
+                            &[
+                                ("sidecar_error", sidecar_error.to_string()),
+                                ("fallback_error", fallback_error.to_string()),
+                                ("fallback_executable", fallback.executable.display().to_string()),
+                            ],
+                        );
+                        return Err(fallback_error).with_context(|| {
+                            format!(
+                                "start embedded Minesport backend fallback {} after sidecar error: {sidecar_error}",
+                                fallback.executable.display()
+                            )
+                        });
+                    }
+                }
+            }
             Err(error) => {
                 operation.failure(
                     "failed to start Minesport backend worker",
