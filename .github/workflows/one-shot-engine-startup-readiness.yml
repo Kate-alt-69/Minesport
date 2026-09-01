@@ -1,0 +1,87 @@
+name: One Shot Engine Startup Readiness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-engine-startup-readiness.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minesport-engine-startup-readiness
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Sync latest main
+        shell: pwsh
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - name: Patch initial engine readiness
+        shell: pwsh
+        run: python .github/engine_startup_readiness_patch.py
+
+      - name: Remove one-shot integration files
+        shell: pwsh
+        run: |
+          Remove-Item -Force .github/engine_startup_readiness_patch.py
+          Remove-Item -Force .github/workflows/one-shot-engine-startup-readiness.yml
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Format and validate patch
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path desktop/Cargo.toml --all
+          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
+          if (-not (Select-String -Quiet -Path desktop/src/app.rs -SimpleMatch 'ping_engine.ping_confirmed(Duration::from_secs(10))')) { throw 'initial startup still trusts ping write only' }
+          if (-not (Select-String -Quiet -Path desktop/src/app.rs -SimpleMatch 'verified minesport-engine sidecar')) { throw 'backend diagnostic still describes the retired self-worker-only boundary' }
+          if (-not (Select-String -Quiet -Path desktop/src/app.rs -SimpleMatch 'if !ui.get_engine_ready()')) { throw 'startup readiness failure can overwrite an already recovered engine state' }
+
+      - name: Test Windows startup readiness
+        shell: pwsh
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'Windows all-target tests failed' }
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'Windows release check failed' }
+
+      - name: Commit tested fix with collision-free ID
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git stash push -u -m engine-startup-readiness-tested
+          git pull --rebase origin main
+          git stash pop
+          if ($LASTEXITCODE -ne 0) { throw 'tested patch no longer rebases cleanly on current main' }
+
+          $subjects = git log origin/main --format=%s
+          $ids = [regex]::Matches(($subjects -join "`n"), 'BUG-(\d+)') | ForEach-Object { [int]$_.Groups[1].Value }
+          $max = if ($ids) { ($ids | Measure-Object -Maximum).Maximum } else { 0 }
+          $next = $max + 1
+
+          git add desktop/src/app.rs .github/engine_startup_readiness_patch.py .github/workflows/one-shot-engine-startup-readiness.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-$next Require confirmed initial engine readiness"
+          git push origin HEAD:main
