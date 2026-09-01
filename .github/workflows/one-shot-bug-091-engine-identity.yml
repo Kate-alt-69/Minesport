@@ -99,6 +99,24 @@ jobs:
               raise SystemExit("app.rs ENGINE READY anchor moved; refusing automatic patch")
           app.write_text(text.replace(ready_old, ready_new, 1), encoding="utf-8")
 
+          registry = Path("desktop/src/registry_stream.rs")
+          text = registry.read_text(encoding="utf-8")
+          old = (
+              'pub use legacy::{\n'
+              '    CaptureNotice, DEFAULT_ADDRESS, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint,\n'
+              '    runtime_registry_root, snapshot_exists, snapshot_path,\n'
+              '};\n'
+          )
+          new = (
+              'pub use legacy::{\n'
+              '    CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint, snapshot_exists,\n'
+              '    snapshot_path,\n'
+              '};\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("registry_stream.rs re-export anchor moved; refusing automatic patch")
+          registry.write_text(text.replace(old, new, 1), encoding="utf-8")
+
       - name: Remove one-shot workflow
         run: rm -f .github/workflows/one-shot-bug-091-engine-identity.yml
 
@@ -109,6 +127,8 @@ jobs:
           grep -q 'minesport-engine-{version}.jar' desktop/src/runtime.rs
           grep -q 'ui.set_engine_status("ENGINE STARTING"' desktop/src/app.rs
           grep -q 'ui.set_task_progress(1.0)' desktop/src/app.rs
+          ! grep -q 'DEFAULT_ADDRESS' desktop/src/registry_stream.rs
+          ! grep -q 'runtime_registry_root' desktop/src/registry_stream.rs
 
       - uses: dtolnay/rust-toolchain@master
         with:
