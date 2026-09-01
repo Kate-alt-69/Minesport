@@ -55,27 +55,23 @@ fn find_engine_jar() -> Option<PathBuf> {
         }
     }
 
-    let root = repo_root().join("engine").join("build").join("libs");
-    let entries = fs::read_dir(root).ok()?;
-    let mut candidates: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| {
-                        name.starts_with("minesport-engine-") && !name.contains("sources")
-                    })
-        })
-        .collect();
-    candidates.sort();
-    candidates.pop()
+    let version_path = repo_root().join("engine").join("VERSION");
+    let raw = fs::read_to_string(version_path).ok()?;
+    let version = raw.trim();
+    if version.is_empty()
+        || !version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_'))
+    {
+        return None;
+    }
+
+    let exact = repo_root()
+        .join("engine")
+        .join("build")
+        .join("libs")
+        .join(format!("minesport-engine-{version}.jar"));
+    exact.is_file().then_some(exact)
 }
 
 fn find_export_worker_jar(env_name: &str, staged_name: &str) -> Option<PathBuf> {
@@ -661,6 +657,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MINESPORT_HEADLESS_BRIDGE_PREPARE");
     println!("cargo:rerun-if-env-changed=MINESPORT_FAST_CHECK");
     println!("cargo:rerun-if-changed={}", engine_libs.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("engine").join("VERSION").display()
+    );
     println!("cargo:rerun-if-changed={}", bridge_versions.display());
     println!("cargo:rerun-if-changed={}", blender_addon.display());
 

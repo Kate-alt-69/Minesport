@@ -20,8 +20,13 @@ public class IpcMode {
     );
     private static final int MAX_CUSTOM_SELECTION = 5_000_000;
 
+    static String engineVersion() {
+        String version = IpcMode.class.getPackage().getImplementationVersion();
+        return version == null || version.isBlank() ? "dev" : version.trim();
+    }
+
     public static void run() {
-        send("info", json -> json.addProperty("version", "0.2.1"));
+        send("info", json -> json.addProperty("version", engineVersion()));
         log("Minesport engine ready (IPC mode)");
 
         try (var reader = new BufferedReader(new InputStreamReader(System.in))) {
