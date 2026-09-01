@@ -1,0 +1,85 @@
+name: One Shot Engine Region Snapshot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-engine-region-snapshot.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minesport-engine-region-snapshot
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Sync latest main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - name: Patch chunk-granular region snapshots
+        run: python .github/engine_region_snapshot_patch.py
+
+      - name: Remove one-shot integration files
+        shell: bash
+        run: |
+          rm -f .github/engine_region_snapshot_patch.py
+          rm -f .github/workflows/one-shot-engine-region-snapshot.yml
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Validate engine patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -Fq 'copySelectedRegionSnapshot(' engine/src/main/java/dev/kastrick/minesport/safety/WorldCopier.java
+          grep -Fq 'Snapshot: ' engine/src/main/java/dev/kastrick/minesport/safety/WorldCopier.java
+          grep -Fq 'boundedSnapshotCopiesOnlyIntersectingRegionSectors' engine/src/test/java/dev/kastrick/minesport/safety/WorldCopierTest.java
+          grep -Fq 'Control implemented:' doc/engine-runtime-audit.md
+
+      - name: Test Java engine
+        working-directory: engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean build
+
+      - name: Commit tested fix with collision-free ID
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git stash push -u -m engine-region-snapshot-tested
+          git pull --rebase origin main
+          git stash pop
+
+          max="$(git log origin/main --format=%s | sed -nE 's/.*BUG-([0-9]+).*/\1/p' | sort -n | tail -1)"
+          if [ -z "$max" ]; then max=0; fi
+          next=$((max + 1))
+
+          git add engine/src/main/java/dev/kastrick/minesport/safety/WorldCopier.java engine/src/test/java/dev/kastrick/minesport/safety/WorldCopierTest.java doc/engine-runtime-audit.md .github/engine_region_snapshot_patch.py .github/workflows/one-shot-engine-region-snapshot.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-$next Snapshot only selected region chunks"
+          git push origin HEAD:main
