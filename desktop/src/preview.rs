@@ -393,7 +393,6 @@ pub struct PreviewPickMap {
     height: u32,
     indices: Arc<Vec<i32>>,
     hits: Arc<Vec<PreviewPick>>,
-    raycast_occupied: Arc<HashSet<[i32; 3]>>,
     scene: Arc<PreviewScene>,
     camera: PreviewCamera,
     view: PreviewView,
@@ -407,12 +406,9 @@ impl PreviewPickMap {
         }
 
         let (origin, direction, max_distance) = self.view.ray_for_pixel(self.camera, x, y);
-        if let Some([block_x, block_y, block_z]) = preview_picking::raycast_occupied(
-            &self.raycast_occupied,
-            origin,
-            direction,
-            max_distance,
-        ) {
+        if let Some([block_x, block_y, block_z]) =
+            preview_picking::raycast_occupied(&self.scene.occupied, origin, direction, max_distance)
+        {
             let id = self
                 .scene
                 .by_position
@@ -663,6 +659,39 @@ fn cleanup_preview_scratch_dirs(dirs: &HashSet<std::path::PathBuf>) {
     }
 }
 
+fn is_surface_block(block: &PreviewBlock, occupied: &HashSet<[i32; 3]>) -> bool {
+    CUBE_FACES.iter().any(|face| {
+        !occupied.contains(&[
+            block.x + face.neighbor[0],
+            block.y + face.neighbor[1],
+            block.z + face.neighbor[2],
+        ])
+    })
+}
+
+fn select_render_blocks<'a>(scene: &'a PreviewScene, limit: usize) -> Vec<&'a PreviewBlock> {
+    let limit = limit.max(1);
+    let mut render_blocks: Vec<&PreviewBlock> = if scene.blocks.len() <= limit {
+        scene.blocks.iter().collect()
+    } else {
+        scene
+            .blocks
+            .iter()
+            .filter(|block| is_surface_block(block, &scene.occupied))
+            .collect()
+    };
+    render_blocks.sort_by_key(|block| (block.x + block.z, block.y, block.x));
+    if render_blocks.len() > limit {
+        let stride = render_blocks.len().div_ceil(limit);
+        render_blocks = render_blocks
+            .into_iter()
+            .step_by(stride)
+            .take(limit)
+            .collect();
+    }
+    render_blocks
+}
+
 fn render_scene(
     scene: Arc<PreviewScene>,
     camera: PreviewCamera,
@@ -673,26 +702,16 @@ fn render_scene(
         bail!("No solid blocks were found in the current selection");
     }
 
-    let mut render_blocks: Vec<&PreviewBlock> = scene.blocks.iter().collect();
-    render_blocks.sort_by_key(|block| (block.x + block.z, block.y, block.x));
-    if render_blocks.len() > MAX_PREVIEW_BLOCKS {
-        let stride = render_blocks.len().div_ceil(MAX_PREVIEW_BLOCKS);
-        render_blocks = render_blocks.into_iter().step_by(stride).collect();
-    }
+    let render_blocks = select_render_blocks(&scene, MAX_PREVIEW_BLOCKS);
 
-    let rendered_occupied = Arc::new(
-        render_blocks
-            .iter()
-            .map(|block| [block.x, block.y, block.z])
-            .collect::<HashSet<[i32; 3]>>(),
-    );
-
-    let min_x = render_blocks.iter().map(|block| block.x).min().unwrap_or(0);
-    let max_x = render_blocks.iter().map(|block| block.x).max().unwrap_or(0);
-    let min_y = render_blocks.iter().map(|block| block.y).min().unwrap_or(0);
-    let max_y = render_blocks.iter().map(|block| block.y).max().unwrap_or(0);
-    let min_z = render_blocks.iter().map(|block| block.z).min().unwrap_or(0);
-    let max_z = render_blocks.iter().map(|block| block.z).max().unwrap_or(0);
+    // Camera framing and picking must describe the complete scene, not
+    // whichever surface blocks happened to fit the draw budget.
+    let min_x = scene.blocks.iter().map(|block| block.x).min().unwrap_or(0);
+    let max_x = scene.blocks.iter().map(|block| block.x).max().unwrap_or(0);
+    let min_y = scene.blocks.iter().map(|block| block.y).min().unwrap_or(0);
+    let max_y = scene.blocks.iter().map(|block| block.y).max().unwrap_or(0);
+    let min_z = scene.blocks.iter().map(|block| block.z).min().unwrap_or(0);
+    let max_z = scene.blocks.iter().map(|block| block.z).max().unwrap_or(0);
 
     let extent_x = (max_x - min_x + 1).max(1) as f32;
     let extent_y = (max_y - min_y + 1).max(1) as f32;
@@ -771,7 +790,7 @@ fn render_scene(
                 block.y + face.neighbor[1],
                 block.z + face.neighbor[2],
             ];
-            if rendered_occupied.contains(&neighbor) {
+            if scene.occupied.contains(&neighbor) {
                 continue;
             }
             if face.normal.dot(camera_forward) >= -1.0e-6 {
@@ -851,7 +870,6 @@ fn render_scene(
             height: HEIGHT,
             indices: Arc::new(hit_indices),
             hits: Arc::new(hits),
-            raycast_occupied: rendered_occupied,
             scene,
             camera,
             view,
@@ -1233,6 +1251,80 @@ mod tests {
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    fn test_block(x: i32, y: i32, z: i32) -> PreviewBlock {
+        PreviewBlock {
+            x,
+            y,
+            z,
+            id: "minecraft:stone".to_string(),
+            texture_top: String::new(),
+            texture_side: String::new(),
+            texture_bottom: String::new(),
+            r: 120,
+            g: 120,
+            b: 120,
+        }
+    }
+
+    fn test_scene(blocks: Vec<PreviewBlock>) -> PreviewScene {
+        let occupied = blocks
+            .iter()
+            .map(|block| [block.x, block.y, block.z])
+            .collect::<HashSet<_>>();
+        PreviewScene {
+            blocks,
+            by_id: HashMap::new(),
+            by_position: HashMap::new(),
+            occupied,
+            texture_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn preview_surface_detection_excludes_buried_blocks() {
+        let mut blocks = Vec::new();
+        for x in 0..3 {
+            for y in 0..3 {
+                for z in 0..3 {
+                    blocks.push(test_block(x, y, z));
+                }
+            }
+        }
+        let scene = test_scene(blocks);
+        let center = scene
+            .blocks
+            .iter()
+            .find(|block| (block.x, block.y, block.z) == (1, 1, 1))
+            .unwrap();
+        let corner = scene
+            .blocks
+            .iter()
+            .find(|block| (block.x, block.y, block.z) == (0, 0, 0))
+            .unwrap();
+        assert!(!is_surface_block(center, &scene.occupied));
+        assert!(is_surface_block(corner, &scene.occupied));
+    }
+
+    #[test]
+    fn constrained_preview_budget_spends_slots_on_surface_blocks() {
+        let mut blocks = Vec::new();
+        for x in 0..4 {
+            for y in 0..4 {
+                for z in 0..4 {
+                    blocks.push(test_block(x, y, z));
+                }
+            }
+        }
+        let scene = test_scene(blocks);
+        let selected = select_render_blocks(&scene, 10);
+        assert_eq!(selected.len(), 10);
+        assert!(
+            selected
+                .iter()
+                .all(|block| is_surface_block(block, &scene.occupied))
+        );
+    }
 
     #[test]
     fn shading_clamps() {
