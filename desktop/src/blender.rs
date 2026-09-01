@@ -1,8 +1,10 @@
+use crate::runtime;
 use anyhow::{Context, Result, bail};
 use include_dir::{Dir, DirEntry, include_dir};
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 pub const TRANSLATOR_VERSION: &str = "0.1.8";
@@ -34,6 +36,14 @@ struct BlenderTarget {
 }
 
 pub fn install_detected_profiles() -> Result<InstallReport> {
+    // One translator install owns the fixed staging directory names across all
+    // detected profiles. Concurrent installers would otherwise delete each
+    // other's .minesport_translator.tmp tree.
+    let _install_lease = runtime::acquire_process_lease(
+        "blender-translator",
+        "install",
+        Duration::from_secs(2 * 60),
+    )?;
     let targets = discover_targets()?;
     if targets.is_empty() {
         bail!(
