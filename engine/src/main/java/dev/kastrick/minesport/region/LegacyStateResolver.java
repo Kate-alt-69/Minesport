@@ -13,10 +13,14 @@ import java.util.Set;
  * This runs once during legacy chunk decoding so information such as a door's
  * split upper/lower metadata is captured before later selection filters remove
  * neighbours. Mesh exports run it again on the final selected world list so
- * states that can cross chunk/region boundaries (notably double chests) are
- * corrected globally.
+ * states that can cross chunk/region boundaries (notably double chests and
+ * stair corners) are corrected globally.
  */
 public final class LegacyStateResolver {
+    private static final Set<String> LEGACY_STAIR_IDS = Set.of(
+        "53", "67", "108", "109", "114", "128", "134", "135", "136", "156"
+    );
+
     private LegacyStateResolver() {}
 
     /** Resolve neighbour-derived legacy structures and return completed pair count. */
@@ -48,6 +52,7 @@ public final class LegacyStateResolver {
         }
 
         resolveLegacySnow(world);
+        resolveLegacyStairs(world);
 
         int resolved = resolveDoors(doors);
         resolved += resolveChests(chests);
@@ -79,6 +84,82 @@ public final class LegacyStateResolver {
                 : world.get(new Position(block.x, block.y + 1, block.z));
             block.properties.put("snowy", boolText(isSnowCover(above)));
         }
+    }
+
+    /**
+     * Pre-flattening stair metadata stores only facing + top/bottom. Minecraft
+     * derives straight/inner/outer corner shape from neighbouring stairs at
+     * render time, so reproduce that rule before modern blockstate resolution.
+     */
+    private static void resolveLegacyStairs(Map<Position, BlockData> world) {
+        for (Map.Entry<Position, BlockData> entry : world.entrySet()) {
+            BlockData stair = entry.getValue();
+            if (!isLegacyStair(stair)) continue;
+
+            String resolvedShape = stairShape(entry.getKey(), stair, world);
+            String previousShape = stair.prop("shape");
+            // A chunk-local pass may already have recovered a real corner. If a
+            // later exact-selection pass removes its partner, preserve the world
+            // shape rather than downgrading the retained stair to straight.
+            if (!"straight".equals(resolvedShape)
+                || previousShape.isEmpty()
+                || "straight".equals(previousShape)) {
+                stair.properties.put("shape", resolvedShape);
+            }
+        }
+    }
+
+    private static String stairShape(
+        Position position,
+        BlockData stair,
+        Map<Position, BlockData> world
+    ) {
+        HorizontalDirection facing = HorizontalDirection.from(stair.prop("facing"));
+        if (facing == null) return "straight";
+
+        BlockData front = world.get(position.offset(facing));
+        if (sameStairHalf(stair, front)) {
+            HorizontalDirection frontFacing = HorizontalDirection.from(front.prop("facing"));
+            if (frontFacing != null
+                && frontFacing.horizontalAxis() != facing.horizontalAxis()
+                && canTakeStairShape(stair, position, frontFacing.opposite(), world)) {
+                return frontFacing == facing.counterClockwise()
+                    ? "outer_left"
+                    : "outer_right";
+            }
+        }
+
+        BlockData back = world.get(position.offset(facing.opposite()));
+        if (sameStairHalf(stair, back)) {
+            HorizontalDirection backFacing = HorizontalDirection.from(back.prop("facing"));
+            if (backFacing != null
+                && backFacing.horizontalAxis() != facing.horizontalAxis()
+                && canTakeStairShape(stair, position, backFacing, world)) {
+                return backFacing == facing.counterClockwise()
+                    ? "inner_left"
+                    : "inner_right";
+            }
+        }
+
+        return "straight";
+    }
+
+    private static boolean canTakeStairShape(
+        BlockData stair,
+        Position position,
+        HorizontalDirection side,
+        Map<Position, BlockData> world
+    ) {
+        BlockData sideStair = world.get(position.offset(side));
+        if (!isLegacyStair(sideStair)) return true;
+        return !stair.prop("facing").equals(sideStair.prop("facing"))
+            || !stair.prop("half").equals(sideStair.prop("half"));
+    }
+
+    private static boolean sameStairHalf(BlockData first, BlockData second) {
+        return isLegacyStair(first)
+            && isLegacyStair(second)
+            && first.prop("half").equals(second.prop("half"));
     }
 
     private static int resolveChests(Map<Position, BlockData> chests) {
@@ -165,6 +246,11 @@ public final class LegacyStateResolver {
         if (block == null || block.properties == null) return false;
         String legacyId = block.properties.get("legacy_id");
         return "54".equals(legacyId) || "146".equals(legacyId);
+    }
+
+    private static boolean isLegacyStair(BlockData block) {
+        if (block == null || block.properties == null) return false;
+        return LEGACY_STAIR_IDS.contains(block.properties.get("legacy_id"));
     }
 
     private static boolean isLegacySnowyDirt(BlockData block) {
@@ -271,5 +357,58 @@ public final class LegacyStateResolver {
         return value ? "true" : "false";
     }
 
-    private record Position(int x, int y, int z) {}
+    private enum HorizontalDirection {
+        NORTH(0, -1, 0),
+        EAST(1, 0, 1),
+        SOUTH(0, 1, 0),
+        WEST(-1, 0, 1);
+
+        private final int dx;
+        private final int dz;
+        private final int horizontalAxis;
+
+        HorizontalDirection(int dx, int dz, int horizontalAxis) {
+            this.dx = dx;
+            this.dz = dz;
+            this.horizontalAxis = horizontalAxis;
+        }
+
+        static HorizontalDirection from(String value) {
+            return switch (value) {
+                case "north" -> NORTH;
+                case "east" -> EAST;
+                case "south" -> SOUTH;
+                case "west" -> WEST;
+                default -> null;
+            };
+        }
+
+        int horizontalAxis() {
+            return horizontalAxis;
+        }
+
+        HorizontalDirection opposite() {
+            return switch (this) {
+                case NORTH -> SOUTH;
+                case EAST -> WEST;
+                case SOUTH -> NORTH;
+                case WEST -> EAST;
+            };
+        }
+
+        HorizontalDirection counterClockwise() {
+            return switch (this) {
+                case NORTH -> WEST;
+                case WEST -> SOUTH;
+                case SOUTH -> EAST;
+                case EAST -> NORTH;
+            };
+        }
+    }
+
+    private record Position(int x, int y, int z) {
+        Position offset(HorizontalDirection direction) {
+            return new Position(x + direction.dx, y, z + direction.dz);
+        }
+    }
 }

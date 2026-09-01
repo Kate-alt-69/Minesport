@@ -6,73 +6,73 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class LegacyStateResolverTest {
+class LegacyStairShapeResolverTest {
     @Test
-    void combinesLegacyDoorMetadataAcrossBothHalves() {
-        BlockData lower = legacyDoor(12, 64, -7, 64, 5); // south + open
-        BlockData upper = legacyDoor(12, 65, -7, 64, 9); // upper + left hinge
+    void resolvesOuterCornersFromTheFrontPerpendicularStair() {
+        BlockData centerLeft = stair(0, 64, 0, 53, 0);   // east
+        BlockData frontLeft = stair(1, 64, 0, 67, 3);   // north
+        LegacyStateResolver.resolve(List.of(centerLeft, frontLeft));
+        assertEquals("outer_left", centerLeft.prop("shape"));
 
-        assertEquals(1, LegacyStateResolver.resolve(List.of(lower, upper)));
-
-        assertDoorState(lower, "lower", "south", "true", "left", "false");
-        assertDoorState(upper, "upper", "south", "true", "left", "false");
+        BlockData centerRight = stair(10, 64, 0, 53, 0); // east
+        BlockData frontRight = stair(11, 64, 0, 67, 2); // south
+        LegacyStateResolver.resolve(List.of(centerRight, frontRight));
+        assertEquals("outer_right", centerRight.prop("shape"));
     }
 
     @Test
-    void propagatesLaterPreFlatteningPoweredBitFromUpperHalf() {
-        BlockData lower = legacyDoor(0, 70, 0, 71, 2);  // west + closed
-        BlockData upper = legacyDoor(0, 71, 0, 71, 10); // upper + powered + right hinge
+    void resolvesInnerCornersFromTheRearPerpendicularStair() {
+        BlockData centerLeft = stair(0, 64, 0, 53, 0);    // east
+        BlockData rearLeft = stair(-1, 64, 0, 108, 3);   // north
+        LegacyStateResolver.resolve(List.of(centerLeft, rearLeft));
+        assertEquals("inner_left", centerLeft.prop("shape"));
 
-        assertEquals(1, LegacyStateResolver.resolve(List.of(lower, upper)));
-
-        assertDoorState(lower, "lower", "west", "false", "right", "true");
-        assertDoorState(upper, "upper", "west", "false", "right", "true");
+        BlockData centerRight = stair(10, 64, 0, 53, 0);  // east
+        BlockData rearRight = stair(9, 64, 0, 108, 2);   // south
+        LegacyStateResolver.resolve(List.of(centerRight, rearRight));
+        assertEquals("inner_right", centerRight.prop("shape"));
     }
 
     @Test
-    void leavesCroppedSingleHalfRenderableWithSafeDefaults() {
-        BlockData lowerOnly = legacyDoor(3, 40, 9, 64, 7);
-        assertEquals(0, LegacyStateResolver.resolve(List.of(lowerOnly)));
-        assertDoorState(lowerOnly, "lower", "north", "true", "right", "false");
-
-        BlockData upperOnly = legacyDoor(3, 41, 9, 64, 9);
-        assertEquals(0, LegacyStateResolver.resolve(List.of(upperOnly)));
-        assertDoorState(upperOnly, "upper", "north", "false", "left", "false");
+    void doesNotCornerAcrossDifferentStairHalves() {
+        BlockData bottom = stair(0, 64, 0, 53, 0);       // east, bottom
+        BlockData topFront = stair(1, 64, 0, 67, 7);     // north, top
+        LegacyStateResolver.resolve(List.of(bottom, topFront));
+        assertEquals("straight", bottom.prop("shape"));
     }
 
     @Test
-    void doesNotPairDifferentDoorTypesAtTheSameColumn() {
-        BlockData oakLower = legacyDoor(1, 90, 1, 64, 0);
-        BlockData ironUpper = legacyDoor(1, 91, 1, 71, 8);
+    void sideGuardPreventsFalseOuterCornerInTwoByTwoLayout() {
+        BlockData center = stair(0, 64, 0, 53, 0);       // east
+        BlockData front = stair(1, 64, 0, 67, 3);       // north
+        BlockData blockingSide = stair(0, 64, 1, 128, 0); // east, same half
 
-        assertEquals(0, LegacyStateResolver.resolve(List.of(oakLower, ironUpper)));
-        assertDoorState(oakLower, "lower", "east", "false", "right", "false");
-        assertDoorState(ironUpper, "upper", "north", "false", "right", "false");
+        LegacyStateResolver.resolve(List.of(center, front, blockingSide));
+        assertEquals("straight", center.prop("shape"));
     }
 
-    private static BlockData legacyDoor(
-        int x,
-        int y,
-        int z,
-        int numericId,
-        int metadata
-    ) {
+    @Test
+    void cornerShapeWorksAcrossDifferentLegacyStairMaterials() {
+        BlockData oak = stair(0, 64, 0, 53, 0);
+        BlockData quartz = stair(1, 64, 0, 156, 3);
+
+        LegacyStateResolver.resolve(List.of(oak, quartz));
+        assertEquals("outer_left", oak.prop("shape"));
+    }
+
+    @Test
+    void recoveredCornerSurvivesLaterCroppedPass() {
+        BlockData center = stair(0, 64, 0, 53, 0);
+        BlockData front = stair(1, 64, 0, 67, 3);
+        LegacyStateResolver.resolve(List.of(center, front));
+        assertEquals("outer_left", center.prop("shape"));
+
+        LegacyStateResolver.resolve(List.of(center));
+        assertEquals("outer_left", center.prop("shape"));
+    }
+
+    private static BlockData stair(int x, int y, int z, int numericId, int metadata) {
         LegacyBlockIds.DecodedBlock decoded = LegacyBlockIds.decode(numericId, metadata);
         return new BlockData(x, y, z, decoded.blockId(), decoded.properties());
-    }
-
-    private static void assertDoorState(
-        BlockData block,
-        String half,
-        String facing,
-        String open,
-        String hinge,
-        String powered
-    ) {
-        assertEquals(half, block.properties.get("half"));
-        assertEquals(facing, block.properties.get("facing"));
-        assertEquals(open, block.properties.get("open"));
-        assertEquals(hinge, block.properties.get("hinge"));
-        assertEquals(powered, block.properties.get("powered"));
     }
 }
