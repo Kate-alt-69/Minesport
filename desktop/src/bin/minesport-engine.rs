@@ -77,6 +77,9 @@ fn main() -> Result<()> {
 fn run_worker() -> Result<()> {
     #[cfg(windows)]
     let _engine_use_lease = engine_lease::acquire_engine_use_shared()?;
+    // Keep all generated Java/toolchain files leased until the Java engine has
+    // exited. This prevents another Minesport process from clearing a live JDK.
+    let _generated_cache_lease = runtime::acquire_generated_cache_lease()?;
     let log = diagnostics::initialize()?;
     let java = engine_java::prepare_engine_java()?;
     diagnostics::Logger::new("ENGINE").info(

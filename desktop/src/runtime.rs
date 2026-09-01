@@ -192,7 +192,7 @@ pub(crate) fn acquire_generated_cache_lease() -> Result<GeneratedCacheLease> {
     let local = GENERATED_CACHE_USE
         .read()
         .map_err(|_| anyhow!("Minesport generated-cache lease lock is poisoned"))?;
-    let process = acquire_shared_process_lease("generated-cache", "use")?;
+    let process = acquire_generated_cache_process_lease()?;
     Ok(GeneratedCacheLease {
         _local: local,
         _process: process,
@@ -249,6 +249,10 @@ pub(crate) fn acquire_process_lease(
         }
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+pub(crate) fn acquire_generated_cache_process_lease() -> Result<ProcessLease> {
+    acquire_shared_process_lease("generated-cache", "use")
 }
 
 fn acquire_shared_process_lease(namespace: &str, name: &str) -> Result<ProcessLease> {

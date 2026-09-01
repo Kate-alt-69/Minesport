@@ -65,6 +65,17 @@ where
         return Ok(home);
     }
 
+    // Every cached-JDK lookup/install participates in the process-wide
+    // generated-cache lease so another Minesport process cannot clear the
+    // toolchain tree underneath discovery, download, verification, or extract.
+    let _generated_cache_process_lease = runtime::acquire_generated_cache_process_lease()?;
+    let toolchain_key = format!("jdk-{required}");
+    let _toolchain_lease =
+        runtime::acquire_process_lease("toolchain", &toolchain_key, Duration::from_secs(10 * 60))
+            .with_context(|| format!("coordinate Minesport-managed JDK {required}"))?;
+
+    // Re-check the cache only after the per-JDK lease is held: another process
+    // may have completed this exact JDK while we were waiting.
     check_cancelled(&cancel, "checking JDK cache")?;
     progress(ToolchainProgress {
         percent: 44,

@@ -89,9 +89,14 @@ fn main() -> anyhow::Result<()> {
 
     let engine_worker_mode = std::env::args().nth(1).as_deref() == Some("--engine-worker");
 
-    // The legacy self-worker fallback must be just as self-contained as the
-    // installed sidecar. Provision/select the engine JDK before app::handle_cli
-    // hands --engine-worker to the IPC relay.
+    // The self-worker owns cached Java/toolchain files for its complete
+    // lifetime. Cache cleanup from another Minesport process must not delete
+    // the JDK after preparation while the Java engine is still running.
+    let _engine_worker_cache_lease = if engine_worker_mode {
+        Some(runtime::acquire_generated_cache_lease()?)
+    } else {
+        None
+    };
     if engine_worker_mode {
         let _ = engine_java::prepare_engine_java()?;
     }
