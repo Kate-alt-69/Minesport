@@ -1,0 +1,93 @@
+name: One Shot Cache Consumer Leases
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-cache-consumer-leases.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minesport-cache-consumer-leases
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Sync latest main
+        shell: pwsh
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - name: Patch remaining cache consumers
+        shell: pwsh
+        run: python .github/cache_consumer_lease_patch.py
+
+      - name: Remove one-shot integration files
+        shell: pwsh
+        run: |
+          Remove-Item -Force .github/cache_consumer_lease_patch.py
+          Remove-Item -Force .github/workflows/one-shot-cache-consumer-leases.yml
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Format and validate patch
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path desktop/Cargo.toml --all
+          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
+          if ((Select-String -Path desktop/src/heightmap_cache.rs -SimpleMatch 'acquire_generated_cache_lease()').Count -lt 3) { throw 'heightmap cache leases missing' }
+          if (-not (Select-String -Quiet -Path desktop/src/selection.rs -SimpleMatch 'acquire_generated_cache_lease()')) { throw 'selection cache lease missing' }
+          if (-not (Select-String -Quiet -Path desktop/src/bin/bridge-prepare.rs -SimpleMatch 'let _cache_lease = runtime::acquire_generated_cache_lease()?')) { throw 'bridge-prepare cache lease missing' }
+          if (-not (Select-String -Quiet -Path desktop/src/blender.rs -SimpleMatch '"blender-translator"')) { throw 'Blender translator install lease missing' }
+
+      - name: Test Windows cache consumers
+        shell: pwsh
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'Windows all-target tests failed' }
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'Windows release check failed' }
+
+      - name: Commit tested fixes with collision-free IDs
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git stash push -u -m cache-consumer-leases-tested
+          git pull --rebase origin main
+          git stash pop
+          if ($LASTEXITCODE -ne 0) { throw 'tested patch no longer rebases cleanly on current main' }
+
+          $subjects = git log origin/main --format=%s
+          $ids = [regex]::Matches(($subjects -join "`n"), 'BUG-(\d+)') | ForEach-Object { [int]$_.Groups[1].Value }
+          $max = if ($ids) { ($ids | Measure-Object -Maximum).Maximum } else { 0 }
+          $first = $max + 1
+          $second = $max + 2
+
+          git add desktop/src/heightmap_cache.rs desktop/src/selection.rs desktop/src/bin/bridge-prepare.rs
+          git diff --cached --check
+          git commit -m "FIX | BUG-$first Protect remaining generated cache consumers"
+
+          git add desktop/src/blender.rs .github/cache_consumer_lease_patch.py .github/workflows/one-shot-cache-consumer-leases.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-$second Serialize Blender translator installs"
+          git push origin HEAD:main
