@@ -1,3 +1,4 @@
+use crate::runtime;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -58,6 +59,7 @@ struct CoordinateRow {
 }
 
 pub fn write_selection_file(cache_root: &Path, selection: &ExactSelection) -> Result<PathBuf> {
+    let _cache_lease = runtime::acquire_generated_cache_lease()?;
     let directory = cache_root.join("selection");
     fs::create_dir_all(&directory)
         .with_context(|| format!("create exact-selection cache {}", directory.display()))?;
@@ -88,8 +90,9 @@ pub fn write_selection_file(cache_root: &Path, selection: &ExactSelection) -> Re
                 let _ = fs::remove_file(&temporary);
             }
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("install exact preview selection {}", path.display()));
+                return Err(error).with_context(|| {
+                    format!("install exact preview selection {}", path.display())
+                });
             }
         }
     }

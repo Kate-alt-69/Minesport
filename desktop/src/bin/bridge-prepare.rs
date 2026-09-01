@@ -66,6 +66,10 @@ fn main() -> Result<()> {
         );
     }
 
+    // The helper writes source/build/output artifacts under generated cache by
+    // default. Keep cache cleanup from another process out of that transaction.
+    let _cache_lease = runtime::acquire_generated_cache_lease()?;
+
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

@@ -24,6 +24,7 @@ pub struct CachedHeightmap {
 pub fn load(world: &Path) -> Result<Option<(CachedHeightmap, Vec<u8>)>> {
     let fingerprint = fingerprint(world)?;
     let (metadata_path, png_path) = cache_paths(world)?;
+    let _cache_lease = runtime::acquire_generated_cache_lease()?;
     restore_backup_if_needed(&metadata_path)?;
     restore_backup_if_needed(&png_path)?;
 
@@ -64,6 +65,7 @@ pub fn save(
 ) -> Result<()> {
     let fingerprint = fingerprint(world)?;
     let (metadata_path, png_path) = cache_paths(world)?;
+    let _cache_lease = runtime::acquire_generated_cache_lease()?;
     let parent = metadata_path
         .parent()
         .context("heightmap cache has no parent")?;
@@ -91,6 +93,7 @@ pub fn save(
 
 pub fn invalidate(world: &Path) -> Result<()> {
     let (metadata_path, png_path) = cache_paths(world)?;
+    let _cache_lease = runtime::acquire_generated_cache_lease()?;
     for path in [metadata_path, png_path] {
         for candidate in [path.clone(), backup_path(&path)] {
             match fs::remove_file(&candidate) {
