@@ -1,4 +1,4 @@
-name: One-shot BUG-094 preview topology publish
+name: One-shot BUG-094 preview artifact
 
 on:
   push:
@@ -8,30 +8,20 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: minesport-one-shot-bug-094-publish
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  publish-verified-patch:
+  export-verified-preview:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
-      - name: Verify tested preview source is unchanged
+      - name: Verify tested source and apply BUG-094
         shell: bash
         run: |
           set -euo pipefail
           test "$(git hash-object desktop/src/preview.rs)" = "0a786458014c64aaefee9614376f421d36a153c4"
-
-      - name: Reapply verified BUG-094 patch
-        shell: bash
-        run: |
           python3 <<'PY'
           from pathlib import Path
           import re
@@ -39,15 +29,15 @@ jobs:
           path = Path('desktop/src/preview.rs')
           text = path.read_text(encoding='utf-8')
 
-          def replace_once(old: str, new: str, label: str) -> None:
+          def one(old, new, label):
               global text
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f'{label}: expected exactly one anchor, found {count}')
+                  raise SystemExit(f'{label}: expected 1 anchor, found {count}')
               text = text.replace(old, new, 1)
 
-          replace_once('    raycast_occupied: Arc<HashSet<[i32; 3]>>,\n', '', 'pick-map occupancy field')
-          replace_once('            &self.raycast_occupied,\n', '            &self.scene.occupied,\n', 'full-scene raycast')
+          one('    raycast_occupied: Arc<HashSet<[i32; 3]>>,\n', '', 'occupancy field')
+          one('            &self.raycast_occupied,\n', '            &self.scene.occupied,\n', 'full raycast')
 
           helper = '''fn is_surface_block(block: &PreviewBlock, occupied: &HashSet<[i32; 3]>) -> bool {
               CUBE_FACES.iter().any(|face| {
@@ -73,17 +63,13 @@ jobs:
               render_blocks.sort_by_key(|block| (block.x + block.z, block.y, block.x));
               if render_blocks.len() > limit {
                   let stride = render_blocks.len().div_ceil(limit);
-                  render_blocks = render_blocks
-                      .into_iter()
-                      .step_by(stride)
-                      .take(limit)
-                      .collect();
+                  render_blocks = render_blocks.into_iter().step_by(stride).take(limit).collect();
               }
               render_blocks
           }
 
           '''
-          replace_once('fn render_scene(\n', helper + 'fn render_scene(\n', 'surface-budget helper')
+          one('fn render_scene(\n', helper + 'fn render_scene(\n', 'surface selector')
 
           pattern = re.compile(
               r'    let mut render_blocks: Vec<&PreviewBlock> = scene\.blocks\.iter\(\)\.collect\(\);\n'
@@ -104,10 +90,10 @@ jobs:
           '''
           text, count = pattern.subn(replacement, text, count=1)
           if count != 1:
-              raise SystemExit(f'preview render budget: expected one match, found {count}')
+              raise SystemExit(f'render budget: expected 1 anchor, found {count}')
 
-          replace_once('            if rendered_occupied.contains(&neighbor) {\n', '            if scene.occupied.contains(&neighbor) {\n', 'full-scene culling')
-          replace_once('            raycast_occupied: rendered_occupied,\n', '', 'pick-map sampled occupancy assignment')
+          one('            if rendered_occupied.contains(&neighbor) {\n', '            if scene.occupied.contains(&neighbor) {\n', 'full culling')
+          one('            raycast_occupied: rendered_occupied,\n', '', 'pick assignment')
 
           anchor = '''    #[test]
               fn shading_clamps() {
@@ -128,10 +114,7 @@ jobs:
           }
 
           fn test_scene(blocks: Vec<PreviewBlock>) -> PreviewScene {
-              let occupied = blocks
-                  .iter()
-                  .map(|block| [block.x, block.y, block.z])
-                  .collect::<HashSet<_>>();
+              let occupied = blocks.iter().map(|block| [block.x, block.y, block.z]).collect::<HashSet<_>>();
               PreviewScene {
                   blocks,
                   by_id: HashMap::new(),
@@ -177,8 +160,7 @@ jobs:
           #[test]
               fn shading_clamps() {
           '''
-          replace_once(anchor, tests, 'preview topology tests')
-
+          one(anchor, tests, 'topology regressions')
           path.write_text(text, encoding='utf-8')
           PY
 
@@ -187,10 +169,8 @@ jobs:
           toolchain: 1.92.0
           components: rustfmt
 
-      - name: Format and verify deterministic patch
-        shell: bash
+      - name: Rustfmt and verify deterministic output
         run: |
-          set -euo pipefail
           cargo fmt --manifest-path desktop/Cargo.toml --all
           git diff --check
           ! grep -q 'raycast_occupied:' desktop/src/preview.rs
@@ -198,16 +178,9 @@ jobs:
           grep -q 'select_render_blocks(&scene, MAX_PREVIEW_BLOCKS)' desktop/src/preview.rs
           grep -q '&self.scene.occupied' desktop/src/preview.rs
 
-      - name: Publish tested preview fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name Kate
-          git config user.email dhwanksh2000@gmail.com
-          git add desktop/src/preview.rs
-          git diff --cached --check
-          git commit -m 'FIX | BUG-094 Preserve full preview topology'
-          git fetch origin main
-          git rebase origin/main
-          git push origin HEAD:main
-          git push origin --delete __temp_should_not_exist__ || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bug-094-preview-rs
+          path: desktop/src/preview.rs
+          if-no-files-found: error
+          retention-days: 1
