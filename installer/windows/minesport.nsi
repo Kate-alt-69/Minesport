@@ -86,9 +86,9 @@ FunctionEnd
 Function InstallEngineSidecar
   SetOutPath "$INSTDIR"
 
-  ; Keep one rollback generation. The GUI only considers a replacement healthy
-  ; after hash/protocol verification and an IPC handshake, so .prev must survive
-  ; the installer run until Minesport has had a chance to validate the new engine.
+  ; Keep exactly one rollback generation. Each replacement rotates the
+  ; currently installed engine into .prev; Minesport intentionally preserves that
+  ; generation after verification so a later recovery still has a known fallback.
   Delete "$INSTDIR\${ENGINE_EXE}.prev"
   Delete "$INSTDIR\${ENGINE_MANIFEST}.prev"
 

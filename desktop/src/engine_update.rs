@@ -414,9 +414,20 @@ fn fetch_latest_release(agent: &ureq::Agent) -> Result<Option<Release>> {
         Err(ureq::Error::Status(404, _)) => return Ok(None),
         Err(error) => return Err(anyhow!(error)).context("query latest Minesport GitHub Release"),
     };
-    let reader = response.into_reader().take(MAX_RELEASE_JSON + 1);
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .take(MAX_RELEASE_JSON + 1)
+        .read_to_end(&mut bytes)
+        .context("read latest Minesport GitHub Release")?;
+    if bytes.len() as u64 > MAX_RELEASE_JSON {
+        bail!(
+            "latest Minesport GitHub Release response exceeds {} bytes",
+            MAX_RELEASE_JSON
+        );
+    }
     let release: Release =
-        serde_json::from_reader(reader).context("decode latest Minesport GitHub Release")?;
+        serde_json::from_slice(&bytes).context("decode latest Minesport GitHub Release")?;
     Ok(Some(release))
 }
 
