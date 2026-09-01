@@ -4,6 +4,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -356,7 +357,13 @@ where
 fn notify_listeners(listeners: &[Listener], event: &RuntimeCacheEvent) {
     for listener in listeners {
         if let Ok(callback) = listener.lock() {
-            callback(event.clone());
+            if catch_unwind(AssertUnwindSafe(|| callback(event.clone()))).is_err() {
+                diagnostics::Logger::new("RUNTIME").child("REGISTRY").warn(
+                    "RuntimeRegistryListenerPanicked",
+                    "runtime registry listener panicked; continuing worker lifecycle",
+                    &[],
+                );
+            }
         }
     }
 }
@@ -466,6 +473,26 @@ mod tests {
             "download failed"
         );
         assert_eq!(first_line("cancelled"), "cancelled");
+    }
+
+    #[test]
+    fn panicking_listener_does_not_abort_following_listeners() {
+        let observed = Arc::new(AtomicBool::new(false));
+        let observed_listener = observed.clone();
+        let listeners = vec![
+            wrap_listener(|_| panic!("listener failure")),
+            wrap_listener(move |_| {
+                observed_listener.store(true, Ordering::Relaxed);
+            }),
+        ];
+        notify_listeners(
+            &listeners,
+            &RuntimeCacheEvent::Progress(Progress {
+                percent: 50,
+                message: "test".into(),
+            }),
+        );
+        assert!(observed.load(Ordering::Relaxed));
     }
 
     #[test]
