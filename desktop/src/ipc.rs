@@ -578,6 +578,34 @@ impl Engine {
         Ok(())
     }
 
+    pub fn activate_embedded_fallback(&self, reason: &str) -> Result<bool> {
+        let mut launch = self.inner.launch.lock().map_err(|_| {
+            anyhow!("Minesport backend launch lock poisoned while activating fallback")
+        })?;
+        if launch.mode != "sidecar" {
+            return Ok(false);
+        }
+
+        let previous_executable = launch.executable.display().to_string();
+        let previous_version = launch.engine_version.clone();
+        let fallback = BackendLaunch::self_worker(
+            env::current_exe().context("resolve Minesport executable for health fallback")?,
+        );
+        diagnostics::Logger::new("IPC").child("UI").warn(
+            "EngineSidecarHealthFailedFallback",
+            "verified engine sidecar failed runtime health; embedded fallback selected for this session",
+            &[
+                ("reason", reason.to_string()),
+                ("sidecar", previous_executable),
+                ("sidecar_version", previous_version),
+                ("fallback", fallback.executable.display().to_string()),
+                ("fallback_version", fallback.engine_version.clone()),
+            ],
+        );
+        *launch = fallback;
+        Ok(true)
+    }
+
     pub fn is_shutting_down(&self) -> bool {
         self.inner.shutting_down.load(Ordering::Acquire)
     }

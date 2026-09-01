@@ -203,7 +203,22 @@ pub fn run() -> Result<()> {
     let ping_engine = engine.clone();
     let ping_weak = ui.as_weak();
     thread::spawn(move || {
-        if let Err(error) = ping_engine.ping_confirmed(Duration::from_secs(10)) {
+        let mut readiness = ping_engine.ping_confirmed(Duration::from_secs(10));
+        if let Err(error) = &readiness {
+            let reason = format!("initial readiness failed: {error:#}");
+            match ping_engine.activate_embedded_fallback(&reason) {
+                Ok(true) => {
+                    readiness = ping_engine
+                        .restart()
+                        .and_then(|_| ping_engine.ping_confirmed(Duration::from_secs(10)));
+                }
+                Ok(false) => {}
+                Err(fallback_error) => {
+                    readiness = Err(fallback_error.context(reason));
+                }
+            }
+        }
+        if let Err(error) = readiness {
             let _ = ping_weak.upgrade_in_event_loop(move |ui| {
                 if !ui.get_engine_ready() {
                     ui.set_engine_status("ENGINE ERROR".into());
@@ -2300,6 +2315,18 @@ fn pump_engine_events(
                                 Err(error) => {
                                     last_error =
                                         format!("restart readiness check failed: {error:#}");
+                                    let reason = last_error.clone();
+                                    match engine.activate_embedded_fallback(&reason) {
+                                        Ok(true) => pending_logs.push(
+                                            "Engine sidecar failed confirmed health; embedded fallback selected for the next recovery attempt".to_string(),
+                                        ),
+                                        Ok(false) => {}
+                                        Err(fallback_error) => {
+                                            last_error = format!(
+                                                "{last_error} · could not activate embedded fallback: {fallback_error:#}"
+                                            );
+                                        }
+                                    }
                                 }
                             },
                             Err(error) => {
