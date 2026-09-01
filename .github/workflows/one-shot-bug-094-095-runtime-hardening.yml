@@ -1,0 +1,273 @@
+name: One Shot Engine Runtime Hardening
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-bug-094-095-runtime-hardening.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Sync latest main
+        shell: pwsh
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - name: Patch engine and runtime identity contracts
+        shell: python
+        run: |
+          from pathlib import Path
+
+          ipc = Path("engine/src/main/java/dev/kastrick/minesport/IpcMode.java")
+          text = ipc.read_text(encoding="utf-8")
+          old = '    public static void run() {\n        send("info", json -> json.addProperty("version", "0.2.1"));\n'
+          new = (
+              '    static String engineVersion() {\n'
+              '        String version = IpcMode.class.getPackage().getImplementationVersion();\n'
+              '        return version == null || version.isBlank() ? "dev" : version.trim();\n'
+              '    }\n\n'
+              '    public static void run() {\n'
+              '        send("info", json -> json.addProperty("version", engineVersion()));\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("IpcMode.java version anchor moved; refusing automatic patch")
+          ipc.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          build = Path("desktop/build.rs")
+          text = build.read_text(encoding="utf-8")
+          old = '''fn find_engine_jar() -> Option<PathBuf> {
+    if let Ok(path) = env::var("MINESPORT_ENGINE_JAR") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let root = repo_root().join("engine").join("build").join("libs");
+    let entries = fs::read_dir(root).ok()?;
+    let mut candidates: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("minesport-engine-") && !name.contains("sources")
+                    })
+        })
+        .collect();
+    candidates.sort();
+    candidates.pop()
+}
+'''
+          new = '''fn find_engine_jar() -> Option<PathBuf> {
+    if let Ok(path) = env::var("MINESPORT_ENGINE_JAR") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let version_path = repo_root().join("engine").join("VERSION");
+    let raw = fs::read_to_string(version_path).ok()?;
+    let version = raw.trim();
+    if version.is_empty()
+        || !version.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_')
+        })
+    {
+        return None;
+    }
+
+    let exact = repo_root()
+        .join("engine")
+        .join("build")
+        .join("libs")
+        .join(format!("minesport-engine-{version}.jar"));
+    exact.is_file().then_some(exact)
+}
+'''
+          if text.count(old) != 1:
+              raise SystemExit("desktop/build.rs find_engine_jar anchor moved; refusing automatic patch")
+          text = text.replace(old, new, 1)
+          old = '    println!("cargo:rerun-if-changed={}", engine_libs.display());\n'
+          new = (
+              '    println!("cargo:rerun-if-changed={}", engine_libs.display());\n'
+              '    println!(\n'
+              '        "cargo:rerun-if-changed={}",\n'
+              '        root.join("engine").join("VERSION").display()\n'
+              '    );\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("desktop/build.rs rerun anchor moved; refusing automatic patch")
+          build.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          cache = Path("desktop/src/runtime_cache.rs")
+          text = cache.read_text(encoding="utf-8")
+          old = '    path::{Path, PathBuf},\n    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},\n'
+          new = (
+              '    panic::{AssertUnwindSafe, catch_unwind},\n'
+              '    path::{Path, PathBuf},\n'
+              '    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("runtime_cache.rs import anchor moved; refusing automatic patch")
+          text = text.replace(old, new, 1)
+          old = '''fn notify_listeners(listeners: &[Listener], event: &RuntimeCacheEvent) {
+    for listener in listeners {
+        if let Ok(callback) = listener.lock() {
+            callback(event.clone());
+        }
+    }
+}
+'''
+          new = '''fn notify_listeners(listeners: &[Listener], event: &RuntimeCacheEvent) {
+    for listener in listeners {
+        if let Ok(callback) = listener.lock() {
+            if catch_unwind(AssertUnwindSafe(|| callback(event.clone()))).is_err() {
+                diagnostics::Logger::new("RUNTIME").child("REGISTRY").warn(
+                    "RuntimeRegistryListenerPanicked",
+                    "runtime registry listener panicked; continuing worker lifecycle",
+                    &[],
+                );
+            }
+        }
+    }
+}
+'''
+          if text.count(old) != 1:
+              raise SystemExit("runtime_cache.rs notify_listeners anchor moved; refusing automatic patch")
+          text = text.replace(old, new, 1)
+          anchor = '''    #[test]
+    fn emit_releases_manager_lock_before_listener_runs() {
+'''
+          test = '''    #[test]
+    fn panicking_listener_does_not_abort_following_listeners() {
+        let observed = Arc::new(AtomicBool::new(false));
+        let observed_listener = observed.clone();
+        let listeners = vec![
+            wrap_listener(|_| panic!("listener failure")),
+            wrap_listener(move |_| {
+                observed_listener.store(true, Ordering::Relaxed);
+            }),
+        ];
+        notify_listeners(
+            &listeners,
+            &RuntimeCacheEvent::Progress(Progress {
+                percent: 50,
+                message: "test".into(),
+            }),
+        );
+        assert!(observed.load(Ordering::Relaxed));
+    }
+
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit("runtime_cache.rs test anchor moved; refusing automatic patch")
+          cache.write_text(text.replace(anchor, test + anchor, 1), encoding="utf-8")
+
+      - name: Remove one-shot workflow
+        shell: pwsh
+        run: Remove-Item -Force .github/workflows/one-shot-bug-094-095-runtime-hardening.yml
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Format and validate source patch
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          if (Select-String -Quiet -Path engine/src/main/java/dev/kastrick/minesport/IpcMode.java -SimpleMatch 'json.addProperty("version", "0.2.1")') { throw 'hardcoded Java IPC version survived' }
+          if (-not (Select-String -Quiet -Path desktop/build.rs -SimpleMatch 'minesport-engine-{version}.jar')) { throw 'exact engine JAR selector missing' }
+          if (-not (Select-String -Quiet -Path desktop/build.rs -SimpleMatch 'join("VERSION")')) { throw 'engine VERSION rerun dependency missing' }
+          if (-not (Select-String -Quiet -Path desktop/src/runtime_cache.rs -SimpleMatch 'RuntimeRegistryListenerPanicked')) { throw 'listener panic fence missing' }
+
+      - name: Build and test Java engine identity
+        shell: pwsh
+        working-directory: engine
+        run: |
+          .\gradlew.bat --no-daemon --stacktrace clean test jar
+          $version = (Get-Content VERSION -Raw).Trim()
+          $jar = Resolve-Path "build/libs/minesport-engine-$version.jar"
+          $stdin = Join-Path $env:RUNNER_TEMP 'minesport-ipc-stdin.txt'
+          $stdout = Join-Path $env:RUNNER_TEMP 'minesport-ipc-stdout.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'minesport-ipc-stderr.txt'
+          Set-Content -Path $stdin -Encoding utf8NoBOM -Value '{"command":"quit"}'
+          $process = Start-Process -FilePath java -ArgumentList @('-jar', $jar.Path, '--ipc') -RedirectStandardInput $stdin -RedirectStandardOutput $stdout -RedirectStandardError $stderr -NoNewWindow -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "engine IPC identity probe exited $($process.ExitCode): $(Get-Content $stderr -Raw)" }
+          $line = Get-Content $stdout | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -First 1
+          if (-not $line) { throw 'engine IPC identity probe emitted no JSON info line' }
+          $info = $line | ConvertFrom-Json
+          if ($info.version -ne $version) { throw "engine IPC reported $($info.version), expected $version" }
+
+      - name: Prove Cargo chooses exact engine JAR
+        shell: pwsh
+        run: |
+          $version = (Get-Content engine/VERSION -Raw).Trim()
+          $expectedJar = (Resolve-Path "engine/build/libs/minesport-engine-$version.jar").Path
+          Set-Content -Path engine/build/libs/minesport-engine-9.9.9.jar -Encoding ascii -Value 'lexical-decoy'
+          $env:MINESPORT_EXPORT_WORKER_FABRIC_JAR = $expectedJar
+          $env:MINESPORT_EXPORT_WORKER_FORGE_JAR = $expectedJar
+          $env:MINESPORT_EXPORT_WORKER_NEOFORGE_JAR = $expectedJar
+          $env:MINESPORT_EXPORT_WORKER_QUILT_JAR = $expectedJar
+          Remove-Item Env:MINESPORT_FAST_CHECK -ErrorAction SilentlyContinue
+          Remove-Item Env:MINESPORT_ENGINE_JAR -ErrorAction SilentlyContinue
+          cargo check --locked --manifest-path desktop/Cargo.toml --bin minesport-engine
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo exact-engine build check failed' }
+          $embedded = Get-ChildItem desktop/target/debug/build/minesport-desktop-*/out/minesport-engine.jar | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $embedded) { throw 'could not locate embedded engine payload from Cargo build' }
+          $expectedHash = (Get-FileHash $expectedJar -Algorithm SHA256).Hash
+          $actualHash = (Get-FileHash $embedded.FullName -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "Cargo embedded wrong engine JAR: $($embedded.FullName)" }
+
+      - name: Test Rust runtime lifecycle
+        shell: pwsh
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'Rust all-target tests failed' }
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'Rust release check failed' }
+
+      - name: Commit tested fixes
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add engine/src/main/java/dev/kastrick/minesport/IpcMode.java desktop/build.rs
+          git diff --cached --check
+          git commit -m "FIX | BUG-094 Align Java and Cargo engine identity"
+          git add desktop/src/runtime_cache.rs .github/workflows/one-shot-bug-094-095-runtime-hardening.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-095 Contain runtime registry listener panics"
+          git pull --rebase origin main
+          git push origin HEAD:main
