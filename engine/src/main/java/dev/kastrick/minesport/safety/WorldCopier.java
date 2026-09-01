@@ -11,6 +11,9 @@ import java.util.function.Consumer;
  * directory before processing. The original world is never modified.
  */
 public class WorldCopier {
+    private static final int SECTOR_SIZE = 4096;
+    private static final int REGION_HEADER_BYTES = SECTOR_SIZE * 2;
+
     private static final List<String> OVERWORLD_REGION_PATHS = List.of(
         "dimensions" + File.separator + "minecraft" + File.separator + "overworld" + File.separator + "region",
         "region"
@@ -129,9 +132,11 @@ public class WorldCopier {
         Path destination = tempDir.toPath().resolve("entities");
         Files.createDirectories(destination);
         for (File file : files) {
-            copyFile(
+            copySelectedRegionSnapshot(
                 file.toPath(),
                 destination.resolve(file.getName()),
+                minX, minZ,
+                maxX, maxZ,
                 log,
                 "entities/" + file.getName()
             );
@@ -292,9 +297,11 @@ public class WorldCopier {
         Files.createDirectories(destination);
         for (File file : files) {
             String destinationName = normalizedBlockRegionName(file.getName());
-            copyFile(
+            copySelectedRegionSnapshot(
                 file.toPath(),
                 destination.resolve(destinationName),
+                minX, minZ,
+                maxX, maxZ,
                 log,
                 "region/" + destinationName
             );
@@ -324,6 +331,138 @@ public class WorldCopier {
         String lower = name.toLowerCase(Locale.ROOT);
         if (!lower.endsWith(".mcr")) return name;
         return name.substring(0, name.length() - 4) + ".mca";
+    }
+
+    private static void copySelectedRegionSnapshot(
+        Path source,
+        Path destination,
+        int minX, int minZ,
+        int maxX, int maxZ,
+        Consumer<String> log,
+        String label
+    ) throws IOException {
+        long[] coordinates = regionCoordinates(source.getFileName().toString());
+        if (coordinates == null || selectionCoversWholeRegion(coordinates[0], coordinates[1], minX, minZ, maxX, maxZ)) {
+            copyFile(source, destination, log, label);
+            return;
+        }
+
+        try (var input = new RandomAccessFile(source.toFile(), "r")) {
+            if (input.length() < REGION_HEADER_BYTES) {
+                // Preserve the historical copy behavior for malformed/legacy
+                // inputs. RegionReader will make the final validity decision.
+                copyFile(source, destination, log, label);
+                return;
+            }
+
+            byte[] sourceHeader = new byte[REGION_HEADER_BYTES];
+            input.readFully(sourceHeader);
+            byte[] snapshotHeader = new byte[REGION_HEADER_BYTES];
+            if (destination.getParent() != null) Files.createDirectories(destination.getParent());
+
+            int nextSector = 2;
+            int keptChunks = 0;
+            byte[] buffer = new byte[64 * 1024];
+            try (var output = new RandomAccessFile(destination.toFile(), "rw")) {
+                output.setLength(REGION_HEADER_BYTES);
+
+                for (int index = 0; index < 1024; index++) {
+                    int localChunkX = index % 32;
+                    int localChunkZ = index / 32;
+                    long worldChunkX = coordinates[0] * 32L + localChunkX;
+                    long worldChunkZ = coordinates[1] * 32L + localChunkZ;
+                    if (!chunkIntersects(worldChunkX, worldChunkZ, minX, minZ, maxX, maxZ)) continue;
+
+                    int locationIndex = index * 4;
+                    int sourceSector = ((sourceHeader[locationIndex] & 0xFF) << 16)
+                        | ((sourceHeader[locationIndex + 1] & 0xFF) << 8)
+                        | (sourceHeader[locationIndex + 2] & 0xFF);
+                    int sectorCount = sourceHeader[locationIndex + 3] & 0xFF;
+                    if (sourceSector == 0 || sectorCount == 0) continue;
+
+                    long sourceStart = (long)sourceSector * SECTOR_SIZE;
+                    long bytesToCopy = (long)sectorCount * SECTOR_SIZE;
+                    long sourceEnd = sourceStart + bytesToCopy;
+                    if (sourceStart < REGION_HEADER_BYTES || sourceEnd > input.length()) continue;
+
+                    output.seek((long)nextSector * SECTOR_SIZE);
+                    input.seek(sourceStart);
+                    long remaining = bytesToCopy;
+                    while (remaining > 0L) {
+                        int read = input.read(buffer, 0, (int)Math.min(buffer.length, remaining));
+                        if (read < 0) throw new EOFException("Region sector ended unexpectedly");
+                        output.write(buffer, 0, read);
+                        remaining -= read;
+                    }
+
+                    snapshotHeader[locationIndex] = (byte)((nextSector >>> 16) & 0xFF);
+                    snapshotHeader[locationIndex + 1] = (byte)((nextSector >>> 8) & 0xFF);
+                    snapshotHeader[locationIndex + 2] = (byte)(nextSector & 0xFF);
+                    snapshotHeader[locationIndex + 3] = (byte)sectorCount;
+                    int timestampIndex = SECTOR_SIZE + locationIndex;
+                    System.arraycopy(sourceHeader, timestampIndex, snapshotHeader, timestampIndex, 4);
+
+                    nextSector += sectorCount;
+                    keptChunks++;
+                }
+
+                output.seek(0L);
+                output.write(snapshotHeader);
+                output.setLength((long)nextSector * SECTOR_SIZE);
+            }
+
+            Files.setLastModifiedTime(destination, Files.getLastModifiedTime(source));
+            if (log != null) {
+                log.accept("Snapshot: " + label + " · " + keptChunks + " selected chunk(s)");
+            }
+        }
+    }
+
+    private static long[] regionCoordinates(String name) {
+        String[] parts = name.split("\\.");
+        if (parts.length < 4 || !"r".equals(parts[0])) return null;
+        try {
+            return new long[] {
+                Long.parseLong(parts[1]),
+                Long.parseLong(parts[2])
+            };
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static boolean selectionCoversWholeRegion(
+        long regionX, long regionZ,
+        int minX, int minZ,
+        int maxX, int maxZ
+    ) {
+        long selectionMinX = Math.min((long)minX, (long)maxX);
+        long selectionMaxX = Math.max((long)minX, (long)maxX);
+        long selectionMinZ = Math.min((long)minZ, (long)maxZ);
+        long selectionMaxZ = Math.max((long)minZ, (long)maxZ);
+        long regionMinX = regionX * 512L;
+        long regionMinZ = regionZ * 512L;
+        return selectionMinX <= regionMinX
+            && selectionMaxX >= regionMinX + 511L
+            && selectionMinZ <= regionMinZ
+            && selectionMaxZ >= regionMinZ + 511L;
+    }
+
+    private static boolean chunkIntersects(
+        long chunkX, long chunkZ,
+        int minX, int minZ,
+        int maxX, int maxZ
+    ) {
+        long chunkMinX = chunkX * 16L;
+        long chunkMinZ = chunkZ * 16L;
+        long chunkMaxX = chunkMinX + 15L;
+        long chunkMaxZ = chunkMinZ + 15L;
+        long selectionMinX = Math.min((long)minX, (long)maxX);
+        long selectionMaxX = Math.max((long)minX, (long)maxX);
+        long selectionMinZ = Math.min((long)minZ, (long)maxZ);
+        long selectionMaxZ = Math.max((long)minZ, (long)maxZ);
+        return chunkMaxX >= selectionMinX && chunkMinX <= selectionMaxX
+            && chunkMaxZ >= selectionMinZ && chunkMinZ <= selectionMaxZ;
     }
 
     private static void copyFile(Path source, Path destination, Consumer<String> log, String label)

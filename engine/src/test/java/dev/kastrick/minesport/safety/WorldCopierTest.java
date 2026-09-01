@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.Arrays;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -107,6 +108,41 @@ class WorldCopierTest {
     }
 
     @Test
+    void boundedSnapshotCopiesOnlyIntersectingRegionSectors() throws Exception {
+        Path world = temp.resolve("bounded-world");
+        Path region = world.resolve("region");
+        Files.createDirectories(region);
+        Files.writeString(world.resolve("level.dat"), "level");
+        Path source = region.resolve("r.0.0.mca");
+        writeSyntheticRegion(source);
+
+        File copied = WorldCopier.copyToTemp(
+            world.toFile(),
+            0, 0,
+            15, 15,
+            null
+        );
+        try {
+            byte[] snapshot = Files.readAllBytes(
+                copied.toPath().resolve("region").resolve("r.0.0.mca")
+            );
+            assertEquals(3 * 4096, snapshot.length);
+            assertEquals(2, locationOffset(snapshot, 0));
+            assertEquals(1, locationCount(snapshot, 0));
+            assertEquals(0, locationOffset(snapshot, 1023));
+            assertEquals(0, locationCount(snapshot, 1023));
+            assertEquals((byte)0x11, snapshot[2 * 4096]);
+
+            byte[] original = Files.readAllBytes(source);
+            assertEquals(4 * 4096, original.length);
+            assertEquals(3, locationOffset(original, 1023));
+            assertEquals((byte)0x22, original[3 * 4096]);
+        } finally {
+            WorldCopier.cleanupTemp(copied);
+        }
+    }
+
+    @Test
     void cleanupRefusesNestedForeignDirectoryEvenWithMinesportName() throws Exception {
         Path foreign = temp.resolve("minesport_foreign");
         Files.createDirectories(foreign);
@@ -115,6 +151,34 @@ class WorldCopierTest {
         WorldCopier.cleanupTemp(foreign.toFile());
 
         assertTrue(Files.exists(foreign.resolve("keep.txt")));
+    }
+
+    private static void writeSyntheticRegion(Path path) throws IOException {
+        byte[] bytes = new byte[4 * 4096];
+        setLocation(bytes, 0, 2, 1);
+        setLocation(bytes, 1023, 3, 1);
+        Arrays.fill(bytes, 2 * 4096, 3 * 4096, (byte)0x11);
+        Arrays.fill(bytes, 3 * 4096, 4 * 4096, (byte)0x22);
+        Files.write(path, bytes);
+    }
+
+    private static void setLocation(byte[] region, int index, int sector, int count) {
+        int offset = index * 4;
+        region[offset] = (byte)((sector >>> 16) & 0xFF);
+        region[offset + 1] = (byte)((sector >>> 8) & 0xFF);
+        region[offset + 2] = (byte)(sector & 0xFF);
+        region[offset + 3] = (byte)count;
+    }
+
+    private static int locationOffset(byte[] region, int index) {
+        int offset = index * 4;
+        return ((region[offset] & 0xFF) << 16)
+            | ((region[offset + 1] & 0xFF) << 8)
+            | (region[offset + 2] & 0xFF);
+    }
+
+    private static int locationCount(byte[] region, int index) {
+        return region[index * 4 + 3] & 0xFF;
     }
 
     @Test

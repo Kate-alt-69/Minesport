@@ -8,11 +8,13 @@ This note records engine/runtime concerns found while introducing the independen
 **Area:** Java engine / world safety copy  
 **Files:** `engine/src/main/java/dev/kastrick/minesport/IpcMode.java`, `engine/src/main/java/dev/kastrick/minesport/safety/WorldCopier.java`
 
-`WorldCopier.copyToTemp()` copies every region file that intersects the requested X/Z bounds into a temporary world and `IpcMode.handleExport()` then opens and scans those copied files again. Even a very small selection inside a region causes the whole region file to be copied.
+`WorldCopier.copyToTemp()` preserves the original-world safety boundary by staging selected world data into a private temporary snapshot before parsing. Historically every intersecting `.mca/.mcr` was copied wholesale, so a tiny selection inside a large region still duplicated the entire region file before the engine read it.
 
-**Impact:** Large worlds or slow disks can spend substantial time and temporary storage on duplicate I/O before geometry work starts.
+**Impact:** Large worlds or slow disks could spend substantial time and temporary storage on data outside the requested selection before geometry work started.
 
-**Direction:** Keep the original-world safety boundary, but investigate read-only region snapshots, chunk-granular staging, or a bounded copy/parser pipeline so Minesport does not always write the full intersecting region before reading it.
+**Control implemented:** Bounded snapshots now rebuild private Anvil region files from the raw allocated sectors of only the chunks intersecting the requested X/Z bounds, preserving location/timestamp headers and the existing selected `.mcc` external-chunk copies. Requests covering a whole region keep the fast normal file-copy path. The source world is still opened read-only and regression tests verify unselected source sectors remain untouched.
+
+**Remaining direction:** Selected chunks are still written once into the private snapshot and then read by `RegionReader`. A future read-only snapshot abstraction could remove that remaining selected-chunk write without weakening the guarantee that engine parsing never mutates the original save.
 
 ---
 
