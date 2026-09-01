@@ -354,8 +354,12 @@ fn check_and_stage_update_if_due() -> Result<()> {
         .context("verify publisher certificate before downloading engine update")?;
     let installer_asset = select_installer_asset(&release)?;
     let update_root = update_root();
-    fs::create_dir_all(&update_root)
-        .with_context(|| format!("create engine update cache {}", update_root.display()))?;
+    fs::create_dir_all(&update_root).with_context(|| {
+        format!(
+            "create engine update staging directory {}",
+            update_root.display()
+        )
+    })?;
     let installer = update_root.join(&installer_asset.name);
     download_verified_asset(&agent, installer_asset, &installer, MAX_INSTALLER_SIZE)?;
 
@@ -908,7 +912,9 @@ fn update_state_path() -> PathBuf {
 }
 
 fn update_root() -> PathBuf {
-    runtime::cache_root().join("engine-update")
+    // A verified package is pending durable state, not disposable cache. Cache
+    // cleanup must never delete an installer while another launch is applying it.
+    runtime::data_root().join("engine-update").join("staged")
 }
 
 fn staged_update_path() -> PathBuf {
