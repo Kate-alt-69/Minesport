@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -19,6 +20,8 @@ class LayeredNamespaceResolverTest {
         "{\"textures\":{\"all\":\"minecraft:block/stone\"},"
             + "\"elements\":[{\"from\":[0,0,0],\"to\":[16,16,16],"
             + "\"faces\":{\"north\":{\"texture\":\"#all\"}}}]}";
+    private static final String ANIMATION_METADATA =
+        "{\"animation\":{\"frametime\":2,\"interpolate\":true}}";
 
     @TempDir Path tempDir;
 
@@ -68,6 +71,44 @@ class LayeredNamespaceResolverTest {
         try {
             assertNotNull(resolver.resolveBlockState("shared:test"));
             assertTrue(resolver.listModels("shared").contains("example"));
+        } finally {
+            resolver.close();
+        }
+    }
+
+    @Test
+    void quiltAnimationMetadataReadsLayeredNamespaceSources() throws Exception {
+        Path mods = Files.createDirectories(tempDir.resolve("quilt-metadata"));
+        writeJar(mods.resolve("a.jar"), "quilt.mod.json", quiltMeta("quilt_a"),
+            "assets/shared/blockstates/test.json", BLOCKSTATE);
+        writeJar(mods.resolve("b.jar"), "quilt.mod.json", quiltMeta("quilt_b"),
+            "assets/shared/textures/block/animated.png.mcmeta", ANIMATION_METADATA);
+
+        QuiltResolver resolver = QuiltResolver.load(mods.toFile(), null);
+        try {
+            assertEquals(
+                ANIMATION_METADATA,
+                ModJarTextureMetadata.read(resolver, "shared:block/animated")
+            );
+        } finally {
+            resolver.close();
+        }
+    }
+
+    @Test
+    void forgeAnimationMetadataReadsLayeredNamespaceSources() throws Exception {
+        Path mods = Files.createDirectories(tempDir.resolve("forge-metadata"));
+        writeJar(mods.resolve("a.jar"), "META-INF/mods.toml", forgeMeta("forge_a"),
+            "assets/shared/blockstates/test.json", BLOCKSTATE);
+        writeJar(mods.resolve("b.jar"), "META-INF/mods.toml", forgeMeta("forge_b"),
+            "assets/shared/textures/block/animated.png.mcmeta", ANIMATION_METADATA);
+
+        ForgeResolver resolver = ForgeResolver.load(mods.toFile(), null);
+        try {
+            assertEquals(
+                ANIMATION_METADATA,
+                ModJarTextureMetadata.read(resolver, "shared:block/animated")
+            );
         } finally {
             resolver.close();
         }
