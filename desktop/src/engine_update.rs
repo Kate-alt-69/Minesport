@@ -1,4 +1,4 @@
-use crate::{diagnostics, ipc, runtime};
+use crate::{diagnostics, engine_lease, ipc, runtime};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -83,6 +83,27 @@ pub fn apply_staged_update() -> Result<()> {
     if !stage_path.is_file() {
         return Ok(());
     }
+    let Some(_stage_lease) = engine_lease::try_acquire_stage_exclusive()? else {
+        diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
+            "EngineStagedUpdateBusy",
+            "another Minesport process owns the engine update staging area; deferring apply",
+            &[],
+        );
+        return Ok(());
+    };
+    // The stage can disappear between the cheap pre-check and acquiring the
+    // cross-process lock if another process just completed or cleared it.
+    if !stage_path.is_file() {
+        return Ok(());
+    }
+    let Some(_engine_use_lease) = engine_lease::try_acquire_engine_use_exclusive()? else {
+        diagnostics::Logger::new("ENGINE").child("UPDATE").info(
+            "EngineStagedUpdateDeferredInUse",
+            "another Minesport process is using the engine; keeping the verified update staged for a later launch",
+            &[],
+        );
+        return Ok(());
+    };
 
     let stage_bytes = fs::read(&stage_path)
         .with_context(|| format!("read staged engine update {}", stage_path.display()))?;
@@ -221,6 +242,15 @@ fn check_and_stage_update_if_due() -> Result<()> {
         }
         return Ok(());
     }
+
+    let Some(_stage_lease) = engine_lease::try_acquire_stage_exclusive()? else {
+        diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
+            "EngineUpdateCheckBusy",
+            "another Minesport process owns the engine update staging area; skipping this background pass",
+            &[],
+        );
+        return Ok(());
+    };
 
     if staged_update_path().is_file() {
         diagnostics::Logger::new("ENGINE").child("UPDATE").debug(

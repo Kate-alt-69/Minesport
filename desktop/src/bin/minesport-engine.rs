@@ -5,6 +5,10 @@ mod diagnostics;
 #[path = "../engine_java.rs"]
 mod engine_java;
 #[allow(dead_code)]
+#[cfg(windows)]
+#[path = "../engine_lease.rs"]
+mod engine_lease;
+#[allow(dead_code)]
 #[cfg_attr(not(windows), allow(unused_imports))]
 #[path = "../ipc.rs"]
 mod ipc;
@@ -71,6 +75,8 @@ fn main() -> Result<()> {
 }
 
 fn run_worker() -> Result<()> {
+    #[cfg(windows)]
+    let _engine_use_lease = engine_lease::acquire_engine_use_shared()?;
     let log = diagnostics::initialize()?;
     let java = engine_java::prepare_engine_java()?;
     diagnostics::Logger::new("ENGINE").info(

@@ -12,6 +12,8 @@ mod bridge_java;
 mod diagnostics;
 mod engine_java;
 #[cfg(windows)]
+mod engine_lease;
+#[cfg(windows)]
 mod engine_update;
 mod error_reporter;
 mod heightmap_cache;

@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use crate::engine_lease;
 use crate::{diagnostics, runtime};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -230,6 +232,8 @@ struct EngineInner {
     child: Mutex<Child>,
     events: Sender<EngineEvent>,
     launch: BackendLaunch,
+    #[cfg(windows)]
+    _engine_use_lease: engine_lease::Lease,
     generation: Arc<AtomicU64>,
     restarting: AtomicBool,
     shutting_down: AtomicBool,
@@ -257,6 +261,9 @@ pub struct Engine {
 
 impl Engine {
     pub fn start() -> Result<(Self, Receiver<EngineEvent>)> {
+        #[cfg(windows)]
+        let engine_use_lease = engine_lease::acquire_engine_use_shared()
+            .context("coordinate Minesport engine sidecar use")?;
         let logger = diagnostics::Logger::new("IPC").child("UI");
         let operation = logger.operation("IpcBackendWorkerStart");
         let launch = BackendLaunch::resolve()?;
@@ -326,6 +333,8 @@ impl Engine {
                     child: Mutex::new(child),
                     events: tx,
                     launch,
+                    #[cfg(windows)]
+                    _engine_use_lease: engine_use_lease,
                     generation,
                     restarting: AtomicBool::new(false),
                     shutting_down: AtomicBool::new(false),
