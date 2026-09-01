@@ -34,7 +34,9 @@ pub fn reset() {
 /// Old viewer semantics: when both points exist, the next LMB confirms the
 /// current cuboid without performing another raycast. Otherwise LMB chooses A.
 pub fn primary_action() -> PrimaryAction {
-    let Ok(state) = state().lock() else { return PrimaryAction::PickPointA; };
+    let Ok(state) = state().lock() else {
+        return PrimaryAction::PickPointA;
+    };
     match (state.point_a, state.point_b) {
         (Some(point_a), Some(point_b)) => PrimaryAction::Confirm(selection(point_a, point_b)),
         _ => PrimaryAction::PickPointA,
@@ -50,14 +52,18 @@ pub fn set_point_a(point: [i32; 3]) {
 
 /// RMB only has meaning after point A exists, matching the retired viewer.
 pub fn set_point_b(point: [i32; 3]) -> Option<BoxSelection> {
-    let Ok(mut state) = state().lock() else { return None; };
+    let Ok(mut state) = state().lock() else {
+        return None;
+    };
     let point_a = state.point_a?;
     state.point_b = Some(point);
     Some(selection(point_a, point))
 }
 
 pub fn current() -> Option<BoxSelection> {
-    let Ok(state) = state().lock() else { return None; };
+    let Ok(state) = state().lock() else {
+        return None;
+    };
     Some(selection(state.point_a?, state.point_b?))
 }
 
@@ -69,13 +75,21 @@ pub fn point_a() -> Option<[i32; 3]> {
 /// the look vector matters exactly like the retired OpenGL viewer: looking west
 /// grows toward -X, looking down grows toward -Y, etc.
 pub fn resize_point_b(direction: [f32; 3], delta: i32) -> Option<BoxSelection> {
-    if delta == 0 { return current(); }
-    let Ok(mut state) = state().lock() else { return None; };
+    if delta == 0 {
+        return current();
+    }
+    let Ok(mut state) = state().lock() else {
+        return None;
+    };
     let point_a = state.point_a?;
     let mut point_b = state.point_b?;
 
     let axis = dominant_axis(direction);
-    let signed_delta = if direction[axis] >= 0.0 { delta } else { delta.saturating_neg() };
+    let signed_delta = if direction[axis] >= 0.0 {
+        delta
+    } else {
+        delta.saturating_neg()
+    };
     point_b[axis] = point_b[axis].saturating_add(signed_delta);
     state.point_b = Some(point_b);
     Some(selection(point_a, point_b))
@@ -102,7 +116,13 @@ fn dominant_axis(direction: [f32; 3]) -> usize {
     let x = direction[0].abs();
     let y = direction[1].abs();
     let z = direction[2].abs();
-    if x >= y && x >= z { 0 } else if y >= z { 1 } else { 2 }
+    if x >= y && x >= z {
+        0
+    } else if y >= z {
+        1
+    } else {
+        2
+    }
 }
 
 #[cfg(test)]

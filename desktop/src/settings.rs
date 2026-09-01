@@ -5,7 +5,10 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Mutex, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -98,7 +101,9 @@ pub fn reserve_save() -> u64 {
 pub fn load() -> DesktopSettings {
     let path = settings_path();
     let _ = restore_backup_if_needed(&path);
-    let Ok(bytes) = fs::read(&path) else { return DesktopSettings::default(); };
+    let Ok(bytes) = fs::read(&path) else {
+        return DesktopSettings::default();
+    };
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
@@ -138,8 +143,13 @@ fn restore_backup_if_needed(path: &Path) -> Result<()> {
     }
     let backup = backup_path(path);
     if backup.is_file() {
-        fs::rename(&backup, path)
-            .with_context(|| format!("restore settings {} from {}", path.display(), backup.display()))?;
+        fs::rename(&backup, path).with_context(|| {
+            format!(
+                "restore settings {} from {}",
+                path.display(),
+                backup.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -153,8 +163,8 @@ fn crash_safe_replace(path: &Path, bytes: &[u8]) -> Result<()> {
     let backup = backup_path(path);
 
     {
-        let mut file = File::create(&temporary)
-            .with_context(|| format!("create {}", temporary.display()))?;
+        let mut file =
+            File::create(&temporary).with_context(|| format!("create {}", temporary.display()))?;
         file.write_all(bytes)
             .with_context(|| format!("write {}", temporary.display()))?;
         file.sync_all()
@@ -205,23 +215,37 @@ mod tests {
         let stale_published = std::sync::atomic::AtomicBool::new(false);
         let newest_published = std::sync::atomic::AtomicBool::new(false);
 
-        assert!(!coordinator.publish_latest(stale, || {
-            stale_published.store(true, Ordering::Release);
-            Ok(())
-        }).unwrap());
+        assert!(
+            !coordinator
+                .publish_latest(stale, || {
+                    stale_published.store(true, Ordering::Release);
+                    Ok(())
+                })
+                .unwrap()
+        );
         assert!(!stale_published.load(Ordering::Acquire));
 
-        assert!(coordinator.publish_latest(newest, || {
-            newest_published.store(true, Ordering::Release);
-            Ok(())
-        }).unwrap());
+        assert!(
+            coordinator
+                .publish_latest(newest, || {
+                    newest_published.store(true, Ordering::Release);
+                    Ok(())
+                })
+                .unwrap()
+        );
         assert!(newest_published.load(Ordering::Acquire));
     }
 
     #[test]
     fn backup_restore_recovers_interrupted_publication() {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("minesport-settings-backup-{}-{stamp}", std::process::id()));
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "minesport-settings-backup-{}-{stamp}",
+            std::process::id()
+        ));
         fs::create_dir_all(&root).unwrap();
         let path = root.join("desktop.json");
         let backup = backup_path(&path);

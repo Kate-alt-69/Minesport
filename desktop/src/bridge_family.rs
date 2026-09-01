@@ -9,13 +9,19 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-static FORGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-forge-versions");
-static NEOFORGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-neoforge-versions");
-static QUILT_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-quilt-versions");
+static FORGE_VERSIONS: Dir<'_> =
+    include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-forge-versions");
+static NEOFORGE_VERSIONS: Dir<'_> =
+    include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-neoforge-versions");
+static QUILT_VERSIONS: Dir<'_> =
+    include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-quilt-versions");
 
-const FORGE_MANIFEST_JSON: &str = include_str!("../../minesport-bridge-forge-versions/manifest.json");
-const NEOFORGE_MANIFEST_JSON: &str = include_str!("../../minesport-bridge-neoforge-versions/manifest.json");
-const QUILT_MANIFEST_JSON: &str = include_str!("../../minesport-bridge-quilt-versions/manifest.json");
+const FORGE_MANIFEST_JSON: &str =
+    include_str!("../../minesport-bridge-forge-versions/manifest.json");
+const NEOFORGE_MANIFEST_JSON: &str =
+    include_str!("../../minesport-bridge-neoforge-versions/manifest.json");
+const QUILT_MANIFEST_JSON: &str =
+    include_str!("../../minesport-bridge-quilt-versions/manifest.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeFamily {
@@ -131,60 +137,263 @@ struct EmbeddedFile {
 }
 
 const FORGE_FILES: &[EmbeddedFile] = &[
-    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../minesport-bridge-forge/build.gradle"), executable: false },
-    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../minesport-bridge-forge/settings.gradle"), executable: false },
-    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../minesport-bridge-forge/gradle.properties"), executable: false },
-    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../minesport-bridge-forge/gradlew"), executable: true },
-    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../minesport-bridge-forge/gradlew.bat"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../minesport-bridge-forge/gradle/wrapper/gradle-wrapper.jar"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../minesport-bridge-forge/gradle/wrapper/gradle-wrapper.properties"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java", bytes: include_bytes!("../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java"), executable: false },
-    EmbeddedFile { path: "src/main/resources/META-INF/mods.toml", bytes: include_bytes!("../../minesport-bridge-forge/src/main/resources/META-INF/mods.toml"), executable: false },
+    EmbeddedFile {
+        path: "build.gradle",
+        bytes: include_bytes!("../../minesport-bridge-forge/build.gradle"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "settings.gradle",
+        bytes: include_bytes!("../../minesport-bridge-forge/settings.gradle"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle.properties",
+        bytes: include_bytes!("../../minesport-bridge-forge/gradle.properties"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradlew",
+        bytes: include_bytes!("../../minesport-bridge-forge/gradlew"),
+        executable: true,
+    },
+    EmbeddedFile {
+        path: "gradlew.bat",
+        bytes: include_bytes!("../../minesport-bridge-forge/gradlew.bat"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle/wrapper/gradle-wrapper.jar",
+        bytes: include_bytes!("../../minesport-bridge-forge/gradle/wrapper/gradle-wrapper.jar"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle/wrapper/gradle-wrapper.properties",
+        bytes: include_bytes!(
+            "../../minesport-bridge-forge/gradle/wrapper/gradle-wrapper.properties"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-forge/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/resources/META-INF/mods.toml",
+        bytes: include_bytes!("../../minesport-bridge-forge/src/main/resources/META-INF/mods.toml"),
+        executable: false,
+    },
 ];
 
 const NEOFORGE_FILES: &[EmbeddedFile] = &[
-    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../minesport-bridge-neoforge/build.gradle"), executable: false },
-    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../minesport-bridge-neoforge/settings.gradle"), executable: false },
-    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../minesport-bridge-neoforge/gradle.properties"), executable: false },
-    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../minesport-bridge-neoforge/gradlew"), executable: true },
-    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../minesport-bridge-neoforge/gradlew.bat"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../minesport-bridge-neoforge/gradle/wrapper/gradle-wrapper.jar"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../minesport-bridge-neoforge/gradle/wrapper/gradle-wrapper.properties"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java"), executable: false },
-    EmbeddedFile { path: "src/main/resources/META-INF/neoforge.mods.toml", bytes: include_bytes!("../../minesport-bridge-neoforge/src/main/resources/META-INF/neoforge.mods.toml"), executable: false },
+    EmbeddedFile {
+        path: "build.gradle",
+        bytes: include_bytes!("../../minesport-bridge-neoforge/build.gradle"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "settings.gradle",
+        bytes: include_bytes!("../../minesport-bridge-neoforge/settings.gradle"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle.properties",
+        bytes: include_bytes!("../../minesport-bridge-neoforge/gradle.properties"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradlew",
+        bytes: include_bytes!("../../minesport-bridge-neoforge/gradlew"),
+        executable: true,
+    },
+    EmbeddedFile {
+        path: "gradlew.bat",
+        bytes: include_bytes!("../../minesport-bridge-neoforge/gradlew.bat"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle/wrapper/gradle-wrapper.jar",
+        bytes: include_bytes!("../../minesport-bridge-neoforge/gradle/wrapper/gradle-wrapper.jar"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle/wrapper/gradle-wrapper.properties",
+        bytes: include_bytes!(
+            "../../minesport-bridge-neoforge/gradle/wrapper/gradle-wrapper.properties"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-neoforge/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/resources/META-INF/neoforge.mods.toml",
+        bytes: include_bytes!(
+            "../../minesport-bridge-neoforge/src/main/resources/META-INF/neoforge.mods.toml"
+        ),
+        executable: false,
+    },
 ];
 
 const QUILT_FILES: &[EmbeddedFile] = &[
-    EmbeddedFile { path: "build.gradle", bytes: include_bytes!("../../minesport-bridge-quilt/build.gradle"), executable: false },
-    EmbeddedFile { path: "settings.gradle", bytes: include_bytes!("../../minesport-bridge-quilt/settings.gradle"), executable: false },
-    EmbeddedFile { path: "gradle.properties", bytes: include_bytes!("../../minesport-bridge-quilt/gradle.properties"), executable: false },
-    EmbeddedFile { path: "gradlew", bytes: include_bytes!("../../minesport-bridge-quilt/gradlew"), executable: true },
-    EmbeddedFile { path: "gradlew.bat", bytes: include_bytes!("../../minesport-bridge-quilt/gradlew.bat"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.jar", bytes: include_bytes!("../../minesport-bridge-quilt/gradle/wrapper/gradle-wrapper.jar"), executable: false },
-    EmbeddedFile { path: "gradle/wrapper/gradle-wrapper.properties", bytes: include_bytes!("../../minesport-bridge-quilt/gradle/wrapper/gradle-wrapper.properties"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"), executable: false },
-    EmbeddedFile { path: "src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java"), executable: false },
-    EmbeddedFile { path: "src/main/resources/fabric.mod.json", bytes: include_bytes!("../../minesport-bridge-quilt/src/main/resources/fabric.mod.json"), executable: false },
+    EmbeddedFile {
+        path: "build.gradle",
+        bytes: include_bytes!("../../minesport-bridge-quilt/build.gradle"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "settings.gradle",
+        bytes: include_bytes!("../../minesport-bridge-quilt/settings.gradle"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle.properties",
+        bytes: include_bytes!("../../minesport-bridge-quilt/gradle.properties"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradlew",
+        bytes: include_bytes!("../../minesport-bridge-quilt/gradlew"),
+        executable: true,
+    },
+    EmbeddedFile {
+        path: "gradlew.bat",
+        bytes: include_bytes!("../../minesport-bridge-quilt/gradlew.bat"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle/wrapper/gradle-wrapper.jar",
+        bytes: include_bytes!("../../minesport-bridge-quilt/gradle/wrapper/gradle-wrapper.jar"),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "gradle/wrapper/gradle-wrapper.properties",
+        bytes: include_bytes!(
+            "../../minesport-bridge-quilt/gradle/wrapper/gradle-wrapper.properties"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java",
+        bytes: include_bytes!(
+            "../../minesport-bridge-quilt/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java"
+        ),
+        executable: false,
+    },
+    EmbeddedFile {
+        path: "src/main/resources/fabric.mod.json",
+        bytes: include_bytes!("../../minesport-bridge-quilt/src/main/resources/fabric.mod.json"),
+        executable: false,
+    },
 ];
 
 pub fn is_supported(family: BridgeFamily, version: &str) -> bool {
     if family == BridgeFamily::Fabric {
         return bridge_compat::is_supported(version);
     }
-    let Some(version) = bridge_compat::normalize_version(version) else { return false; };
-    let Ok(manifest) = manifest(family) else { return false; };
-    if manifest.base.compatible.iter().any(|candidate| candidate == &version) {
+    let Some(version) = bridge_compat::normalize_version(version) else {
+        return false;
+    };
+    let Ok(manifest) = manifest(family) else {
+        return false;
+    };
+    if manifest
+        .base
+        .compatible
+        .iter()
+        .any(|candidate| candidate == &version)
+    {
         return true;
     }
     manifest.profiles.iter().any(|profile| {
@@ -210,7 +419,11 @@ where
     let version = bridge_compat::normalize_version(version)
         .ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
     let manifest = manifest(family)?;
-    let bundled = manifest.base.compatible.iter().any(|candidate| candidate == &version);
+    let bundled = manifest
+        .base
+        .compatible
+        .iter()
+        .any(|candidate| candidate == &version);
     let profile = if bundled {
         None
     } else {
@@ -218,14 +431,29 @@ where
     };
 
     if workspace.exists() {
-        fs::remove_dir_all(workspace)
-            .with_context(|| format!("reset {} Bridge workspace {}", family.label(), workspace.display()))?;
+        fs::remove_dir_all(workspace).with_context(|| {
+            format!(
+                "reset {} Bridge workspace {}",
+                family.label(),
+                workspace.display()
+            )
+        })?;
     }
-    fs::create_dir_all(workspace)
-        .with_context(|| format!("create {} Bridge workspace {}", family.label(), workspace.display()))?;
+    fs::create_dir_all(workspace).with_context(|| {
+        format!(
+            "create {} Bridge workspace {}",
+            family.label(),
+            workspace.display()
+        )
+    })?;
 
     let files = canonical_files(family)?;
-    report(&mut progress, 5, "Preparing Bridge", &format!("Materializing canonical {} Bridge", family.label()));
+    report(
+        &mut progress,
+        5,
+        "Preparing Bridge",
+        &format!("Materializing canonical {} Bridge", family.label()),
+    );
     for (index, embedded) in files.iter().enumerate() {
         let target = safe_join(workspace, Path::new(embedded.path))?;
         write_file(&target, embedded.bytes)?;
@@ -259,12 +487,22 @@ where
 
     if let Some(patch_path) = patch_path {
         let patch_text = embedded_family_text(family, &patch_path)?;
-        let patch: PatchSet = serde_json::from_str(&patch_text)
-            .with_context(|| format!("parse {} compatibility recipe {patch_path}", family.label()))?;
+        let patch: PatchSet = serde_json::from_str(&patch_text).with_context(|| {
+            format!("parse {} compatibility recipe {patch_path}", family.label())
+        })?;
         if patch.schema != 1 {
-            bail!("unsupported {} patch schema {} in {patch_path}", family.label(), patch.schema);
+            bail!(
+                "unsupported {} patch schema {} in {patch_path}",
+                family.label(),
+                patch.schema
+            );
         }
-        report(&mut progress, 27, "Preparing Bridge", &format!("Applying {profile_id}"));
+        report(
+            &mut progress,
+            27,
+            "Preparing Bridge",
+            &format!("Applying {profile_id}"),
+        );
         for operation in &patch.operations {
             apply_operation(family, workspace, operation, &variables)
                 .with_context(|| format!("apply {} operation for {}", operation.op, profile_id))?;
@@ -278,8 +516,16 @@ where
         "variables": variables.clone(),
         "purpose": "rust-loader-family-compatibility-source"
     });
-    fs::write(workspace.join("minesport-target.json"), serde_json::to_vec_pretty(&metadata)?)?;
-    report(&mut progress, 34, "Preparing Bridge", "Compatibility workspace ready");
+    fs::write(
+        workspace.join("minesport-target.json"),
+        serde_json::to_vec_pretty(&metadata)?,
+    )?;
+    report(
+        &mut progress,
+        34,
+        "Preparing Bridge",
+        "Compatibility workspace ready",
+    );
 
     Ok(bridge_compat::PreparedSource {
         version,
@@ -300,12 +546,22 @@ fn manifest(family: BridgeFamily) -> Result<FamilyManifest> {
     let parsed: FamilyManifest = serde_json::from_str(raw)
         .with_context(|| format!("parse {} Bridge compatibility manifest", family.label()))?;
     if parsed.schema != 1 {
-        bail!("unsupported {} Bridge manifest schema {}", family.label(), parsed.schema);
+        bail!(
+            "unsupported {} Bridge manifest schema {}",
+            family.label(),
+            parsed.schema
+        );
     }
-    if !parsed.loader.eq_ignore_ascii_case(&family.label().replace('-', ""))
+    if !parsed
+        .loader
+        .eq_ignore_ascii_case(&family.label().replace('-', ""))
         && !parsed.loader.eq_ignore_ascii_case(&family.label())
     {
-        bail!("{} Bridge manifest declares loader {:?}", family.label(), parsed.loader);
+        bail!(
+            "{} Bridge manifest declares loader {:?}",
+            family.label(),
+            parsed.loader
+        );
     }
     if parsed.base.version.trim().is_empty() {
         bail!("{} Bridge manifest has no base version", family.label());
@@ -313,15 +569,27 @@ fn manifest(family: BridgeFamily) -> Result<FamilyManifest> {
     Ok(parsed)
 }
 
-fn profile_for<'a>(manifest: &'a FamilyManifest, version: &str, family: BridgeFamily) -> Result<&'a FamilyProfile> {
+fn profile_for<'a>(
+    manifest: &'a FamilyManifest,
+    version: &str,
+    family: BridgeFamily,
+) -> Result<&'a FamilyProfile> {
     for profile in &manifest.profiles {
-        let expression = Regex::new(&profile.match_expression)
-            .with_context(|| format!("invalid {} version expression for {}", family.label(), profile.id))?;
+        let expression = Regex::new(&profile.match_expression).with_context(|| {
+            format!(
+                "invalid {} version expression for {}",
+                family.label(),
+                profile.id
+            )
+        })?;
         if expression.is_match(version) {
             return Ok(profile);
         }
     }
-    bail!("Minesport has no {} Bridge compatibility recipe for Minecraft {version}", family.label())
+    bail!(
+        "Minesport has no {} Bridge compatibility recipe for Minecraft {version}",
+        family.label()
+    )
 }
 
 fn canonical_files(family: BridgeFamily) -> Result<&'static [EmbeddedFile]> {
@@ -346,16 +614,30 @@ fn embedded_family_text(family: BridgeFamily, relative: &str) -> Result<String> 
     let bytes = family_dir(family)?
         .get_file(relative.trim_start_matches('/'))
         .map(|file| file.contents())
-        .ok_or_else(|| anyhow!("embedded {} compatibility resource is missing: {relative}", family.label()))?;
-    String::from_utf8(bytes.to_vec())
-        .with_context(|| format!("{} compatibility resource is not UTF-8: {relative}", family.label()))
+        .ok_or_else(|| {
+            anyhow!(
+                "embedded {} compatibility resource is missing: {relative}",
+                family.label()
+            )
+        })?;
+    String::from_utf8(bytes.to_vec()).with_context(|| {
+        format!(
+            "{} compatibility resource is not UTF-8: {relative}",
+            family.label()
+        )
+    })
 }
 
 fn embedded_family_bytes(family: BridgeFamily, relative: &str) -> Result<&'static [u8]> {
     family_dir(family)?
         .get_file(relative.trim_start_matches('/'))
         .map(|file| file.contents())
-        .ok_or_else(|| anyhow!("embedded {} compatibility resource is missing: {relative}", family.label()))
+        .ok_or_else(|| {
+            anyhow!(
+                "embedded {} compatibility resource is missing: {relative}",
+                family.label()
+            )
+        })
 }
 
 fn apply_operation(
@@ -372,23 +654,43 @@ fn apply_operation(
         }
         "replace" => {
             let file = safe_join(workspace, Path::new(&expand(&operation.file)))?;
-            replace_in_file(&file, &expand(&operation.from), &expand(&operation.to), false)
+            replace_in_file(
+                &file,
+                &expand(&operation.from),
+                &expand(&operation.to),
+                false,
+            )
         }
         "rename_at" => {
             let file = safe_join(workspace, Path::new(&expand(&operation.file)))?;
-            replace_at(&file, operation.line, operation.column, &expand(&operation.from), &expand(&operation.to))
+            replace_at(
+                &file,
+                operation.line,
+                operation.column,
+                &expand(&operation.from),
+                &expand(&operation.to),
+            )
         }
         "regex_replace" => {
             let file = safe_join(workspace, Path::new(&expand(&operation.file)))?;
-            let text = fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
+            let text =
+                fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
             let pattern = expand(&operation.pattern);
             let replacement = expand(&operation.replacement);
             let expression = Regex::new(&pattern)
                 .with_context(|| format!("compile compatibility regex {pattern:?}"))?;
             if !expression.is_match(&text) {
-                bail!("expected regex {pattern:?} was not found in {}", file.display());
+                bail!(
+                    "expected regex {pattern:?} was not found in {}",
+                    file.display()
+                );
             }
-            fs::write(&file, expression.replace_all(&text, replacement.as_str()).as_bytes())?;
+            fs::write(
+                &file,
+                expression
+                    .replace_all(&text, replacement.as_str())
+                    .as_bytes(),
+            )?;
             Ok(())
         }
         "replace_tree" | "rename_package" => {
@@ -397,7 +699,12 @@ fn apply_operation(
             if operation.op == "rename_package" && extensions.is_empty() {
                 extensions.push(".java".into());
             }
-            replace_tree(&root, &extensions, &expand(&operation.from), &expand(&operation.to))
+            replace_tree(
+                &root,
+                &extensions,
+                &expand(&operation.from),
+                &expand(&operation.to),
+            )
         }
         "rename_file" => {
             let from = safe_join(workspace, Path::new(&expand(&operation.from)))?;
@@ -405,7 +712,8 @@ fn apply_operation(
             if let Some(parent) = to.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::rename(&from, &to).with_context(|| format!("rename {} to {}", from.display(), to.display()))?;
+            fs::rename(&from, &to)
+                .with_context(|| format!("rename {} to {}", from.display(), to.display()))?;
             Ok(())
         }
         "overlay" => {
@@ -414,7 +722,11 @@ fn apply_operation(
             write_file(&target, embedded_family_bytes(family, &source)?)
         }
         "delete" => {
-            let raw = if operation.target.is_empty() { &operation.file } else { &operation.target };
+            let raw = if operation.target.is_empty() {
+                &operation.file
+            } else {
+                &operation.target
+            };
             let target = safe_join(workspace, Path::new(&expand(raw)))?;
             if target.is_dir() {
                 fs::remove_dir_all(target)?;
@@ -428,9 +740,14 @@ fn apply_operation(
 }
 
 fn safe_join(root: &Path, relative: &Path) -> Result<PathBuf> {
-    if relative.is_absolute() || relative.components().any(|component| {
-        matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
-    }) {
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
         bail!("unsafe compatibility path: {}", relative.display());
     }
     Ok(root.join(relative))
@@ -456,7 +773,8 @@ fn set_property(file: &Path, key: &str, value: &str) -> Result<()> {
     if text.ends_with('\n') {
         output.push('\n');
     }
-    fs::write(file, output).with_context(|| format!("update Gradle property {key} in {}", file.display()))?;
+    fs::write(file, output)
+        .with_context(|| format!("update Gradle property {key} in {}", file.display()))?;
     Ok(())
 }
 
@@ -483,7 +801,8 @@ fn replace_at(file: &Path, line: usize, column: usize, from: &str, to: &str) -> 
             offsets.push(index + 1);
         }
     }
-    let start_of_line = *offsets.get(line - 1)
+    let start_of_line = *offsets
+        .get(line - 1)
         .ok_or_else(|| anyhow!("line {line} does not exist in {}", file.display()))?;
     let start = start_of_line + column - 1;
     let line_end = text[start_of_line..]
@@ -495,7 +814,10 @@ fn replace_at(file: &Path, line: usize, column: usize, from: &str, to: &str) -> 
         || !text.is_char_boundary(start + from.len())
         || &text[start..start + from.len()] != from
     {
-        bail!("stale rename_at in {}:{line}:{column}: expected {from:?}", file.display());
+        bail!(
+            "stale rename_at in {}:{line}:{column}: expected {from:?}",
+            file.display()
+        );
     }
     let mut output = String::with_capacity(text.len() + to.len().saturating_sub(from.len()));
     output.push_str(&text[..start]);
@@ -509,7 +831,9 @@ fn replace_tree(root: &Path, extensions: &[String], from: &str, to: &str) -> Res
     if !root.exists() {
         bail!("compatibility tree does not exist: {}", root.display());
     }
-    for entry in fs::read_dir(root).with_context(|| format!("read compatibility tree {}", root.display()))? {
+    for entry in
+        fs::read_dir(root).with_context(|| format!("read compatibility tree {}", root.display()))?
+    {
         let entry = entry?;
         let path = entry.path();
         let kind = entry.file_type()?;
@@ -532,11 +856,14 @@ fn has_extension(path: &Path, extensions: &[String]) -> bool {
     if extensions.is_empty() {
         return true;
     }
-    let extension = path.extension()
+    let extension = path
+        .extension()
         .and_then(|value| value.to_str())
         .map(|value| format!(".{value}"))
         .unwrap_or_default();
-    extensions.iter().any(|candidate| candidate.eq_ignore_ascii_case(&extension))
+    extensions
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(&extension))
 }
 
 fn expand_variables(value: &str, variables: &HashMap<String, String>) -> String {
@@ -588,17 +915,36 @@ mod tests {
     fn loader_family_parser_covers_supported_loaders() {
         assert_eq!(BridgeFamily::parse("Fabric"), Some(BridgeFamily::Fabric));
         assert_eq!(BridgeFamily::parse("forge"), Some(BridgeFamily::Forge));
-        assert_eq!(BridgeFamily::parse("NeoForge"), Some(BridgeFamily::NeoForge));
+        assert_eq!(
+            BridgeFamily::parse("NeoForge"),
+            Some(BridgeFamily::NeoForge)
+        );
         assert_eq!(BridgeFamily::parse("quilt"), Some(BridgeFamily::Quilt));
         assert_eq!(BridgeFamily::parse("vanilla"), None);
     }
 
     #[test]
     fn family_manifests_expose_canonical_and_first_patched_version() {
-        for family in [BridgeFamily::Forge, BridgeFamily::NeoForge, BridgeFamily::Quilt] {
-            assert!(is_supported(family, "1.21.10"), "{} canonical support", family.label());
-            assert!(is_supported(family, "1.21.9"), "{} 1.21.9 support", family.label());
-            assert!(!is_supported(family, "1.5"), "{} must not fake unsupported versions", family.label());
+        for family in [
+            BridgeFamily::Forge,
+            BridgeFamily::NeoForge,
+            BridgeFamily::Quilt,
+        ] {
+            assert!(
+                is_supported(family, "1.21.10"),
+                "{} canonical support",
+                family.label()
+            );
+            assert!(
+                is_supported(family, "1.21.9"),
+                "{} 1.21.9 support",
+                family.label()
+            );
+            assert!(
+                !is_supported(family, "1.5"),
+                "{} must not fake unsupported versions",
+                family.label()
+            );
         }
     }
 

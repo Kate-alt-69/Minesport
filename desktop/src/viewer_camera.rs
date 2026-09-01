@@ -44,10 +44,8 @@ pub fn movement_delta(yaw: f32, move_speed: f32, input: FlightInput, dt: f32) ->
         movement[1] -= 1.0;
     }
 
-    let length = (movement[0] * movement[0]
-        + movement[1] * movement[1]
-        + movement[2] * movement[2])
-        .sqrt();
+    let length =
+        (movement[0] * movement[0] + movement[1] * movement[1] + movement[2] * movement[2]).sqrt();
     if length <= 1.0e-6 {
         return [0.0; 3];
     }
@@ -100,7 +98,10 @@ mod tests {
         let delta = movement_delta(
             0.0,
             DEFAULT_MOVE_SPEED,
-            FlightInput { forward: true, ..FlightInput::default() },
+            FlightInput {
+                forward: true,
+                ..FlightInput::default()
+            },
             1.0,
         );
         close(delta[0], 0.0);
@@ -113,7 +114,10 @@ mod tests {
         let delta = movement_delta(
             FRAC_PI_2,
             DEFAULT_MOVE_SPEED,
-            FlightInput { forward: true, ..FlightInput::default() },
+            FlightInput {
+                forward: true,
+                ..FlightInput::default()
+            },
             1.0,
         );
         close(delta[0], 12.0);
@@ -125,7 +129,12 @@ mod tests {
         let delta = movement_delta(
             0.0,
             DEFAULT_MOVE_SPEED,
-            FlightInput { forward: true, right: true, up: true, ..FlightInput::default() },
+            FlightInput {
+                forward: true,
+                right: true,
+                up: true,
+                ..FlightInput::default()
+            },
             1.0,
         );
         let length = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
@@ -137,13 +146,20 @@ mod tests {
         let normal = movement_delta(
             0.0,
             10.0,
-            FlightInput { forward: true, ..FlightInput::default() },
+            FlightInput {
+                forward: true,
+                ..FlightInput::default()
+            },
             0.5,
         );
         let sprint = movement_delta(
             0.0,
             10.0,
-            FlightInput { forward: true, sprint: true, ..FlightInput::default() },
+            FlightInput {
+                forward: true,
+                sprint: true,
+                ..FlightInput::default()
+            },
             0.5,
         );
         close(sprint[2], normal[2] * SPRINT_MULTIPLIER);

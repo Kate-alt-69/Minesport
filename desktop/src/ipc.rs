@@ -283,14 +283,23 @@ impl Engine {
                     ],
                 );
                 return Err(error).with_context(|| {
-                    format!("start Minesport backend worker {}", launch.executable.display())
+                    format!(
+                        "start Minesport backend worker {}",
+                        launch.executable.display()
+                    )
                 });
             }
         };
         let pid = child.id();
         let stdin = child.stdin.take().context("open Minesport backend stdin")?;
-        let stdout = child.stdout.take().context("open Minesport backend stdout")?;
-        let stderr = child.stderr.take().context("open Minesport backend stderr")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("open Minesport backend stdout")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("open Minesport backend stderr")?;
 
         let (tx, rx) = mpsc::channel();
         let generation = Arc::new(AtomicU64::new(1));
@@ -330,12 +339,12 @@ impl Engine {
         if self.is_shutting_down() {
             bail!("backend shutdown is already in progress");
         }
-        if self.inner.restarting.compare_exchange(
-            false,
-            true,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ).is_err() {
+        if self
+            .inner
+            .restarting
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return Ok(());
         }
         let result = self.restart_inner();
@@ -378,13 +387,25 @@ impl Engine {
         );
         let mut command = launch.command();
 
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("restart Minesport backend worker {}", launch.executable.display()))?;
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "restart Minesport backend worker {}",
+                launch.executable.display()
+            )
+        })?;
         let pid = child.id();
-        let stdin = child.stdin.take().context("open restarted Minesport backend stdin")?;
-        let stdout = child.stdout.take().context("open restarted Minesport backend stdout")?;
-        let stderr = child.stderr.take().context("open restarted Minesport backend stderr")?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("open restarted Minesport backend stdin")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("open restarted Minesport backend stdout")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("open restarted Minesport backend stderr")?;
 
         {
             let mut current = self
@@ -414,12 +435,7 @@ impl Engine {
             self.inner.generation.clone(),
             reader_generation,
         );
-        spawn_stderr_reader(
-            stderr,
-            tx,
-            self.inner.generation.clone(),
-            reader_generation,
-        );
+        spawn_stderr_reader(stderr, tx, self.inner.generation.clone(), reader_generation);
         operation.success(
             "Minesport backend worker restarted",
             &[
@@ -476,7 +492,8 @@ impl Engine {
                 Value::String(operation.trace_id().to_string()),
             );
         }
-        let bytes = serde_json::to_vec(&value).context("serialize correlated backend IPC request")?;
+        let bytes =
+            serde_json::to_vec(&value).context("serialize correlated backend IPC request")?;
         operation = operation.field("bytes", bytes.len());
         operation.event("IpcRequestWrite", "writing backend IPC request", &[]);
 
@@ -486,8 +503,12 @@ impl Engine {
                 .stdin
                 .lock()
                 .map_err(|_| anyhow!("Minesport backend stdin lock poisoned"))?;
-            stdin.write_all(&bytes).context("write backend IPC request")?;
-            stdin.write_all(b"\n").context("terminate backend IPC request")?;
+            stdin
+                .write_all(&bytes)
+                .context("write backend IPC request")?;
+            stdin
+                .write_all(b"\n")
+                .context("terminate backend IPC request")?;
             stdin.flush().context("flush backend IPC request")?;
             Ok(())
         })();
@@ -521,7 +542,11 @@ impl Engine {
         self.inner.shutting_down.store(true, Ordering::Release);
         let logger = diagnostics::Logger::new("IPC").child("UI");
         let operation = logger.operation("IpcBackendWorkerShutdown");
-        operation.event("IpcBackendWorkerQuitRequested", "requesting backend shutdown", &[]);
+        operation.event(
+            "IpcBackendWorkerQuitRequested",
+            "requesting backend shutdown",
+            &[],
+        );
         let _ = self.send_value(serde_json::json!({ "command": "quit" }));
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -545,9 +570,10 @@ impl Engine {
                         "backend did not exit within 3 seconds; terminating worker tree",
                         &[("pid", child.id().to_string())],
                     );
-                    let status = runtime::terminate_process_tree(&mut child, Duration::from_secs(5))
-                        .map(|status| status.to_string())
-                        .unwrap_or_else(|| "not reaped before deadline".to_string());
+                    let status =
+                        runtime::terminate_process_tree(&mut child, Duration::from_secs(5))
+                            .map(|status| status.to_string())
+                            .unwrap_or_else(|| "not reaped before deadline".to_string());
                     operation.failure(
                         "backend required forced process-tree termination",
                         &[("status", status)],
@@ -622,7 +648,11 @@ fn annotate_java_response(line: &str, correlation: &RequestCorrelation) -> (Stri
     let Ok(mut value) = serde_json::from_str::<Value>(line) else {
         return (line.to_string(), false);
     };
-    let kind = value.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     if let Some(object) = value.as_object_mut() {
         if !correlation.operation_id.is_empty() {
             object.insert(
@@ -649,7 +679,10 @@ fn annotate_java_response(line: &str, correlation: &RequestCorrelation) -> (Stri
             );
         }
     }
-    let terminal = matches!(kind.as_str(), "pong" | "done" | "error" | "heightmap" | "blocksReady");
+    let terminal = matches!(
+        kind.as_str(),
+        "pong" | "done" | "error" | "heightmap" | "blocksReady"
+    );
     let encoded = serde_json::to_string(&value).unwrap_or_else(|_| line.to_string());
     (encoded, terminal)
 }
@@ -692,25 +725,34 @@ fn prepare_world_storage_payload(request: &mut Value) -> Result<()> {
 
 fn resolve_overworld_storage_root(world_path: &Path) -> Result<PathBuf> {
     let candidates = [
-        world_path.join("dimensions").join("minecraft").join("overworld").join("region"),
+        world_path
+            .join("dimensions")
+            .join("minecraft")
+            .join("overworld")
+            .join("region"),
         world_path.join("region"),
     ];
     for candidate in &candidates {
         if has_region_files(candidate) {
-            return candidate
-                .parent()
-                .map(Path::to_path_buf)
-                .ok_or_else(|| anyhow!("Overworld region path has no storage root: {}", candidate.display()));
+            return candidate.parent().map(Path::to_path_buf).ok_or_else(|| {
+                anyhow!(
+                    "Overworld region path has no storage root: {}",
+                    candidate.display()
+                )
+            });
         }
     }
     bail!(
         "no Overworld region files found; checked: {}, {}",
-        candidates[0].display(), candidates[1].display()
+        candidates[0].display(),
+        candidates[1].display()
     )
 }
 
 fn has_region_files(region_dir: &Path) -> bool {
-    let Ok(entries) = fs::read_dir(region_dir) else { return false; };
+    let Ok(entries) = fs::read_dir(region_dir) else {
+        return false;
+    };
     entries.flatten().any(|entry| {
         if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
             return false;
@@ -719,7 +761,9 @@ fn has_region_files(region_dir: &Path) -> bool {
             .path()
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("mca") || extension.eq_ignore_ascii_case("mcr"))
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("mca") || extension.eq_ignore_ascii_case("mcr")
+            })
     })
 }
 
@@ -739,13 +783,19 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
             "embedded Java engine is unavailable",
             &[("jar", jar.display().to_string())],
         );
-        return Err(anyhow!("embedded Java engine is unavailable: {}", jar.display()));
+        return Err(anyhow!(
+            "embedded Java engine is unavailable: {}",
+            jar.display()
+        ));
     }
 
     let java = match resolve_java() {
         Ok(java) => java,
         Err(error) => {
-            operation.failure("could not resolve Java runtime", &[("error", format!("{error:#}"))]);
+            operation.failure(
+                "could not resolve Java runtime",
+                &[("error", format!("{error:#}"))],
+            );
             return Err(error);
         }
     };
@@ -753,7 +803,10 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     operation.event(
         "JavaEngineRuntimeResolved",
         "resolved Java runtime for embedded engine",
-        &[("java", java.display().to_string()), ("major", java_major.to_string())],
+        &[
+            ("java", java.display().to_string()),
+            ("major", java_major.to_string()),
+        ],
     );
     let mut command = Command::new(&java);
     command
@@ -770,16 +823,23 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         Err(error) => {
             operation.failure(
                 "failed to start Java engine",
-                &[("java", java.display().to_string()), ("error", error.to_string())],
+                &[
+                    ("java", java.display().to_string()),
+                    ("error", error.to_string()),
+                ],
             );
-            return Err(error).with_context(|| format!("start Java engine with {}", java.display()));
+            return Err(error)
+                .with_context(|| format!("start Java engine with {}", java.display()));
         }
     };
     let java_pid = child.id();
     operation.event(
         "JavaEngineProcessStarted",
         "Java engine process started",
-        &[("pid", java_pid.to_string()), ("java", java.display().to_string())],
+        &[
+            ("pid", java_pid.to_string()),
+            ("java", java.display().to_string()),
+        ],
     );
     let mut java_stdin = child.stdin.take().context("open Java engine stdin")?;
     let java_stdout = child.stdout.take().context("open Java engine stdout")?;
@@ -836,13 +896,21 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     thread::spawn(move || {
         let reader = BufReader::new(std::io::stdin());
         for line in reader.lines() {
-            let Ok(line) = line else { break; };
+            let Ok(line) = line else {
+                break;
+            };
             if let Ok(mut queue) = stdin_correlations.lock() {
                 queue.push_back(correlation_from_request_line(&line));
             }
-            if java_stdin.write_all(line.as_bytes()).is_err() { break; }
-            if java_stdin.write_all(b"\n").is_err() { break; }
-            if java_stdin.flush().is_err() { break; }
+            if java_stdin.write_all(line.as_bytes()).is_err() {
+                break;
+            }
+            if java_stdin.write_all(b"\n").is_err() {
+                break;
+            }
+            if java_stdin.flush().is_err() {
+                break;
+            }
         }
     });
 
@@ -852,13 +920,19 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     if !status.success() {
         operation.failure(
             "Java engine process exited unsuccessfully",
-            &[("status", status.to_string()), ("pid", java_pid.to_string())],
+            &[
+                ("status", status.to_string()),
+                ("pid", java_pid.to_string()),
+            ],
         );
         return Err(anyhow!("Java engine exited with status {status}"));
     }
     operation.success(
         "Java engine process exited cleanly",
-        &[("status", status.to_string()), ("pid", java_pid.to_string())],
+        &[
+            ("status", status.to_string()),
+            ("pid", java_pid.to_string()),
+        ],
     );
     Ok(())
 }
@@ -883,14 +957,17 @@ fn spawn_stdout_reader(
             }
             match line {
                 Ok(line) if !line.trim().is_empty() => {
-                    let response = serde_json::from_str::<Response>(&line).unwrap_or_else(|_| Response {
-                        kind: "log".to_string(),
-                        message: line,
-                        ..Response::default()
-                    });
+                    let response =
+                        serde_json::from_str::<Response>(&line).unwrap_or_else(|_| Response {
+                            kind: "log".to_string(),
+                            message: line,
+                            ..Response::default()
+                        });
                     match response.kind.as_str() {
                         "log" => diagnostics::append_correlated(
-                            &response.message, &response.operation_id, &response.trace_id,
+                            &response.message,
+                            &response.operation_id,
+                            &response.trace_id,
                         ),
                         "progress" => {
                             let percent = response.percent.clamp(0, 100);
@@ -963,7 +1040,9 @@ fn spawn_stdout_reader(
                     }
                     let message = format!("Minesport backend IPC read failed: {error}");
                     logger.error(
-                        "IpcResponseReadFailed", &message, &[("error", error.to_string())],
+                        "IpcResponseReadFailed",
+                        &message,
+                        &[("error", error.to_string())],
                     );
                     let _ = tx.send(EngineEvent::ReadEnded(message));
                     return;
@@ -973,8 +1052,14 @@ fn spawn_stdout_reader(
         if !reader_generation_is_current(&generation, reader_generation) {
             return;
         }
-        logger.info("IpcResponseStreamClosed", "Minesport backend output closed", &[]);
-        let _ = tx.send(EngineEvent::ReadEnded("Minesport backend output closed".to_string()));
+        logger.info(
+            "IpcResponseStreamClosed",
+            "Minesport backend output closed",
+            &[],
+        );
+        let _ = tx.send(EngineEvent::ReadEnded(
+            "Minesport backend output closed".to_string(),
+        ));
     });
 }
 
@@ -996,7 +1081,9 @@ fn spawn_stderr_reader(
                     if !reader_generation_is_current(&generation, reader_generation) {
                         return;
                     }
-                    if tx.send(EngineEvent::Stderr(line)).is_err() { return; }
+                    if tx.send(EngineEvent::Stderr(line)).is_err() {
+                        return;
+                    }
                 }
                 Ok(_) => {}
                 Err(error) => {
@@ -1005,7 +1092,9 @@ fn spawn_stderr_reader(
                     }
                     let message = format!("backend stderr read failed: {error}");
                     logger.error(
-                        "IpcBackendStderrReadFailed", &message, &[("error", error.to_string())],
+                        "IpcBackendStderrReadFailed",
+                        &message,
+                        &[("error", error.to_string())],
                     );
                     let _ = tx.send(EngineEvent::Stderr(message));
                     return;
@@ -1020,7 +1109,10 @@ fn resolve_java() -> Result<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Some(home) = env::var_os("JAVA_HOME") {
-        push_java_candidate(&mut candidates, PathBuf::from(home).join("bin").join(java_executable_name()));
+        push_java_candidate(
+            &mut candidates,
+            PathBuf::from(home).join("bin").join(java_executable_name()),
+        );
     }
     if let Some(path_java) = find_on_path(java_executable_name()) {
         push_java_candidate(&mut candidates, path_java);
@@ -1031,13 +1123,23 @@ fn resolve_java() -> Result<PathBuf> {
             for runtime_name in ["java-runtime-delta", "java-runtime-gamma"] {
                 push_java_candidate(
                     &mut candidates,
-                    appdata.join("FreesmLauncher").join("java").join(runtime_name).join("bin").join("java.exe"),
+                    appdata
+                        .join("FreesmLauncher")
+                        .join("java")
+                        .join(runtime_name)
+                        .join("bin")
+                        .join("java.exe"),
                 );
             }
         }
         if let Some(program_files) = env::var_os("ProgramFiles").map(PathBuf::from) {
-            for base in [program_files.join("Java"), program_files.join("Eclipse Adoptium")] {
-                let Ok(entries) = fs::read_dir(base) else { continue; };
+            for base in [
+                program_files.join("Java"),
+                program_files.join("Eclipse Adoptium"),
+            ] {
+                let Ok(entries) = fs::read_dir(base) else {
+                    continue;
+                };
                 let mut homes = entries
                     .flatten()
                     .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
@@ -1052,20 +1154,26 @@ fn resolve_java() -> Result<PathBuf> {
     }
 
     logger.debug(
-        "JavaRuntimeCandidatesEvaluate", "evaluating Java runtime candidates",
+        "JavaRuntimeCandidatesEvaluate",
+        "evaluating Java runtime candidates",
         &[("count", candidates.len().to_string())],
     );
     for candidate in candidates {
         let major = java_major(&candidate);
         if major >= ENGINE_JAVA_MAJOR {
             logger.info(
-                "JavaRuntimeSelected", "selected Java runtime",
-                &[("path", candidate.display().to_string()), ("major", major.to_string())],
+                "JavaRuntimeSelected",
+                "selected Java runtime",
+                &[
+                    ("path", candidate.display().to_string()),
+                    ("major", major.to_string()),
+                ],
             );
             return Ok(candidate);
         }
         logger.warn(
-            "JavaRuntimeRejectedTooOld", "Java runtime is below the engine requirement",
+            "JavaRuntimeRejectedTooOld",
+            "Java runtime is below the engine requirement",
             &[
                 ("path", candidate.display().to_string()),
                 ("major", major.to_string()),
@@ -1085,12 +1193,16 @@ fn push_java_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
     let duplicate = candidates.iter().any(|existing| {
         if cfg!(windows) {
-            existing.to_string_lossy().eq_ignore_ascii_case(&candidate.to_string_lossy())
+            existing
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&candidate.to_string_lossy())
         } else {
             existing == &candidate
         }
     });
-    if !duplicate { candidates.push(candidate); }
+    if !duplicate {
+        candidates.push(candidate);
+    }
 }
 
 fn find_on_path(executable: &str) -> Option<PathBuf> {
@@ -1104,20 +1216,36 @@ fn java_major(java: &Path) -> u32 {
     let mut command = Command::new(java);
     command.arg("-version");
     hide_console_window(&mut command);
-    let Ok(Some(output)) = runtime::output_with_timeout(&mut command, Duration::from_secs(5)) else { return 0; };
-    let text = format!("{} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let Ok(Some(output)) = runtime::output_with_timeout(&mut command, Duration::from_secs(5))
+    else {
+        return 0;
+    };
+    let text = format!(
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     parse_java_major(&text).unwrap_or(0)
 }
 
 fn parse_java_major(text: &str) -> Option<u32> {
     let quoted = text.split('"').nth(1);
     let version = quoted.or_else(|| {
-        text.split_whitespace().find(|token| token.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+        text.split_whitespace()
+            .find(|token| token.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
     })?;
     let mut parts = version.split('.');
-    let first = parts.next()?.trim_matches(|ch: char| !ch.is_ascii_digit()).parse::<u32>().ok()?;
+    let first = parts
+        .next()?
+        .trim_matches(|ch: char| !ch.is_ascii_digit())
+        .parse::<u32>()
+        .ok()?;
     if first == 1 {
-        parts.next()?.trim_matches(|ch: char| !ch.is_ascii_digit()).parse::<u32>().ok()
+        parts
+            .next()?
+            .trim_matches(|ch: char| !ch.is_ascii_digit())
+            .parse::<u32>()
+            .ok()
     } else {
         Some(first)
     }
@@ -1143,8 +1271,14 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_world(name: &str) -> PathBuf {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = env::temp_dir().join(format!("minesport-ipc-{name}-{}-{stamp}", std::process::id()));
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "minesport-ipc-{name}-{}-{stamp}",
+            std::process::id()
+        ));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -1158,7 +1292,10 @@ mod tests {
         fs::create_dir_all(&legacy).unwrap();
         fs::write(modern.join("r.0.0.mca"), b"modern").unwrap();
         fs::write(legacy.join("r.1.1.mca"), b"legacy").unwrap();
-        assert_eq!(resolve_overworld_storage_root(&world).unwrap(), world.join("dimensions/minecraft/overworld"));
+        assert_eq!(
+            resolve_overworld_storage_root(&world).unwrap(),
+            world.join("dimensions/minecraft/overworld")
+        );
         let _ = fs::remove_dir_all(world);
     }
 
@@ -1182,21 +1319,35 @@ mod tests {
         preserve_client_world_path(&mut heightmap);
         prepare_world_storage_payload(&mut heightmap).unwrap();
         assert_eq!(
-            heightmap.get("worldPath").and_then(Value::as_str).map(PathBuf::from),
+            heightmap
+                .get("worldPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
             Some(world.join("dimensions/minecraft/overworld"))
         );
         assert_eq!(
-            heightmap.get("clientWorldPath").and_then(Value::as_str).map(PathBuf::from),
+            heightmap
+                .get("clientWorldPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
             Some(world.clone())
         );
         let mut export = serde_json::json!({ "command": "export", "worldPath": world });
         preserve_client_world_path(&mut export);
         prepare_world_storage_payload(&mut export).unwrap();
         assert_eq!(
-            export.get("worldPath").and_then(Value::as_str).map(PathBuf::from), Some(world.clone())
+            export
+                .get("worldPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
+            Some(world.clone())
         );
         assert_eq!(
-            export.get("clientWorldPath").and_then(Value::as_str).map(PathBuf::from), Some(world.clone())
+            export
+                .get("clientWorldPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
+            Some(world.clone())
         );
         let _ = fs::remove_dir_all(world);
     }
@@ -1204,19 +1355,34 @@ mod tests {
     #[test]
     fn java_major_parser_handles_legacy_and_modern_version_strings() {
         assert_eq!(parse_java_major("java version \"1.8.0_401\""), Some(8));
-        assert_eq!(parse_java_major("openjdk version \"17.0.12\" 2024-07-16"), Some(17));
-        assert_eq!(parse_java_major("openjdk version \"22.0.2\" 2024-07-16"), Some(22));
+        assert_eq!(
+            parse_java_major("openjdk version \"17.0.12\" 2024-07-16"),
+            Some(17)
+        );
+        assert_eq!(
+            parse_java_major("openjdk version \"22.0.2\" 2024-07-16"),
+            Some(22)
+        );
         assert_eq!(parse_java_major("openjdk 25.0.1"), Some(25));
     }
 
     #[test]
     fn ipc_command_operation_ids_are_hardcoded_and_searchable() {
         assert_eq!(request_operation_id("export"), "IpcRequestDispatchExport");
-        assert_eq!(request_operation_id("heightmap"), "IpcRequestDispatchHeightmap");
-        assert_eq!(request_operation_id("listBlocks"), "IpcRequestDispatchBlockList");
+        assert_eq!(
+            request_operation_id("heightmap"),
+            "IpcRequestDispatchHeightmap"
+        );
+        assert_eq!(
+            request_operation_id("listBlocks"),
+            "IpcRequestDispatchBlockList"
+        );
         assert_eq!(request_operation_id("ping"), "IpcRequestPingBackend");
         assert_eq!(request_operation_id("quit"), "IpcRequestQuitBackend");
-        assert_eq!(request_operation_id("mystery"), "IpcRequestDispatchUnknownCommand");
+        assert_eq!(
+            request_operation_id("mystery"),
+            "IpcRequestDispatchUnknownCommand"
+        );
     }
 
     #[test]
@@ -1227,7 +1393,8 @@ mod tests {
             "traceId": "123-000004",
             "clientWorldPath": "C:/world-a",
             "clientPurpose": "preview"
-        }).to_string();
+        })
+        .to_string();
         let correlation = correlation_from_request_line(&request);
         assert_eq!(correlation.operation_id, "IpcRequestDispatchBlockList");
         assert_eq!(correlation.trace_id, "123-000004");
@@ -1247,10 +1414,22 @@ mod tests {
         let (line, terminal) = annotate_java_response(&response, &correlation);
         let value: Value = serde_json::from_str(&line).unwrap();
         assert!(terminal);
-        assert_eq!(value.get("operationId").and_then(Value::as_str), Some("IpcRequestDispatchExport"));
-        assert_eq!(value.get("traceId").and_then(Value::as_str), Some("123-000004"));
-        assert_eq!(value.get("clientWorldPath").and_then(Value::as_str), Some("C:/world-a"));
-        assert_eq!(value.get("clientPurpose").and_then(Value::as_str), Some("export"));
+        assert_eq!(
+            value.get("operationId").and_then(Value::as_str),
+            Some("IpcRequestDispatchExport")
+        );
+        assert_eq!(
+            value.get("traceId").and_then(Value::as_str),
+            Some("123-000004")
+        );
+        assert_eq!(
+            value.get("clientWorldPath").and_then(Value::as_str),
+            Some("C:/world-a")
+        );
+        assert_eq!(
+            value.get("clientPurpose").and_then(Value::as_str),
+            Some("export")
+        );
     }
 
     #[test]
@@ -1262,7 +1441,8 @@ mod tests {
         };
         let response = serde_json::json!({
             "type": "progress", "percent": 62, "message": "Building geometry"
-        }).to_string();
+        })
+        .to_string();
         let (_, terminal) = annotate_java_response(&response, &correlation);
         assert!(!terminal);
     }

@@ -34,15 +34,27 @@ struct Vec3 {
 
 impl Vec3 {
     fn add(self, other: Self) -> Self {
-        Self { x: self.x + other.x, y: self.y + other.y, z: self.z + other.z }
+        Self {
+            x: self.x + other.x,
+            y: self.y + other.y,
+            z: self.z + other.z,
+        }
     }
 
     fn sub(self, other: Self) -> Self {
-        Self { x: self.x - other.x, y: self.y - other.y, z: self.z - other.z }
+        Self {
+            x: self.x - other.x,
+            y: self.y - other.y,
+            z: self.z - other.z,
+        }
     }
 
     fn scale(self, scalar: f32) -> Self {
-        Self { x: self.x * scalar, y: self.y * scalar, z: self.z * scalar }
+        Self {
+            x: self.x * scalar,
+            y: self.y * scalar,
+            z: self.z * scalar,
+        }
     }
 
     fn dot(self, other: Self) -> f32 {
@@ -62,7 +74,11 @@ impl Vec3 {
         if length < 1.0e-6 {
             Self::default()
         } else {
-            Self { x: self.x / length, y: self.y / length, z: self.z / length }
+            Self {
+                x: self.x / length,
+                y: self.y / length,
+                z: self.z / length,
+            }
         }
     }
 
@@ -97,8 +113,8 @@ impl PreviewCamera {
 
     fn orbit(mut self, dx: f32, dy: f32) -> Self {
         self.yaw += dx * CAMERA_LOOK_SENSITIVITY;
-        self.pitch = (self.pitch - dy * CAMERA_LOOK_SENSITIVITY)
-            .clamp(-MAX_CAMERA_PITCH, MAX_CAMERA_PITCH);
+        self.pitch =
+            (self.pitch - dy * CAMERA_LOOK_SENSITIVITY).clamp(-MAX_CAMERA_PITCH, MAX_CAMERA_PITCH);
         self
     }
 
@@ -110,8 +126,8 @@ impl PreviewCamera {
 
     fn dolly(mut self, wheel_steps: f32) -> Self {
         if wheel_steps != 0.0 {
-            self.zoom = (self.zoom * 1.1_f32.powf(wheel_steps.clamp(-20.0, 20.0)))
-                .clamp(0.05, 64.0);
+            self.zoom =
+                (self.zoom * 1.1_f32.powf(wheel_steps.clamp(-20.0, 20.0))).clamp(0.05, 64.0);
         }
         self
     }
@@ -153,7 +169,13 @@ impl PreviewCamera {
     }
 
     fn right(self) -> Vec3 {
-        self.forward().cross(Vec3 { x: 0.0, y: 1.0, z: 0.0 }).normalize()
+        self.forward()
+            .cross(Vec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            })
+            .normalize()
     }
 
     fn up(self) -> Vec3 {
@@ -202,7 +224,8 @@ impl PreviewView {
         let right_offset = (pixel_x - self.screen_x - camera.pan_x) / horizontal;
         let up_offset = -(pixel_y - self.screen_y - camera.pan_y) / vertical;
         let forward = camera.forward();
-        let plane = camera.scene_anchor(self.anchor)
+        let plane = camera
+            .scene_anchor(self.anchor)
             .add(camera.right().scale(right_offset))
             .add(camera.up().scale(up_offset));
         let origin = plane.add(forward.scale(self.ray_start_depth));
@@ -234,38 +257,92 @@ struct CubeFace {
 
 const CUBE_FACES: [CubeFace; 6] = [
     CubeFace {
-        corners: [[1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]],
-        normal: Vec3 { x: 1.0, y: 0.0, z: 0.0 },
+        corners: [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ],
+        normal: Vec3 {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        },
         neighbor: [1, 0, 0],
         texture: FaceTexture::Side,
     },
     CubeFace {
-        corners: [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
-        normal: Vec3 { x: -1.0, y: 0.0, z: 0.0 },
+        corners: [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 1.0],
+        ],
+        normal: Vec3 {
+            x: -1.0,
+            y: 0.0,
+            z: 0.0,
+        },
         neighbor: [-1, 0, 0],
         texture: FaceTexture::Side,
     },
     CubeFace {
-        corners: [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]],
-        normal: Vec3 { x: 0.0, y: 1.0, z: 0.0 },
+        corners: [
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ],
+        normal: Vec3 {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+        },
         neighbor: [0, 1, 0],
         texture: FaceTexture::Top,
     },
     CubeFace {
-        corners: [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
-        normal: Vec3 { x: 0.0, y: -1.0, z: 0.0 },
+        corners: [
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ],
+        normal: Vec3 {
+            x: 0.0,
+            y: -1.0,
+            z: 0.0,
+        },
         neighbor: [0, -1, 0],
         texture: FaceTexture::Bottom,
     },
     CubeFace {
-        corners: [[1.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-        normal: Vec3 { x: 0.0, y: 0.0, z: 1.0 },
+        corners: [
+            [1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ],
+        normal: Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
         neighbor: [0, 0, 1],
         texture: FaceTexture::Side,
     },
     CubeFace {
-        corners: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
-        normal: Vec3 { x: 0.0, y: 0.0, z: -1.0 },
+        corners: [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        normal: Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: -1.0,
+        },
         neighbor: [0, 0, -1],
         texture: FaceTexture::Side,
     },
@@ -336,11 +413,18 @@ impl PreviewPickMap {
             direction,
             max_distance,
         ) {
-            let id = self.scene.by_position
+            let id = self
+                .scene
+                .by_position
                 .get(&[block_x, block_y, block_z])
                 .cloned()
                 .unwrap_or_else(|| "minecraft:unknown".to_string());
-            return Some(PreviewPick { x: block_x, y: block_y, z: block_z, id });
+            return Some(PreviewPick {
+                x: block_x,
+                y: block_y,
+                z: block_z,
+                id,
+            });
         }
 
         let pixel = (y * self.width + x) as usize;
@@ -359,9 +443,13 @@ impl PreviewPickMap {
     pub fn blocks_in_box(&self, min: [i32; 3], max: [i32; 3]) -> Vec<[i32; 3]> {
         let low = [min[0].min(max[0]), min[1].min(max[1]), min[2].min(max[2])];
         let high = [min[0].max(max[0]), min[1].max(max[1]), min[2].max(max[2])];
-        let mut result: Vec<[i32; 3]> = self.scene.occupied.iter().copied().filter(|position| {
-            inside_box(*position, low, high)
-        }).collect();
+        let mut result: Vec<[i32; 3]> = self
+            .scene
+            .occupied
+            .iter()
+            .copied()
+            .filter(|position| inside_box(*position, low, high))
+            .collect();
         result.sort_unstable();
         result
     }
@@ -373,20 +461,31 @@ impl PreviewPickMap {
         }
         let max_blocks = max_blocks.max(1);
         const OFFSETS: [[i32; 3]; 6] = [
-            [1, 0, 0], [-1, 0, 0],
-            [0, 1, 0], [0, -1, 0],
-            [0, 0, 1], [0, 0, -1],
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 1],
+            [0, 0, -1],
         ];
         let mut queue = VecDeque::from([start]);
         let mut seen = HashSet::from([start]);
         let mut result = Vec::with_capacity(max_blocks.min(4096));
         while let Some(current) = queue.pop_front() {
             result.push(current);
-            if result.len() >= max_blocks { break; }
+            if result.len() >= max_blocks {
+                break;
+            }
             for offset in OFFSETS {
-                let Some(x) = current[0].checked_add(offset[0]) else { continue; };
-                let Some(y) = current[1].checked_add(offset[1]) else { continue; };
-                let Some(z) = current[2].checked_add(offset[2]) else { continue; };
+                let Some(x) = current[0].checked_add(offset[0]) else {
+                    continue;
+                };
+                let Some(y) = current[1].checked_add(offset[1]) else {
+                    continue;
+                };
+                let Some(z) = current[2].checked_add(offset[2]) else {
+                    continue;
+                };
                 let next = [x, y, z];
                 if self.scene.occupied.contains(&next) && seen.insert(next) {
                     queue.push_back(next);
@@ -419,7 +518,11 @@ impl PreviewPickMap {
     }
 
     pub fn orbit(&self, dx: f32, dy: f32) -> Result<RenderedPreview> {
-        render_scene(self.scene.clone(), self.camera.orbit(dx, dy), self.highlight)
+        render_scene(
+            self.scene.clone(),
+            self.camera.orbit(dx, dy),
+            self.highlight,
+        )
     }
 
     pub fn pan(&self, dx: f32, dy: f32) -> Result<RenderedPreview> {
@@ -427,11 +530,23 @@ impl PreviewPickMap {
     }
 
     pub fn dolly(&self, wheel_steps: f32) -> Result<RenderedPreview> {
-        render_scene(self.scene.clone(), self.camera.dolly(wheel_steps), self.highlight)
+        render_scene(
+            self.scene.clone(),
+            self.camera.dolly(wheel_steps),
+            self.highlight,
+        )
     }
 
-    pub fn move_flight(&self, input: viewer_camera::FlightInput, dt: f32) -> Result<RenderedPreview> {
-        render_scene(self.scene.clone(), self.camera.move_flight(input, dt), self.highlight)
+    pub fn move_flight(
+        &self,
+        input: viewer_camera::FlightInput,
+        dt: f32,
+    ) -> Result<RenderedPreview> {
+        render_scene(
+            self.scene.clone(),
+            self.camera.move_flight(input, dt),
+            self.highlight,
+        )
     }
 
     pub fn adjust_flight_speed(&self, wheel_steps: f32) -> Result<RenderedPreview> {
@@ -471,7 +586,8 @@ impl TextureTile {
 }
 
 pub fn render_file(path: &Path) -> Result<RenderedPreview> {
-    let file = File::open(path).with_context(|| format!("open preview block list {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("open preview block list {}", path.display()))?;
     let blocks: Vec<PreviewBlock> = serde_json::from_reader(file)
         .with_context(|| format!("parse preview block list {}", path.display()))?;
     if blocks.is_empty() {
@@ -508,17 +624,27 @@ fn preview_scratch_dirs(blocks: &[PreviewBlock]) -> HashSet<std::path::PathBuf> 
     };
     let mut dirs = HashSet::new();
     for texture in blocks.iter().flat_map(|block| {
-        [&block.texture_top, &block.texture_side, &block.texture_bottom]
+        [
+            &block.texture_top,
+            &block.texture_side,
+            &block.texture_bottom,
+        ]
     }) {
         if texture.trim().is_empty() {
             continue;
         }
-        let Some(parent) = Path::new(texture).parent() else { continue; };
-        let Some(name) = parent.file_name().and_then(|value| value.to_str()) else { continue; };
+        let Some(parent) = Path::new(texture).parent() else {
+            continue;
+        };
+        let Some(name) = parent.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
         if !name.starts_with("minesport_preview_textures_") {
             continue;
         }
-        let Ok(canonical) = std::fs::canonicalize(parent) else { continue; };
+        let Ok(canonical) = std::fs::canonicalize(parent) else {
+            continue;
+        };
         if canonical.parent() == Some(temp_root.as_path()) {
             dirs.insert(canonical);
         }
@@ -537,7 +663,11 @@ fn cleanup_preview_scratch_dirs(dirs: &HashSet<std::path::PathBuf>) {
     }
 }
 
-fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera, highlight: HighlightBounds) -> Result<RenderedPreview> {
+fn render_scene(
+    scene: Arc<PreviewScene>,
+    camera: PreviewCamera,
+    highlight: HighlightBounds,
+) -> Result<RenderedPreview> {
     let block_count = scene.blocks.len();
     if block_count == 0 {
         bail!("No solid blocks were found in the current selection");
@@ -550,10 +680,12 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera, highlight: High
         render_blocks = render_blocks.into_iter().step_by(stride).collect();
     }
 
-    let rendered_occupied = Arc::new(render_blocks
-        .iter()
-        .map(|block| [block.x, block.y, block.z])
-        .collect::<HashSet<[i32; 3]>>());
+    let rendered_occupied = Arc::new(
+        render_blocks
+            .iter()
+            .map(|block| [block.x, block.y, block.z])
+            .collect::<HashSet<[i32; 3]>>(),
+    );
 
     let min_x = render_blocks.iter().map(|block| block.x).min().unwrap_or(0);
     let max_x = render_blocks.iter().map(|block| block.x).max().unwrap_or(0);
@@ -602,7 +734,9 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera, highlight: High
         ray_start_depth: min_depth - 2.0,
         ray_distance: (max_depth - min_depth).abs() + 4.0,
     };
-    let mut texture_cache = scene.texture_cache.lock()
+    let mut texture_cache = scene
+        .texture_cache
+        .lock()
         .map_err(|_| anyhow!("preview texture cache lock poisoned"))?;
 
     for block in &render_blocks {
@@ -727,9 +861,12 @@ fn render_scene(scene: Arc<PreviewScene>, camera: PreviewCamera, highlight: High
 }
 
 fn inside_box(position: [i32; 3], min: [i32; 3], max: [i32; 3]) -> bool {
-    position[0] >= min[0] && position[0] <= max[0]
-        && position[1] >= min[1] && position[1] <= max[1]
-        && position[2] >= min[2] && position[2] <= max[2]
+    position[0] >= min[0]
+        && position[0] <= max[0]
+        && position[1] >= min[1]
+        && position[1] <= max[1]
+        && position[2] >= min[2]
+        && position[2] <= max[2]
 }
 
 fn scene_depth_span(
@@ -770,7 +907,10 @@ fn normalized_id(id: &str) -> String {
 fn texture_key(path: &str, fallback: [u8; 4]) -> String {
     let path = path.trim();
     if path.is_empty() {
-        format!("fallback:{:02x}{:02x}{:02x}", fallback[0], fallback[1], fallback[2])
+        format!(
+            "fallback:{:02x}{:02x}{:02x}",
+            fallback[0], fallback[1], fallback[2]
+        )
     } else {
         path.to_string()
     }
@@ -809,7 +949,9 @@ fn load_preview_tile(key: &str, fallback: [u8; 4]) -> TextureTile {
             pixels.push(pixel);
         }
     }
-    TextureTile { pixels: Arc::new(pixels) }
+    TextureTile {
+        pixels: Arc::new(pixels),
+    }
 }
 
 fn sample_first_animation_frame(image: &RgbaImage, x: usize, y: usize) -> Option<[u8; 4]> {
@@ -833,7 +975,9 @@ fn fallback_preview_pixel(mut color: [u8; 4], x: usize, y: usize) -> [u8; 4] {
     color
 }
 
-fn default_color() -> u8 { 170 }
+fn default_color() -> u8 {
+    170
+}
 
 fn clear(pixels: &mut [u8], color: [u8; 4]) {
     for pixel in pixels.chunks_exact_mut(4) {
@@ -869,14 +1013,24 @@ fn fill_textured_quad(
 ) {
     let uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     fill_textured_triangle(
-        pixels, depth, hit_indices, hit_index,
+        pixels,
+        depth,
+        hit_indices,
+        hit_index,
         [vertices[0], vertices[1], vertices[2]],
-        [uv[0], uv[1], uv[2]], texture, brightness,
+        [uv[0], uv[1], uv[2]],
+        texture,
+        brightness,
     );
     fill_textured_triangle(
-        pixels, depth, hit_indices, hit_index,
+        pixels,
+        depth,
+        hit_indices,
+        hit_index,
         [vertices[0], vertices[2], vertices[3]],
-        [uv[0], uv[2], uv[3]], texture, brightness,
+        [uv[0], uv[2], uv[3]],
+        texture,
+        brightness,
     );
 }
 
@@ -891,16 +1045,42 @@ fn fill_textured_triangle(
     texture: &TextureTile,
     brightness: f32,
 ) {
-    let min_x = vertices.iter().map(|vertex| vertex.x.floor() as i32).min().unwrap_or(0).clamp(0, WIDTH as i32 - 1);
-    let max_x = vertices.iter().map(|vertex| vertex.x.ceil() as i32).max().unwrap_or(0).clamp(0, WIDTH as i32 - 1);
-    let min_y = vertices.iter().map(|vertex| vertex.y.floor() as i32).min().unwrap_or(0).clamp(0, HEIGHT as i32 - 1);
-    let max_y = vertices.iter().map(|vertex| vertex.y.ceil() as i32).max().unwrap_or(0).clamp(0, HEIGHT as i32 - 1);
+    let min_x = vertices
+        .iter()
+        .map(|vertex| vertex.x.floor() as i32)
+        .min()
+        .unwrap_or(0)
+        .clamp(0, WIDTH as i32 - 1);
+    let max_x = vertices
+        .iter()
+        .map(|vertex| vertex.x.ceil() as i32)
+        .max()
+        .unwrap_or(0)
+        .clamp(0, WIDTH as i32 - 1);
+    let min_y = vertices
+        .iter()
+        .map(|vertex| vertex.y.floor() as i32)
+        .min()
+        .unwrap_or(0)
+        .clamp(0, HEIGHT as i32 - 1);
+    let max_y = vertices
+        .iter()
+        .map(|vertex| vertex.y.ceil() as i32)
+        .max()
+        .unwrap_or(0)
+        .clamp(0, HEIGHT as i32 - 1);
     let area = edge(vertices[0], vertices[1], vertices[2]);
-    if area.abs() < 1.0e-6 { return; }
+    if area.abs() < 1.0e-6 {
+        return;
+    }
 
     for y in min_y..=max_y {
         for x in min_x..=max_x {
-            let point = ProjectedVertex { x: x as f32 + 0.5, y: y as f32 + 0.5, depth: 0.0 };
+            let point = ProjectedVertex {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+                depth: 0.0,
+            };
             let w0 = edge(vertices[1], vertices[2], point);
             let w1 = edge(vertices[2], vertices[0], point);
             let w2 = edge(vertices[0], vertices[1], point);
@@ -916,7 +1096,8 @@ fn fill_textured_triangle(
             let b0 = w0 / area;
             let b1 = w1 / area;
             let b2 = w2 / area;
-            let fragment_depth = vertices[0].depth * b0 + vertices[1].depth * b1 + vertices[2].depth * b2;
+            let fragment_depth =
+                vertices[0].depth * b0 + vertices[1].depth * b1 + vertices[2].depth * b2;
             let pixel = (y as u32 * WIDTH + x as u32) as usize;
             if fragment_depth >= depth[pixel] {
                 continue;
@@ -944,8 +1125,18 @@ fn fill_solid_quad(
     vertices: [ProjectedVertex; 4],
     color: [u8; 4],
 ) {
-    fill_solid_triangle(pixels, depth, [vertices[0], vertices[1], vertices[2]], color);
-    fill_solid_triangle(pixels, depth, [vertices[0], vertices[2], vertices[3]], color);
+    fill_solid_triangle(
+        pixels,
+        depth,
+        [vertices[0], vertices[1], vertices[2]],
+        color,
+    );
+    fill_solid_triangle(
+        pixels,
+        depth,
+        [vertices[0], vertices[2], vertices[3]],
+        color,
+    );
 }
 
 fn fill_solid_triangle(
@@ -954,16 +1145,42 @@ fn fill_solid_triangle(
     vertices: [ProjectedVertex; 3],
     color: [u8; 4],
 ) {
-    let min_x = vertices.iter().map(|vertex| vertex.x.floor() as i32).min().unwrap_or(0).clamp(0, WIDTH as i32 - 1);
-    let max_x = vertices.iter().map(|vertex| vertex.x.ceil() as i32).max().unwrap_or(0).clamp(0, WIDTH as i32 - 1);
-    let min_y = vertices.iter().map(|vertex| vertex.y.floor() as i32).min().unwrap_or(0).clamp(0, HEIGHT as i32 - 1);
-    let max_y = vertices.iter().map(|vertex| vertex.y.ceil() as i32).max().unwrap_or(0).clamp(0, HEIGHT as i32 - 1);
+    let min_x = vertices
+        .iter()
+        .map(|vertex| vertex.x.floor() as i32)
+        .min()
+        .unwrap_or(0)
+        .clamp(0, WIDTH as i32 - 1);
+    let max_x = vertices
+        .iter()
+        .map(|vertex| vertex.x.ceil() as i32)
+        .max()
+        .unwrap_or(0)
+        .clamp(0, WIDTH as i32 - 1);
+    let min_y = vertices
+        .iter()
+        .map(|vertex| vertex.y.floor() as i32)
+        .min()
+        .unwrap_or(0)
+        .clamp(0, HEIGHT as i32 - 1);
+    let max_y = vertices
+        .iter()
+        .map(|vertex| vertex.y.ceil() as i32)
+        .max()
+        .unwrap_or(0)
+        .clamp(0, HEIGHT as i32 - 1);
     let area = edge(vertices[0], vertices[1], vertices[2]);
-    if area.abs() < 1.0e-6 { return; }
+    if area.abs() < 1.0e-6 {
+        return;
+    }
 
     for y in min_y..=max_y {
         for x in min_x..=max_x {
-            let point = ProjectedVertex { x: x as f32 + 0.5, y: y as f32 + 0.5, depth: 0.0 };
+            let point = ProjectedVertex {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+                depth: 0.0,
+            };
             let w0 = edge(vertices[1], vertices[2], point);
             let w1 = edge(vertices[2], vertices[0], point);
             let w2 = edge(vertices[0], vertices[1], point);
@@ -972,14 +1189,19 @@ fn fill_solid_triangle(
             } else {
                 w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
             };
-            if !inside { continue; }
+            if !inside {
+                continue;
+            }
 
             let b0 = w0 / area;
             let b1 = w1 / area;
             let b2 = w2 / area;
-            let fragment_depth = vertices[0].depth * b0 + vertices[1].depth * b1 + vertices[2].depth * b2;
+            let fragment_depth =
+                vertices[0].depth * b0 + vertices[1].depth * b1 + vertices[2].depth * b2;
             let pixel = (y as u32 * WIDTH + x as u32) as usize;
-            if fragment_depth >= depth[pixel] { continue; }
+            if fragment_depth >= depth[pixel] {
+                continue;
+            }
 
             let rgba = pixel * 4;
             blend_over(&mut pixels[rgba..rgba + 4], color);
@@ -992,7 +1214,8 @@ fn blend_over(destination: &mut [u8], source: [u8; 4]) {
     let alpha = source[3] as f32 / 255.0;
     let inverse = 1.0 - alpha;
     for channel in 0..3 {
-        destination[channel] = (source[channel] as f32 * alpha + destination[channel] as f32 * inverse)
+        destination[channel] = (source[channel] as f32 * alpha
+            + destination[channel] as f32 * inverse)
             .round()
             .clamp(0.0, 255.0) as u8;
     }
@@ -1006,7 +1229,10 @@ fn edge(a: ProjectedVertex, b: ProjectedVertex, p: ProjectedVertex) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn shading_clamps() {
@@ -1025,9 +1251,21 @@ mod tests {
 
     #[test]
     fn triangle_edge_has_expected_orientation() {
-        let a = ProjectedVertex { x: 0.0, y: 0.0, depth: 0.0 };
-        let b = ProjectedVertex { x: 2.0, y: 0.0, depth: 0.0 };
-        let c = ProjectedVertex { x: 0.0, y: 2.0, depth: 0.0 };
+        let a = ProjectedVertex {
+            x: 0.0,
+            y: 0.0,
+            depth: 0.0,
+        };
+        let b = ProjectedVertex {
+            x: 2.0,
+            y: 0.0,
+            depth: 0.0,
+        };
+        let c = ProjectedVertex {
+            x: 0.0,
+            y: 2.0,
+            depth: 0.0,
+        };
         assert!(edge(a, b, c).abs() > 0.0);
     }
 
@@ -1038,9 +1276,21 @@ mod tests {
         let scale_x = 10.0 * HORIZONTAL_CAMERA_SCALE;
         let scale_y = 10.0 * VERTICAL_CAMERA_SCALE;
         let project = |point| camera.project(point, anchor, 0.0, 0.0, scale_x, scale_y);
-        let x = project(Vec3 { x: 1.0, y: 0.0, z: 0.0 });
-        let y = project(Vec3 { x: 0.0, y: 1.0, z: 0.0 });
-        let z = project(Vec3 { x: 0.0, y: 0.0, z: 1.0 });
+        let x = project(Vec3 {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        });
+        let y = project(Vec3 {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+        });
+        let z = project(Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        });
         assert!((x.x - 10.0).abs() < 0.01 && (x.y - 5.0).abs() < 0.01);
         assert!(y.x.abs() < 0.01 && (y.y + 10.0).abs() < 0.01);
         assert!((z.x + 10.0).abs() < 0.01 && (z.y - 5.0).abs() < 0.01);
@@ -1048,9 +1298,33 @@ mod tests {
 
     #[test]
     fn face_brightness_matches_retired_glsl() {
-        assert!((face_brightness(Vec3 { x: 1.0, y: 0.0, z: 0.0 }) - 0.65).abs() < f32::EPSILON);
-        assert!((face_brightness(Vec3 { x: 0.0, y: 1.0, z: 0.0 }) - 1.0).abs() < f32::EPSILON);
-        assert!((face_brightness(Vec3 { x: 0.0, y: -1.0, z: 0.0 }) - 0.5).abs() < f32::EPSILON);
+        assert!(
+            (face_brightness(Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0
+            }) - 0.65)
+                .abs()
+                < f32::EPSILON
+        );
+        assert!(
+            (face_brightness(Vec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0
+            }) - 1.0)
+                .abs()
+                < f32::EPSILON
+        );
+        assert!(
+            (face_brightness(Vec3 {
+                x: 0.0,
+                y: -1.0,
+                z: 0.0
+            }) - 0.5)
+                .abs()
+                < f32::EPSILON
+        );
     }
 
     #[test]
@@ -1075,7 +1349,10 @@ mod tests {
         }
         for y in 0..PREVIEW_TILE_SIZE {
             for x in 0..PREVIEW_TILE_SIZE {
-                assert_eq!(sample_first_animation_frame(&image, x, y), Some([10, 20, 30, 255]));
+                assert_eq!(
+                    sample_first_animation_frame(&image, x, y),
+                    Some([10, 20, 30, 255])
+                );
             }
         }
     }
@@ -1092,7 +1369,10 @@ mod tests {
 
     #[test]
     fn preview_texture_scratch_is_removed_after_first_render_without_touching_user_assets() {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let temp = std::env::temp_dir();
         let scratch_dir = temp.join(format!(
             "minesport_preview_textures_test-{}-{stamp}",
@@ -1111,12 +1391,16 @@ mod tests {
             2,
             2,
             image::Rgba([120, 120, 120, 255]),
-        )).save_with_format(&scratch_texture, ImageFormat::Png).unwrap();
+        ))
+        .save_with_format(&scratch_texture, ImageFormat::Png)
+        .unwrap();
         DynamicImage::ImageRgba8(RgbaImage::from_pixel(
             2,
             2,
             image::Rgba([190, 220, 230, 255]),
-        )).save_with_format(&user_texture, ImageFormat::Png).unwrap();
+        ))
+        .save_with_format(&user_texture, ImageFormat::Png)
+        .unwrap();
 
         let block_list = temp.join(format!(
             "minesport-preview-texture-cleanup-{}-{stamp}.json",
@@ -1154,8 +1438,14 @@ mod tests {
 
     #[test]
     fn rendered_preview_can_pick_group_flood_box_highlight_and_rerender_without_source_file() {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("minesport-preview-{}-{stamp}.json", std::process::id()));
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "minesport-preview-{}-{stamp}.json",
+            std::process::id()
+        ));
         fs::write(
             &path,
             r#"[
@@ -1164,23 +1454,51 @@ mod tests {
                 {"x":0,"y":65,"z":0,"id":"minecraft:glass","r":190,"g":220,"b":230},
                 {"x":8,"y":64,"z":8,"id":"minecraft:stone","r":120,"g":120,"b":120}
             ]"#,
-        ).unwrap();
+        )
+        .unwrap();
         let rendered = render_file(&path).unwrap();
         assert_eq!(rendered.block_count, 4);
-        assert_eq!(rendered.pick_map.coordinates_for_id("minecraft:stone").len(), 3);
-        assert_eq!(rendered.pick_map.blocks_in_box([0, 64, 0], [1, 65, 0]).len(), 3);
+        assert_eq!(
+            rendered
+                .pick_map
+                .coordinates_for_id("minecraft:stone")
+                .len(),
+            3
+        );
+        assert_eq!(
+            rendered
+                .pick_map
+                .blocks_in_box([0, 64, 0], [1, 65, 0])
+                .len(),
+            3
+        );
         let mut joined = rendered.pick_map.joined_blocks([0, 64, 0], 64);
         joined.sort_unstable();
         assert_eq!(joined, vec![[0, 64, 0], [0, 65, 0], [1, 64, 0]]);
         assert_eq!(rendered.pick_map.joined_blocks([0, 64, 0], 2).len(), 2);
-        assert_eq!(rendered.pick_map.joined_blocks([0, 64, 0], 0), vec![[0, 64, 0]]);
+        assert_eq!(
+            rendered.pick_map.joined_blocks([0, 64, 0], 0),
+            vec![[0, 64, 0]]
+        );
         assert_eq!(rendered.pick_map.dimensions(), (WIDTH, HEIGHT));
         assert!(rendered.pick_map.indices.iter().any(|value| *value >= 0));
-        let picked = rendered.pick_map.indices.iter().find(|value| **value >= 0).copied().unwrap();
+        let picked = rendered
+            .pick_map
+            .indices
+            .iter()
+            .find(|value| **value >= 0)
+            .copied()
+            .unwrap();
         assert!(rendered.pick_map.hits.get(picked as usize).is_some());
 
-        let highlighted = rendered.pick_map.highlight_box([0, 64, 0], [1, 65, 0]).unwrap();
-        assert_eq!(highlighted.pick_map.highlight, Some(([0, 64, 0], [1, 65, 0])));
+        let highlighted = rendered
+            .pick_map
+            .highlight_box([0, 64, 0], [1, 65, 0])
+            .unwrap();
+        assert_eq!(
+            highlighted.pick_map.highlight,
+            Some(([0, 64, 0], [1, 65, 0]))
+        );
         let cleared = highlighted.pick_map.clear_highlight().unwrap();
         assert_eq!(cleared.pick_map.highlight, None);
 
@@ -1189,18 +1507,36 @@ mod tests {
         assert!(orbited.pick_map.highlight.is_some());
         let panned = orbited.pick_map.pan(12.0, 8.0).unwrap();
         let zoomed = panned.pick_map.dolly(1.0).unwrap();
-        let moved = zoomed.pick_map.move_flight(
-            viewer_camera::FlightInput { forward: true, ..viewer_camera::FlightInput::default() },
-            1.0,
-        ).unwrap();
-        assert!(moved.pick_map.camera.world_offset.x.abs() > 0.01 || moved.pick_map.camera.world_offset.z.abs() > 0.01);
-        assert!((moved.pick_map.flight_speed() - viewer_camera::DEFAULT_MOVE_SPEED).abs() < f32::EPSILON);
+        let moved = zoomed
+            .pick_map
+            .move_flight(
+                viewer_camera::FlightInput {
+                    forward: true,
+                    ..viewer_camera::FlightInput::default()
+                },
+                1.0,
+            )
+            .unwrap();
+        assert!(
+            moved.pick_map.camera.world_offset.x.abs() > 0.01
+                || moved.pick_map.camera.world_offset.z.abs() > 0.01
+        );
+        assert!(
+            (moved.pick_map.flight_speed() - viewer_camera::DEFAULT_MOVE_SPEED).abs()
+                < f32::EPSILON
+        );
         let faster = moved.pick_map.adjust_flight_speed(1.0).unwrap();
         assert!((faster.pick_map.flight_speed() - 13.2).abs() < 0.001);
         let fitted = faster.pick_map.fit().unwrap();
         assert_eq!(fitted.block_count, 4);
-        assert_eq!(fitted.pick_map.coordinates_for_id("minecraft:stone").len(), 3);
-        assert_eq!(fitted.pick_map.look_direction(), PreviewCamera::isometric_compat().forward().as_array());
+        assert_eq!(
+            fitted.pick_map.coordinates_for_id("minecraft:stone").len(),
+            3
+        );
+        assert_eq!(
+            fitted.pick_map.look_direction(),
+            PreviewCamera::isometric_compat().forward().as_array()
+        );
         assert!((fitted.pick_map.flight_speed() - 13.2).abs() < 0.001);
         assert!(fitted.pick_map.camera.world_offset.x.abs() < f32::EPSILON);
         assert!(fitted.pick_map.camera.world_offset.y.abs() < f32::EPSILON);

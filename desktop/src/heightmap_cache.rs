@@ -30,7 +30,9 @@ pub fn load(world: &Path) -> Result<Option<(CachedHeightmap, Vec<u8>)>> {
     let metadata_bytes = match fs::read(&metadata_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("read {}", metadata_path.display())),
+        Err(error) => {
+            return Err(error).with_context(|| format!("read {}", metadata_path.display()));
+        }
     };
     let metadata: CachedHeightmap = match serde_json::from_slice(&metadata_bytes) {
         Ok(value) => value,
@@ -62,7 +64,9 @@ pub fn save(
 ) -> Result<()> {
     let fingerprint = fingerprint(world)?;
     let (metadata_path, png_path) = cache_paths(world)?;
-    let parent = metadata_path.parent().context("heightmap cache has no parent")?;
+    let parent = metadata_path
+        .parent()
+        .context("heightmap cache has no parent")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
 
     let metadata = CachedHeightmap {
@@ -74,7 +78,8 @@ pub fn save(
         scale,
         png_sha256: sha256_hex(png),
     };
-    let metadata_bytes = serde_json::to_vec(&metadata).context("serialize heightmap cache metadata")?;
+    let metadata_bytes =
+        serde_json::to_vec(&metadata).context("serialize heightmap cache metadata")?;
 
     // Publish data first, then metadata. The metadata carries the PNG digest,
     // so a crash between these operations can only create a cache miss, never
@@ -91,7 +96,9 @@ pub fn invalidate(world: &Path) -> Result<()> {
             match fs::remove_file(&candidate) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error).with_context(|| format!("remove {}", candidate.display())),
+                Err(error) => {
+                    return Err(error).with_context(|| format!("remove {}", candidate.display()));
+                }
             }
         }
     }
@@ -113,7 +120,9 @@ fn fingerprint(world: &Path) -> Result<String> {
             .filter(|path| {
                 path.extension()
                     .and_then(|value| value.to_str())
-                    .is_some_and(|value| value.eq_ignore_ascii_case("mca") || value.eq_ignore_ascii_case("mcr"))
+                    .is_some_and(|value| {
+                        value.eq_ignore_ascii_case("mca") || value.eq_ignore_ascii_case("mcr")
+                    })
             })
             .collect::<Vec<_>>();
         regions.sort();
@@ -159,7 +168,10 @@ fn cache_paths(world: &Path) -> Result<(PathBuf, PathBuf)> {
     let digest = format!("{:x}", hash.finalize());
     let key = &digest[..32];
     let root = runtime::cache_root().join("heightmaps");
-    Ok((root.join(format!("{key}.json")), root.join(format!("{key}.png"))))
+    Ok((
+        root.join(format!("{key}.json")),
+        root.join(format!("{key}.png")),
+    ))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -167,7 +179,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn backup_path(path: &Path) -> PathBuf {
-    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("cache");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("cache");
     path.with_extension(format!("{extension}.bak"))
 }
 
@@ -185,21 +200,21 @@ fn restore_backup_if_needed(path: &Path) -> Result<()> {
 
 fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
     restore_backup_if_needed(path)?;
-    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("cache");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("cache");
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let temporary = path.with_extension(format!(
-        "{extension}.{}.{}.tmp",
-        std::process::id(),
-        stamp
-    ));
+    let temporary =
+        path.with_extension(format!("{extension}.{}.{}.tmp", std::process::id(), stamp));
     let backup = backup_path(path);
 
     {
-        let mut file = File::create(&temporary)
-            .with_context(|| format!("create {}", temporary.display()))?;
+        let mut file =
+            File::create(&temporary).with_context(|| format!("create {}", temporary.display()))?;
         file.write_all(bytes)
             .with_context(|| format!("write {}", temporary.display()))?;
         file.sync_all()
@@ -234,8 +249,14 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_world(name: &str) -> PathBuf {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("minesport-heightmap-{name}-{}-{stamp}", std::process::id()));
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "minesport-heightmap-{name}-{}-{stamp}",
+            std::process::id()
+        ));
         fs::create_dir_all(root.join("region")).unwrap();
         fs::write(root.join("level.dat"), b"level").unwrap();
         fs::write(root.join("region").join("r.0.0.mca"), b"region-a").unwrap();
@@ -243,9 +264,19 @@ mod tests {
     }
 
     fn temp_modern_world(name: &str) -> PathBuf {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("minesport-heightmap-modern-{name}-{}-{stamp}", std::process::id()));
-        let region = root.join("dimensions").join("minecraft").join("overworld").join("region");
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "minesport-heightmap-modern-{name}-{}-{stamp}",
+            std::process::id()
+        ));
+        let region = root
+            .join("dimensions")
+            .join("minecraft")
+            .join("overworld")
+            .join("region");
         fs::create_dir_all(&region).unwrap();
         fs::write(root.join("level.dat"), b"level").unwrap();
         fs::write(region.join("r.0.0.mca"), b"modern-a").unwrap();
@@ -265,7 +296,11 @@ mod tests {
     #[test]
     fn fingerprint_tracks_modern_overworld_region_metadata() {
         let world = temp_modern_world("fingerprint");
-        let region = world.join("dimensions").join("minecraft").join("overworld").join("region");
+        let region = world
+            .join("dimensions")
+            .join("minecraft")
+            .join("overworld")
+            .join("region");
         let first = fingerprint(&world).unwrap();
         fs::write(region.join("r.0.0.mca"), b"modern-b-longer").unwrap();
         let second = fingerprint(&world).unwrap();
@@ -279,7 +314,15 @@ mod tests {
         let png = b"not-a-real-png-but-cache-does-not-interpret-it";
         save(&world, png, -32, -16, 64, 80, 1).unwrap();
         let (metadata, restored) = load(&world).unwrap().expect("cache hit");
-        assert_eq!((metadata.min_x, metadata.min_z, metadata.max_x, metadata.max_z), (-32, -16, 64, 80));
+        assert_eq!(
+            (
+                metadata.min_x,
+                metadata.min_z,
+                metadata.max_x,
+                metadata.max_z
+            ),
+            (-32, -16, 64, 80)
+        );
         assert_eq!(restored, png);
         invalidate(&world).unwrap();
         assert!(load(&world).unwrap().is_none());

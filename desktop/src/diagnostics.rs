@@ -7,7 +7,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::PathBuf,
-    sync::{Mutex, OnceLock, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -48,27 +51,63 @@ pub struct Logger {
 
 impl Logger {
     pub fn new(module: impl Into<String>) -> Self {
-        Self { module: module.into().to_uppercase() }
+        Self {
+            module: module.into().to_uppercase(),
+        }
     }
 
     pub fn child(&self, sub_module: impl Display) -> Self {
-        Self { module: format!("{}:{}", self.module, sub_module) }
+        Self {
+            module: format!("{}:{}", self.module, sub_module),
+        }
     }
 
     pub fn debug(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
-        emit_operational(Level::Debug, &self.module, event, None, None, &message.to_string(), fields);
+        emit_operational(
+            Level::Debug,
+            &self.module,
+            event,
+            None,
+            None,
+            &message.to_string(),
+            fields,
+        );
     }
 
     pub fn info(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
-        emit_operational(Level::Info, &self.module, event, None, None, &message.to_string(), fields);
+        emit_operational(
+            Level::Info,
+            &self.module,
+            event,
+            None,
+            None,
+            &message.to_string(),
+            fields,
+        );
     }
 
     pub fn warn(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
-        emit_operational(Level::Warn, &self.module, event, None, None, &message.to_string(), fields);
+        emit_operational(
+            Level::Warn,
+            &self.module,
+            event,
+            None,
+            None,
+            &message.to_string(),
+            fields,
+        );
     }
 
     pub fn error(&self, event: &str, message: impl Display, fields: &[(&str, String)]) {
-        emit_operational(Level::Error, &self.module, event, None, None, &message.to_string(), fields);
+        emit_operational(
+            Level::Error,
+            &self.module,
+            event,
+            None,
+            None,
+            &message.to_string(),
+            fields,
+        );
     }
 
     /// Emit a structured event that belongs to an operation/trace created in
@@ -194,7 +233,10 @@ impl Operation {
         self.finished = true;
         let mut combined = self.combined_fields(fields);
         combined.push(("outcome".to_string(), outcome.to_string()));
-        combined.push(("duration_ms".to_string(), elapsed_millis(self.started.elapsed()).to_string()));
+        combined.push((
+            "duration_ms".to_string(),
+            elapsed_millis(self.started.elapsed()).to_string(),
+        ));
         emit_operational_owned(
             level,
             &self.logger.module,
@@ -208,7 +250,11 @@ impl Operation {
 
     fn combined_fields(&self, fields: &[(&str, String)]) -> Vec<(String, String)> {
         let mut combined = self.base_fields.clone();
-        combined.extend(fields.iter().map(|(key, value)| ((*key).to_string(), value.clone())));
+        combined.extend(
+            fields
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), value.clone())),
+        );
         combined
     }
 }
@@ -221,7 +267,10 @@ impl Drop for Operation {
         self.finished = true;
         let mut fields = self.base_fields.clone();
         fields.push(("outcome".to_string(), "abandoned".to_string()));
-        fields.push(("duration_ms".to_string(), elapsed_millis(self.started.elapsed()).to_string()));
+        fields.push((
+            "duration_ms".to_string(),
+            elapsed_millis(self.started.elapsed()).to_string(),
+        ));
         emit_operational_owned(
             Level::Warn,
             &self.logger.module,
@@ -252,7 +301,8 @@ fn display_log() -> &'static Mutex<VecDeque<String>> {
 
 pub fn initialize() -> Result<PathBuf> {
     let folder = folder();
-    fs::create_dir_all(&folder).with_context(|| format!("create diagnostics directory {}", folder.display()))?;
+    fs::create_dir_all(&folder)
+        .with_context(|| format!("create diagnostics directory {}", folder.display()))?;
     let path = log_path();
     let file = OpenOptions::new()
         .create(true)
@@ -272,7 +322,10 @@ pub fn initialize() -> Result<PathBuf> {
 
     Logger::new("DESKTOP").info(
         "DesktopSessionStart",
-        format!("Minesport {} Rust/Slint session started", env!("CARGO_PKG_VERSION")),
+        format!(
+            "Minesport {} Rust/Slint session started",
+            env!("CARGO_PKG_VERSION")
+        ),
         &[
             ("pid", std::process::id().to_string()),
             ("operations_log", operations.display().to_string()),
@@ -304,7 +357,13 @@ pub fn append_correlated(message: &str, operation_id: &str, trace_id: &str) {
 pub fn display_text() -> String {
     display_log()
         .lock()
-        .map(|lines| lines.iter().map(String::as_str).collect::<Vec<_>>().join("\n"))
+        .map(|lines| {
+            lines
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_default()
 }
 
@@ -323,8 +382,19 @@ fn emit_operational(
     message: &str,
     fields: &[(&str, String)],
 ) {
-    let owned = fields.iter().map(|(key, value)| ((*key).to_string(), value.clone())).collect::<Vec<_>>();
-    emit_operational_owned(level, module, event, operation_id, trace_id, message, &owned);
+    let owned = fields
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), value.clone()))
+        .collect::<Vec<_>>();
+    emit_operational_owned(
+        level,
+        module,
+        event,
+        operation_id,
+        trace_id,
+        message,
+        &owned,
+    );
 }
 
 fn emit_operational_owned(
@@ -336,8 +406,15 @@ fn emit_operational_owned(
     message: &str,
     fields: &[(String, String)],
 ) {
-    let (epoch_ms, display_stamp, repaired, human) =
-        emit_human(level, module, event, operation_id, trace_id, message, fields);
+    let (epoch_ms, display_stamp, repaired, human) = emit_human(
+        level,
+        module,
+        event,
+        operation_id,
+        trace_id,
+        message,
+        fields,
+    );
 
     if let Some(lock) = OPERATIONS_FILE.get() {
         if let Ok(mut file) = lock.lock() {
@@ -377,15 +454,27 @@ fn emit_human(
     fields: &[(String, String)],
 ) -> (u128, String, String, String) {
     let now = SystemTime::now();
-    let epoch_ms = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let epoch_ms = now
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
     let display_stamp = local_clock_stamp(now);
     let repaired = repair_common_mojibake(message);
     let rendered_fields = fields
         .iter()
-        .map(|(key, value)| format!("{key}={}", quote_human_value(&repair_common_mojibake(value))))
+        .map(|(key, value)| {
+            format!(
+                "{key}={}",
+                quote_human_value(&repair_common_mojibake(value))
+            )
+        })
         .collect::<Vec<_>>();
-    let operation_text = operation_id.map(|id| format!(" operation={id}")).unwrap_or_default();
-    let trace_text = trace_id.map(|id| format!(" trace={id}")).unwrap_or_default();
+    let operation_text = operation_id
+        .map(|id| format!(" operation={id}"))
+        .unwrap_or_default();
+    let trace_text = trace_id
+        .map(|id| format!(" trace={id}"))
+        .unwrap_or_default();
     let suffix = if rendered_fields.is_empty() {
         String::new()
     } else {
@@ -420,11 +509,18 @@ fn emit_human(
 }
 
 fn non_empty(value: &str) -> Option<&str> {
-    if value.trim().is_empty() { None } else { Some(value) }
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn quote_human_value(value: &str) -> String {
-    if value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/' | '\\')) {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/' | '\\'))
+    {
         value.to_string()
     } else {
         format!("{:?}", value)
@@ -480,7 +576,10 @@ fn local_clock_stamp(_now: SystemTime) -> String {
 
 #[cfg(not(windows))]
 fn local_clock_stamp(now: SystemTime) -> String {
-    let total_ms = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let total_ms = now
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
     let day_ms = total_ms % 86_400_000;
     let hour = day_ms / 3_600_000;
     let minute = (day_ms / 60_000) % 60;
@@ -498,7 +597,11 @@ mod tests {
         let path = log_path().to_string_lossy().to_ascii_lowercase();
         assert!(path.contains("minesport"));
         assert!(path.ends_with("minesport.log"));
-        assert!(operations_path().to_string_lossy().ends_with("minesport.operations.jsonl"));
+        assert!(
+            operations_path()
+                .to_string_lossy()
+                .ends_with("minesport.operations.jsonl")
+        );
     }
 
     #[test]
@@ -520,7 +623,11 @@ mod tests {
     fn operation_ids_are_distinct_from_runtime_trace_ids() {
         let operation = Logger::new("TEST").operation("TestHardcodedOperationId");
         assert_eq!(operation.operation_id(), "TestHardcodedOperationId");
-        assert!(operation.trace_id().starts_with(&format!("{}-", std::process::id())));
+        assert!(
+            operation
+                .trace_id()
+                .starts_with(&format!("{}-", std::process::id()))
+        );
     }
 
     #[test]

@@ -18,22 +18,72 @@ use std::{
 // files during rustc compilation. Embed only the canonical files declared by
 // the compatibility manifest instead.
 static BRIDGE_SOURCE_FILES: &[(&str, &[u8])] = &[
-    ("build.gradle", include_bytes!("../../minesport-bridge-fabric/build.gradle")),
-    ("settings.gradle", include_bytes!("../../minesport-bridge-fabric/settings.gradle")),
-    ("gradle.properties", include_bytes!("../../minesport-bridge-fabric/gradle.properties")),
-    ("gradlew", include_bytes!("../../minesport-bridge-fabric/gradlew")),
-    ("gradlew.bat", include_bytes!("../../minesport-bridge-fabric/gradlew.bat")),
-    ("gradle/wrapper/gradle-wrapper.jar", include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.jar")),
-    ("gradle/wrapper/gradle-wrapper.properties", include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.properties")),
-    ("src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java", include_bytes!("../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java")),
-    ("src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java", include_bytes!("../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java")),
-    ("src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java")),
-    ("src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java")),
-    ("src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java", include_bytes!("../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java")),
-    ("src/main/resources/fabric.mod.json", include_bytes!("../../minesport-bridge-fabric/src/main/resources/fabric.mod.json")),
+    (
+        "build.gradle",
+        include_bytes!("../../minesport-bridge-fabric/build.gradle"),
+    ),
+    (
+        "settings.gradle",
+        include_bytes!("../../minesport-bridge-fabric/settings.gradle"),
+    ),
+    (
+        "gradle.properties",
+        include_bytes!("../../minesport-bridge-fabric/gradle.properties"),
+    ),
+    (
+        "gradlew",
+        include_bytes!("../../minesport-bridge-fabric/gradlew"),
+    ),
+    (
+        "gradlew.bat",
+        include_bytes!("../../minesport-bridge-fabric/gradlew.bat"),
+    ),
+    (
+        "gradle/wrapper/gradle-wrapper.jar",
+        include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.jar"),
+    ),
+    (
+        "gradle/wrapper/gradle-wrapper.properties",
+        include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.properties"),
+    ),
+    (
+        "src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java",
+        include_bytes!(
+            "../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/MinesportExportWorker.java"
+        ),
+    ),
+    (
+        "src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java",
+        include_bytes!(
+            "../../minesport-bridge-fabric/src/client/java/dev/kastrick/minesport/bridge/registry/BlockGeometryExtractor.java"
+        ),
+    ),
+    (
+        "src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java",
+        include_bytes!(
+            "../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/registry/SpriteUv.java"
+        ),
+    ),
+    (
+        "src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java",
+        include_bytes!(
+            "../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/model/ExportWorkerProtocol.java"
+        ),
+    ),
+    (
+        "src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java",
+        include_bytes!(
+            "../../minesport-bridge-fabric/src/main/java/dev/kastrick/minesport/bridge/socket/ExportWorkerSender.java"
+        ),
+    ),
+    (
+        "src/main/resources/fabric.mod.json",
+        include_bytes!("../../minesport-bridge-fabric/src/main/resources/fabric.mod.json"),
+    ),
 ];
 
-static BRIDGE_VERSIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-fabric-versions");
+static BRIDGE_VERSIONS: Dir<'_> =
+    include_dir!("$CARGO_MANIFEST_DIR/../minesport-bridge-fabric-versions");
 const MANIFEST_JSON: &str = include_str!("../../minesport-bridge-fabric-versions/manifest.json");
 const MAX_NETWORK_TEXT: u64 = 8 * 1024 * 1024;
 const DOWNLOAD_ATTEMPTS: usize = 3;
@@ -150,9 +200,13 @@ enum HttpAttemptError {
 }
 
 pub fn manifest() -> Result<Manifest> {
-    let parsed: Manifest = serde_json::from_str(MANIFEST_JSON).context("parse embedded bridge compatibility manifest")?;
+    let parsed: Manifest = serde_json::from_str(MANIFEST_JSON)
+        .context("parse embedded bridge compatibility manifest")?;
     if parsed.schema != 1 {
-        bail!("unsupported bridge compatibility manifest schema {}", parsed.schema);
+        bail!(
+            "unsupported bridge compatibility manifest schema {}",
+            parsed.schema
+        );
     }
     if parsed.base.version.trim().is_empty() || parsed.base.files.is_empty() {
         bail!("embedded bridge compatibility manifest has an incomplete base specification");
@@ -162,30 +216,55 @@ pub fn manifest() -> Result<Manifest> {
 
 pub fn normalize_version(raw: &str) -> Option<String> {
     let rx = Regex::new(r"(?:^|[^0-9])((?:1\.[0-9]+(?:\.[0-9]+)?)|(?:2[0-9]\.[0-9]+(?:\.[0-9]+)?(?:-snapshot-[0-9]+)?))").expect("version regex");
-    rx.captures_iter(raw.trim()).last().and_then(|capture| capture.get(1)).map(|value| value.as_str().to_string())
+    rx.captures_iter(raw.trim())
+        .last()
+        .and_then(|capture| capture.get(1))
+        .map(|value| value.as_str().to_string())
 }
 
 pub fn is_bundled_compatible(version: &str) -> Result<bool> {
-    let version = normalize_version(version).ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
+    let version = normalize_version(version)
+        .ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
     let manifest = manifest()?;
-    Ok(manifest.base.compatible.iter().any(|candidate| candidate == &version))
+    Ok(manifest
+        .base
+        .compatible
+        .iter()
+        .any(|candidate| candidate == &version))
 }
 
 pub fn is_supported(version: &str) -> bool {
-    let Some(version) = normalize_version(version) else { return false; };
-    let Ok(manifest) = manifest() else { return false; };
-    if manifest.base.compatible.iter().any(|candidate| candidate == &version) {
+    let Some(version) = normalize_version(version) else {
+        return false;
+    };
+    let Ok(manifest) = manifest() else {
+        return false;
+    };
+    if manifest
+        .base
+        .compatible
+        .iter()
+        .any(|candidate| candidate == &version)
+    {
         return true;
     }
     manifest.profiles.iter().any(|profile| {
-        Regex::new(&profile.match_expression).map(|rx| rx.is_match(&version)).unwrap_or(false)
+        Regex::new(&profile.match_expression)
+            .map(|rx| rx.is_match(&version))
+            .unwrap_or(false)
     })
 }
 
 pub fn required_java(version: &str) -> Result<u32> {
-    let version = normalize_version(version).ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
+    let version = normalize_version(version)
+        .ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
     let manifest = manifest()?;
-    if manifest.base.compatible.iter().any(|candidate| candidate == &version) {
+    if manifest
+        .base
+        .compatible
+        .iter()
+        .any(|candidate| candidate == &version)
+    {
         return Ok(manifest.base.java);
     }
     Ok(profile_for(&manifest, &version)?.java)
@@ -195,17 +274,33 @@ pub fn prepare_source<F>(version: &str, workspace: &Path, mut progress: F) -> Re
 where
     F: FnMut(CompatProgress),
 {
-    let version = normalize_version(version).ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
+    let version = normalize_version(version)
+        .ok_or_else(|| anyhow!("could not determine Minecraft version"))?;
     let manifest = manifest()?;
-    let bundled = manifest.base.compatible.iter().any(|candidate| candidate == &version);
-    let profile = if bundled { None } else { Some(profile_for(&manifest, &version)?.clone()) };
+    let bundled = manifest
+        .base
+        .compatible
+        .iter()
+        .any(|candidate| candidate == &version);
+    let profile = if bundled {
+        None
+    } else {
+        Some(profile_for(&manifest, &version)?.clone())
+    };
 
     if workspace.exists() {
-        fs::remove_dir_all(workspace).with_context(|| format!("reset bridge workspace {}", workspace.display()))?;
+        fs::remove_dir_all(workspace)
+            .with_context(|| format!("reset bridge workspace {}", workspace.display()))?;
     }
-    fs::create_dir_all(workspace).with_context(|| format!("create bridge workspace {}", workspace.display()))?;
+    fs::create_dir_all(workspace)
+        .with_context(|| format!("create bridge workspace {}", workspace.display()))?;
 
-    report(&mut progress, 5, "Preparing Bridge", "Materializing embedded canonical Bridge source");
+    report(
+        &mut progress,
+        5,
+        "Preparing Bridge",
+        "Materializing embedded canonical Bridge source",
+    );
     for (index, relative) in manifest.base.files.iter().enumerate() {
         let embedded = embedded_bridge_source_bytes(relative)
             .ok_or_else(|| anyhow!("embedded canonical Bridge file is missing: {relative}"))?;
@@ -218,29 +313,35 @@ where
         report(&mut progress, percent, "Preparing Bridge", relative);
     }
 
-    let (profile_id, java, gradle, loom, loader_spec, api_spec, patch_path) = if let Some(profile) = &profile {
-        (
-            profile.id.clone(),
-            profile.java,
-            profile.gradle.clone(),
-            profile.loom.clone(),
-            profile.loader.clone(),
-            profile.fabric_api.clone(),
-            Some(profile.patch.clone()),
-        )
-    } else {
-        (
-            format!("bundled-base-{version}"),
-            manifest.base.java,
-            String::new(),
-            String::new(),
-            "dynamic".to_string(),
-            "dynamic".to_string(),
-            None,
-        )
-    };
+    let (profile_id, java, gradle, loom, loader_spec, api_spec, patch_path) =
+        if let Some(profile) = &profile {
+            (
+                profile.id.clone(),
+                profile.java,
+                profile.gradle.clone(),
+                profile.loom.clone(),
+                profile.loader.clone(),
+                profile.fabric_api.clone(),
+                Some(profile.patch.clone()),
+            )
+        } else {
+            (
+                format!("bundled-base-{version}"),
+                manifest.base.java,
+                String::new(),
+                String::new(),
+                "dynamic".to_string(),
+                "dynamic".to_string(),
+                None,
+            )
+        };
 
-    report(&mut progress, 19, "Preparing Bridge", "Resolving Fabric Loader and Fabric API");
+    report(
+        &mut progress,
+        19,
+        "Preparing Bridge",
+        "Resolving Fabric Loader and Fabric API",
+    );
     let loader = if loader_spec.is_empty() || loader_spec == "dynamic" {
         resolve_fabric_loader(&version)?
     } else {
@@ -263,19 +364,37 @@ where
 
     if let Some(patch_path) = patch_path {
         let patch = embedded_version_text(&patch_path)?;
-        let patch: PatchSet = serde_json::from_str(&patch).with_context(|| format!("parse embedded compatibility recipe {patch_path}"))?;
+        let patch: PatchSet = serde_json::from_str(&patch)
+            .with_context(|| format!("parse embedded compatibility recipe {patch_path}"))?;
         if patch.schema != 1 {
             bail!("unsupported patch schema {} in {patch_path}", patch.schema);
         }
-        report(&mut progress, 27, "Preparing Bridge", &format!("Applying compatibility recipe {profile_id}"));
+        report(
+            &mut progress,
+            27,
+            "Preparing Bridge",
+            &format!("Applying compatibility recipe {profile_id}"),
+        );
         for operation in &patch.operations {
             apply_operation(workspace, operation, &variables)
                 .with_context(|| format!("apply {} operation for {profile_id}", operation.op))?;
         }
     } else {
-        set_property(&safe_join(workspace, Path::new("gradle.properties"))?, "minecraft_version", &version)?;
-        set_property(&safe_join(workspace, Path::new("gradle.properties"))?, "loader_version", &loader)?;
-        set_property(&safe_join(workspace, Path::new("gradle.properties"))?, "fabric_version", &fabric_api)?;
+        set_property(
+            &safe_join(workspace, Path::new("gradle.properties"))?,
+            "minecraft_version",
+            &version,
+        )?;
+        set_property(
+            &safe_join(workspace, Path::new("gradle.properties"))?,
+            "loader_version",
+            &loader,
+        )?;
+        set_property(
+            &safe_join(workspace, Path::new("gradle.properties"))?,
+            "fabric_version",
+            &fabric_api,
+        )?;
     }
 
     set_property(
@@ -295,8 +414,16 @@ where
         "variables": variables.clone(),
         "purpose": "rust-compatibility-source"
     });
-    fs::write(workspace.join("minesport-target.json"), serde_json::to_vec_pretty(&metadata)?)?;
-    report(&mut progress, 34, "Preparing Bridge", "Compatibility workspace ready");
+    fs::write(
+        workspace.join("minesport-target.json"),
+        serde_json::to_vec_pretty(&metadata)?,
+    )?;
+    report(
+        &mut progress,
+        34,
+        "Preparing Bridge",
+        "Compatibility workspace ready",
+    );
 
     Ok(PreparedSource {
         version,
@@ -315,8 +442,12 @@ fn embedded_bridge_source_bytes(relative: &str) -> Option<&'static [u8]> {
 
 fn profile_for<'a>(manifest: &'a Manifest, version: &str) -> Result<&'a Profile> {
     for profile in &manifest.profiles {
-        let rx = Regex::new(&profile.match_expression)
-            .with_context(|| format!("invalid version match expression for profile {}", profile.id))?;
+        let rx = Regex::new(&profile.match_expression).with_context(|| {
+            format!(
+                "invalid version match expression for profile {}",
+                profile.id
+            )
+        })?;
         if rx.is_match(version) {
             return Ok(profile);
         }
@@ -324,7 +455,11 @@ fn profile_for<'a>(manifest: &'a Manifest, version: &str) -> Result<&'a Profile>
     bail!("Minesport has no compatibility recipe for Minecraft {version} yet")
 }
 
-fn apply_operation(workspace: &Path, operation: &PatchOperation, variables: &HashMap<String, String>) -> Result<()> {
+fn apply_operation(
+    workspace: &Path,
+    operation: &PatchOperation,
+    variables: &HashMap<String, String>,
+) -> Result<()> {
     let expand = |value: &str| expand_variables(value, variables);
     match operation.op.as_str() {
         "set_property" => {
@@ -333,22 +468,41 @@ fn apply_operation(workspace: &Path, operation: &PatchOperation, variables: &Has
         }
         "replace" => {
             let file = safe_join(workspace, Path::new(&expand(&operation.file)))?;
-            replace_in_file(&file, &expand(&operation.from), &expand(&operation.to), false)
+            replace_in_file(
+                &file,
+                &expand(&operation.from),
+                &expand(&operation.to),
+                false,
+            )
         }
         "rename_at" => {
             let file = safe_join(workspace, Path::new(&expand(&operation.file)))?;
-            replace_at(&file, operation.line, operation.column, &expand(&operation.from), &expand(&operation.to))
+            replace_at(
+                &file,
+                operation.line,
+                operation.column,
+                &expand(&operation.from),
+                &expand(&operation.to),
+            )
         }
         "regex_replace" => {
             let file = safe_join(workspace, Path::new(&expand(&operation.file)))?;
-            let text = fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
+            let text =
+                fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
             let pattern = expand(&operation.pattern);
             let replacement = expand(&operation.replacement);
-            let rx = Regex::new(&pattern).with_context(|| format!("compile compatibility regex {pattern:?}"))?;
+            let rx = Regex::new(&pattern)
+                .with_context(|| format!("compile compatibility regex {pattern:?}"))?;
             if !rx.is_match(&text) {
-                bail!("expected regex {pattern:?} was not found in {}", file.display());
+                bail!(
+                    "expected regex {pattern:?} was not found in {}",
+                    file.display()
+                );
             }
-            fs::write(&file, rx.replace_all(&text, replacement.as_str()).as_bytes())?;
+            fs::write(
+                &file,
+                rx.replace_all(&text, replacement.as_str()).as_bytes(),
+            )?;
             Ok(())
         }
         "replace_tree" | "rename_package" => {
@@ -357,13 +511,21 @@ fn apply_operation(workspace: &Path, operation: &PatchOperation, variables: &Has
             if operation.op == "rename_package" && extensions.is_empty() {
                 extensions.push(".java".into());
             }
-            replace_tree(&root, &extensions, &expand(&operation.from), &expand(&operation.to))
+            replace_tree(
+                &root,
+                &extensions,
+                &expand(&operation.from),
+                &expand(&operation.to),
+            )
         }
         "rename_file" => {
             let from = safe_join(workspace, Path::new(&expand(&operation.from)))?;
             let to = safe_join(workspace, Path::new(&expand(&operation.to)))?;
-            if let Some(parent) = to.parent() { fs::create_dir_all(parent)?; }
-            fs::rename(&from, &to).with_context(|| format!("rename {} to {}", from.display(), to.display()))?;
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::rename(&from, &to)
+                .with_context(|| format!("rename {} to {}", from.display(), to.display()))?;
             Ok(())
         }
         "overlay" => {
@@ -380,10 +542,17 @@ fn apply_operation(workspace: &Path, operation: &PatchOperation, variables: &Has
                 .with_context(|| format!("install compatibility module {}", operation.name))
         }
         "delete" => {
-            let raw = if operation.target.is_empty() { &operation.file } else { &operation.target };
+            let raw = if operation.target.is_empty() {
+                &operation.file
+            } else {
+                &operation.target
+            };
             let target = safe_join(workspace, Path::new(&expand(raw)))?;
-            if target.is_dir() { fs::remove_dir_all(target)?; }
-            else if target.exists() { fs::remove_file(target)?; }
+            if target.is_dir() {
+                fs::remove_dir_all(target)?;
+            } else if target.exists() {
+                fs::remove_file(target)?;
+            }
             Ok(())
         }
         other => bail!("unknown compatibility operation {other:?}"),
@@ -403,7 +572,8 @@ fn embedded_version_bytes(repo_path: &str) -> Result<&'static [u8]> {
 
 fn embedded_version_text(repo_path: &str) -> Result<String> {
     let bytes = embedded_version_bytes(repo_path)?;
-    String::from_utf8(bytes.to_vec()).with_context(|| format!("compatibility resource is not UTF-8: {repo_path}"))
+    String::from_utf8(bytes.to_vec())
+        .with_context(|| format!("compatibility resource is not UTF-8: {repo_path}"))
 }
 
 fn set_property(file: &Path, key: &str, value: &str) -> Result<()> {
@@ -419,17 +589,24 @@ fn set_property(file: &Path, key: &str, value: &str) -> Result<()> {
             lines.push(line.to_string());
         }
     }
-    if !updated { lines.push(format!("{prefix}{value}")); }
+    if !updated {
+        lines.push(format!("{prefix}{value}"));
+    }
     let mut output = lines.join("\n");
-    if text.ends_with('\n') { output.push('\n'); }
-    fs::write(file, output).with_context(|| format!("update Gradle property {key} in {}", file.display()))?;
+    if text.ends_with('\n') {
+        output.push('\n');
+    }
+    fs::write(file, output)
+        .with_context(|| format!("update Gradle property {key} in {}", file.display()))?;
     Ok(())
 }
 
 fn replace_in_file(file: &Path, from: &str, to: &str, optional: bool) -> Result<()> {
     let text = fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
     if !text.contains(from) {
-        if optional { return Ok(()); }
+        if optional {
+            return Ok(());
+        }
         bail!("expected text {from:?} was not found in {}", file.display());
     }
     fs::write(file, text.replace(from, to))?;
@@ -443,16 +620,32 @@ fn replace_at(file: &Path, line: usize, column: usize, from: &str, to: &str) -> 
     let text = fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
     let mut offsets = vec![0usize];
     for (index, byte) in text.bytes().enumerate() {
-        if byte == b'\n' { offsets.push(index + 1); }
+        if byte == b'\n' {
+            offsets.push(index + 1);
+        }
     }
-    let start_of_line = *offsets.get(line - 1).ok_or_else(|| anyhow!("line {line} does not exist in {}", file.display()))?;
+    let start_of_line = *offsets
+        .get(line - 1)
+        .ok_or_else(|| anyhow!("line {line} does not exist in {}", file.display()))?;
     let start = start_of_line + column - 1;
-    let line_end = text[start_of_line..].find('\n').map(|value| start_of_line + value).unwrap_or(text.len());
-    if start + from.len() > line_end || !text.is_char_boundary(start) || !text.is_char_boundary(start + from.len()) {
-        bail!("rename_at location {line}:{column} is invalid in {}", file.display());
+    let line_end = text[start_of_line..]
+        .find('\n')
+        .map(|value| start_of_line + value)
+        .unwrap_or(text.len());
+    if start + from.len() > line_end
+        || !text.is_char_boundary(start)
+        || !text.is_char_boundary(start + from.len())
+    {
+        bail!(
+            "rename_at location {line}:{column} is invalid in {}",
+            file.display()
+        );
     }
     if &text[start..start + from.len()] != from {
-        bail!("stale rename_at in {}:{line}:{column}: expected {from:?}", file.display());
+        bail!(
+            "stale rename_at in {}:{line}:{column}: expected {from:?}",
+            file.display()
+        );
     }
     let mut output = String::with_capacity(text.len() + to.len().saturating_sub(from.len()));
     output.push_str(&text[..start]);
@@ -463,26 +656,42 @@ fn replace_at(file: &Path, line: usize, column: usize, from: &str, to: &str) -> 
 }
 
 fn replace_tree(root: &Path, extensions: &[String], from: &str, to: &str) -> Result<()> {
-    if !root.exists() { bail!("compatibility tree does not exist: {}", root.display()); }
-    for entry in fs::read_dir(root).with_context(|| format!("read compatibility tree {}", root.display()))? {
+    if !root.exists() {
+        bail!("compatibility tree does not exist: {}", root.display());
+    }
+    for entry in
+        fs::read_dir(root).with_context(|| format!("read compatibility tree {}", root.display()))?
+    {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
-        if file_type.is_symlink() { continue; }
+        if file_type.is_symlink() {
+            continue;
+        }
         if file_type.is_dir() {
             replace_tree(&path, extensions, from, to)?;
             continue;
         }
-        if !file_type.is_file() || !has_extension(&path, extensions) { continue; }
+        if !file_type.is_file() || !has_extension(&path, extensions) {
+            continue;
+        }
         replace_in_file(&path, from, to, true)?;
     }
     Ok(())
 }
 
 fn has_extension(path: &Path, extensions: &[String]) -> bool {
-    if extensions.is_empty() { return true; }
-    let ext = path.extension().and_then(|value| value.to_str()).map(|value| format!(".{value}")).unwrap_or_default();
-    extensions.iter().any(|candidate| candidate.eq_ignore_ascii_case(&ext))
+    if extensions.is_empty() {
+        return true;
+    }
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+    extensions
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(&ext))
 }
 
 fn expand_variables(value: &str, variables: &HashMap<String, String>) -> String {
@@ -494,11 +703,17 @@ fn expand_variables(value: &str, variables: &HashMap<String, String>) -> String 
 }
 
 fn project_relative(value: &str) -> String {
-    value.trim().trim_start_matches("&PROJECT&/").trim_start_matches("&PROJECT&\\").replace('\\', "/")
+    value
+        .trim()
+        .trim_start_matches("&PROJECT&/")
+        .trim_start_matches("&PROJECT&\\")
+        .replace('\\', "/")
 }
 
 fn download_pinned_module(url: &str, expected_sha: &str) -> Result<Vec<u8>> {
-    if !url.starts_with("https://") { bail!("compatibility module URL must use HTTPS"); }
+    if !url.starts_with("https://") {
+        bail!("compatibility module URL must use HTTPS");
+    }
     if expected_sha.len() != 64 || !expected_sha.chars().all(|ch| ch.is_ascii_hexdigit()) {
         bail!("compatibility module requires a 64-character SHA-256");
     }
@@ -515,14 +730,27 @@ fn resolve_fabric_loader(version: &str) -> Result<String> {
     let url = format!("https://meta.fabricmc.net/v2/versions/loader/{version}");
     let data = http_get_limited(&url, MAX_NETWORK_TEXT)?;
     #[derive(Deserialize)]
-    struct LoaderInfo { loader: Loader }
+    struct LoaderInfo {
+        loader: Loader,
+    }
     #[derive(Deserialize)]
-    struct Loader { version: String, #[serde(default)] stable: bool }
-    let values: Vec<LoaderInfo> = serde_json::from_slice(&data).context("parse Fabric Loader metadata")?;
-    if let Some(value) = values.iter().find(|value| value.loader.stable && !value.loader.version.is_empty()) {
+    struct Loader {
+        version: String,
+        #[serde(default)]
+        stable: bool,
+    }
+    let values: Vec<LoaderInfo> =
+        serde_json::from_slice(&data).context("parse Fabric Loader metadata")?;
+    if let Some(value) = values
+        .iter()
+        .find(|value| value.loader.stable && !value.loader.version.is_empty())
+    {
         return Ok(value.loader.version.clone());
     }
-    values.first().filter(|value| !value.loader.version.is_empty()).map(|value| value.loader.version.clone())
+    values
+        .first()
+        .filter(|value| !value.loader.version.is_empty())
+        .map(|value| value.loader.version.clone())
         .ok_or_else(|| anyhow!("Fabric Meta does not publish a loader for Minecraft {version}"))
 }
 
@@ -535,15 +763,23 @@ fn resolve_fabric_api(version: &str) -> Result<String> {
     let suffix = format!("+{version}");
     let mut selected = None;
     for chunk in text.split("<version>").skip(1) {
-        let Some(candidate) = chunk.split("</version>").next() else { continue; };
+        let Some(candidate) = chunk.split("</version>").next() else {
+            continue;
+        };
         let candidate = candidate.trim();
-        if candidate.ends_with(&suffix) { selected = Some(candidate.to_string()); }
+        if candidate.ends_with(&suffix) {
+            selected = Some(candidate.to_string());
+        }
     }
-    selected.ok_or_else(|| anyhow!("Fabric API does not currently publish a build for Minecraft {version}"))
+    selected.ok_or_else(|| {
+        anyhow!("Fabric API does not currently publish a build for Minecraft {version}")
+    })
 }
 
 fn http_get_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
-    if !url.starts_with("https://") { bail!("network URL must use HTTPS: {url}"); }
+    if !url.starts_with("https://") {
+        bail!("network URL must use HTTPS: {url}");
+    }
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(20))
         .timeout_read(Duration::from_secs(120))
@@ -573,10 +809,16 @@ fn http_get_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
             }
         }
     }
-    Err(anyhow!("HTTP request failed for {url} after {DOWNLOAD_ATTEMPTS} attempts: {primary:#}"))
+    Err(anyhow!(
+        "HTTP request failed for {url} after {DOWNLOAD_ATTEMPTS} attempts: {primary:#}"
+    ))
 }
 
-fn http_get_limited_once(agent: &ureq::Agent, url: &str, max_bytes: u64) -> std::result::Result<Vec<u8>, HttpAttemptError> {
+fn http_get_limited_once(
+    agent: &ureq::Agent,
+    url: &str,
+    max_bytes: u64,
+) -> std::result::Result<Vec<u8>, HttpAttemptError> {
     let response = match agent
         .get(url)
         .set("User-Agent", "Minesport-Rust-Bridge-Builder/0.2.0")
@@ -591,16 +833,22 @@ fn http_get_limited_once(agent: &ureq::Agent, url: &str, max_bytes: u64) -> std:
             return Err(HttpAttemptError::Permanent(error));
         }
         Err(error) => {
-            return Err(HttpAttemptError::Retryable(anyhow!("HTTP request failed for {url}: {error}")));
+            return Err(HttpAttemptError::Retryable(anyhow!(
+                "HTTP request failed for {url}: {error}"
+            )));
         }
     };
     let mut reader = response.into_reader().take(max_bytes + 1);
     let mut data = Vec::new();
     if let Err(error) = reader.read_to_end(&mut data) {
-        return Err(HttpAttemptError::Retryable(anyhow!("read HTTP response for {url}: {error}")));
+        return Err(HttpAttemptError::Retryable(anyhow!(
+            "read HTTP response for {url}: {error}"
+        )));
     }
     if data.len() as u64 > max_bytes {
-        return Err(HttpAttemptError::Permanent(anyhow!("network resource exceeds {max_bytes} byte limit: {url}")));
+        return Err(HttpAttemptError::Permanent(anyhow!(
+            "network resource exceeds {max_bytes} byte limit: {url}"
+        )));
     }
     Ok(data)
 }
@@ -631,12 +879,19 @@ fn github_contents_fallback(raw_url: &str, max_bytes: u64) -> Result<Vec<u8>> {
         content: String,
         encoding: String,
     }
-    let payload: GithubContents = serde_json::from_slice(&payload).context("decode GitHub Contents response")?;
+    let payload: GithubContents =
+        serde_json::from_slice(&payload).context("decode GitHub Contents response")?;
     if payload.encoding != "base64" || payload.content.trim().is_empty() {
         bail!("GitHub Contents response did not contain base64 file content");
     }
-    let compact = payload.content.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
-    let decoded = BASE64.decode(compact).context("decode GitHub Contents file")?;
+    let compact = payload
+        .content
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let decoded = BASE64
+        .decode(compact)
+        .context("decode GitHub Contents file")?;
     if decoded.len() as u64 > max_bytes {
         bail!("GitHub Contents file exceeds {max_bytes} byte limit");
     }
@@ -672,17 +927,30 @@ fn percent_encode_segment(value: &str) -> String {
 }
 
 fn safe_join(root: &Path, relative: &Path) -> Result<PathBuf> {
-    if relative.is_absolute() { bail!("absolute compatibility path is not allowed: {}", relative.display()); }
+    if relative.is_absolute() {
+        bail!(
+            "absolute compatibility path is not allowed: {}",
+            relative.display()
+        );
+    }
     for component in relative.components() {
-        if matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)) {
-            bail!("compatibility path escapes workspace: {}", relative.display());
+        if matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        ) {
+            bail!(
+                "compatibility path escapes workspace: {}",
+                relative.display()
+            );
         }
     }
     Ok(root.join(relative))
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
@@ -694,13 +962,19 @@ fn make_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> { Ok(()) }
+fn make_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
 
 fn report<F>(progress: &mut F, percent: i32, stage: &str, detail: &str)
 where
     F: FnMut(CompatProgress),
 {
-    progress(CompatProgress { percent, stage: stage.to_string(), detail: detail.to_string() });
+    progress(CompatProgress {
+        percent,
+        stage: stage.to_string(),
+        detail: detail.to_string(),
+    });
 }
 
 #[cfg(test)]
@@ -711,7 +985,13 @@ mod tests {
     fn embedded_manifest_and_profiles_parse() {
         let manifest = manifest().expect("manifest");
         assert_eq!(manifest.base.version, "1.21.10");
-        assert!(manifest.base.compatible.iter().any(|value| value == "1.21.9"));
+        assert!(
+            manifest
+                .base
+                .compatible
+                .iter()
+                .any(|value| value == "1.21.9")
+        );
         assert!(is_supported("1.19.4"));
         assert!(is_supported("1.20.4"));
         assert!(is_supported("1.21.11"));
@@ -762,7 +1042,11 @@ mod tests {
         ];
         for (version, expected) in cases {
             let normalized = normalize_version(version).unwrap();
-            assert_eq!(profile_for(&manifest, &normalized).unwrap().id, expected, "{version}");
+            assert_eq!(
+                profile_for(&manifest, &normalized).unwrap().id,
+                expected,
+                "{version}"
+            );
         }
         assert!(is_bundled_compatible("1.21.9").unwrap());
         assert!(is_bundled_compatible("1.21.10").unwrap());
@@ -785,7 +1069,11 @@ mod tests {
             assert_eq!(profile.fabric_api, expected, "{version}");
         }
         for version in ["1.20", "1.20.2", "1.20.3", "1.20.5", "1.20.6"] {
-            assert_eq!(profile_for(&manifest, version).unwrap().fabric_api, "dynamic", "{version}");
+            assert_eq!(
+                profile_for(&manifest, version).unwrap().fabric_api,
+                "dynamic",
+                "{version}"
+            );
         }
     }
 
@@ -815,7 +1103,15 @@ mod tests {
     #[test]
     fn raw_github_fallback_parses_repository_coordinates() {
         let parsed = parse_raw_github_url("https://raw.githubusercontent.com/Kate-alt-69/Minesport/main/minesport-bridge-fabric/file.java").unwrap();
-        assert_eq!(parsed, ("Kate-alt-69", "Minesport", "main", "minesport-bridge-fabric/file.java"));
+        assert_eq!(
+            parsed,
+            (
+                "Kate-alt-69",
+                "Minesport",
+                "main",
+                "minesport-bridge-fabric/file.java"
+            )
+        );
         assert_eq!(percent_encode_segment("a b"), "a%20b");
     }
 

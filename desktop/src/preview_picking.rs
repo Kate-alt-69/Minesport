@@ -101,8 +101,14 @@ mod tests {
     #[test]
     fn raycast_miss_and_invalid_direction_are_safe() {
         let occupied = HashSet::from([[0, 0, 0]]);
-        assert_eq!(raycast_occupied(&occupied, [5.5, 5.5, 5.5], [1.0, 0.0, 0.0], 3.0), None);
-        assert_eq!(raycast_occupied(&occupied, [0.5, 0.5, 0.5], [0.0, 0.0, 0.0], 3.0), None);
+        assert_eq!(
+            raycast_occupied(&occupied, [5.5, 5.5, 5.5], [1.0, 0.0, 0.0], 3.0),
+            None
+        );
+        assert_eq!(
+            raycast_occupied(&occupied, [0.5, 0.5, 0.5], [0.0, 0.0, 0.0], 3.0),
+            None
+        );
     }
 
     #[test]

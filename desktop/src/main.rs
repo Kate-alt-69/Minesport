@@ -59,11 +59,9 @@ const _: fn(&preview::PreviewPickMap, f32) -> anyhow::Result<preview::RenderedPr
 const _: fn(&preview::PreviewPickMap) -> f32 = preview::PreviewPickMap::flight_speed;
 const _: fn([f32; 3], i32) -> Option<viewer_selection::BoxSelection> =
     viewer_selection::resize_point_b;
-const _: fn(f32, f32, viewer_camera::FlightInput, f32) -> [f32; 3] =
-    viewer_camera::movement_delta;
+const _: fn(f32, f32, viewer_camera::FlightInput, f32) -> [f32; 3] = viewer_camera::movement_delta;
 const _: fn(f32, f32) -> f32 = viewer_camera::adjusted_speed;
-const _: fn(u32, u32, &[u8]) -> anyhow::Result<std::path::PathBuf> =
-    viewer_screenshot::save_rgba;
+const _: fn(u32, u32, &[u8]) -> anyhow::Result<std::path::PathBuf> = viewer_screenshot::save_rgba;
 
 // Loader-family runtime wiring is landing incrementally in the Slint app.
 // Keep every embedded loader materializer type-checked in normal builds until
@@ -135,8 +133,8 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let desktop_operation = diagnostics::Logger::new("DESKTOP")
-        .operation("DesktopApplicationRunLifecycle");
+    let desktop_operation =
+        diagnostics::Logger::new("DESKTOP").operation("DesktopApplicationRunLifecycle");
     let result = app::run();
     match &result {
         Ok(()) => desktop_operation.success("Minesport desktop exited cleanly", &[]),
@@ -159,7 +157,14 @@ fn install_panic_hook() {
             .unwrap_or_else(|| "non-string panic payload".to_string());
         let location = panic_info
             .location()
-            .map(|location| format!("{}:{}:{}", location.file(), location.line(), location.column()))
+            .map(|location| {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            })
             .unwrap_or_else(|| "unknown".to_string());
         let thread_name = std::thread::current()
             .name()

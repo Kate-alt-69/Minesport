@@ -1,8 +1,14 @@
-use crate::{diagnostics, runtime_worker::{self, CacheResult, Progress}};
+use crate::{
+    diagnostics,
+    runtime_worker::{self, CacheResult, Progress},
+};
 use anyhow::{Result, anyhow};
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -34,7 +40,13 @@ pub struct RuntimeCacheManager {
 }
 
 impl RuntimeCacheManager {
-    pub fn start<F>(&self, version: String, mods_path: PathBuf, force: bool, listener: F) -> Result<bool>
+    pub fn start<F>(
+        &self,
+        version: String,
+        mods_path: PathBuf,
+        force: bool,
+        listener: F,
+    ) -> Result<bool>
     where
         F: Fn(RuntimeCacheEvent) + Send + 'static,
     {
@@ -54,7 +66,10 @@ impl RuntimeCacheManager {
     {
         let loader = normalize_loader(&loader);
         let logger = diagnostics::Logger::new("RUNTIME").child("REGISTRY");
-        let mut state = self.state.lock().map_err(|_| anyhow!("runtime cache state is poisoned"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("runtime cache state is poisoned"))?;
         if state.running {
             if state.version != version
                 || !state.loader.eq_ignore_ascii_case(&loader)
@@ -72,12 +87,19 @@ impl RuntimeCacheManager {
                         ("running_mods", state.mods_path.display().to_string()),
                     ],
                 );
-                return Err(anyhow!("runtime cache is already running for another instance"));
+                return Err(anyhow!(
+                    "runtime cache is already running for another instance"
+                ));
             }
             let (operation_id, trace_id) = state
                 .operation
                 .as_ref()
-                .map(|operation| (operation.operation_id().to_string(), operation.trace_id().to_string()))
+                .map(|operation| {
+                    (
+                        operation.operation_id().to_string(),
+                        operation.trace_id().to_string(),
+                    )
+                })
                 .unwrap_or_default();
             logger.info(
                 "RuntimeRegistryListenerJoinedExistingJob",
@@ -183,7 +205,10 @@ impl RuntimeCacheManager {
     }
 
     pub fn is_running(&self) -> bool {
-        self.state.lock().map(|state| state.running).unwrap_or(false)
+        self.state
+            .lock()
+            .map(|state| state.running)
+            .unwrap_or(false)
     }
 
     pub fn is_running_for(&self, version: &str, mods_path: &Path) -> bool {
@@ -192,12 +217,15 @@ impl RuntimeCacheManager {
 
     pub fn is_running_for_loader(&self, version: &str, loader: &str, mods_path: &Path) -> bool {
         let loader = normalize_loader(loader);
-        self.state.lock().map(|state| {
-            state.running
-                && state.version == version
-                && state.loader.eq_ignore_ascii_case(&loader)
-                && same_path(&state.mods_path, mods_path)
-        }).unwrap_or(false)
+        self.state
+            .lock()
+            .map(|state| {
+                state.running
+                    && state.version == version
+                    && state.loader.eq_ignore_ascii_case(&loader)
+                    && same_path(&state.mods_path, mods_path)
+            })
+            .unwrap_or(false)
     }
 
     /// Return the completed registry remembered for this instance. The first
@@ -209,7 +237,12 @@ impl RuntimeCacheManager {
         self.ready_path_for_loader(version, "fabric", mods_path)
     }
 
-    pub fn ready_path_for_loader(&self, version: &str, loader: &str, mods_path: &Path) -> Option<PathBuf> {
+    pub fn ready_path_for_loader(
+        &self,
+        version: &str,
+        loader: &str,
+        mods_path: &Path,
+    ) -> Option<PathBuf> {
         let loader = normalize_loader(loader);
         let state = self.state.lock().ok()?;
         if state.running
@@ -226,7 +259,10 @@ impl RuntimeCacheManager {
 
     pub fn fingerprint(&self, version: &str, mods_path: &Path) -> Option<String> {
         let state = self.state.lock().ok()?;
-        if state.version != version || !same_path(&state.mods_path, mods_path) || state.fingerprint.is_empty() {
+        if state.version != version
+            || !same_path(&state.mods_path, mods_path)
+            || state.fingerprint.is_empty()
+        {
             return None;
         }
         Some(state.fingerprint.clone())
@@ -298,16 +334,14 @@ impl RuntimeCacheManager {
                     "runtime registry job cancelled",
                     &[("error", error.clone())],
                 ),
-                Err(error) => operation.failure(
-                    "runtime registry job failed",
-                    &[("error", error.clone())],
-                ),
+                Err(error) => {
+                    operation.failure("runtime registry job failed", &[("error", error.clone())])
+                }
             }
         }
 
-        let event = RuntimeCacheEvent::Complete(
-            result.map_err(|error| first_line(&error).to_string())
-        );
+        let event =
+            RuntimeCacheEvent::Complete(result.map_err(|error| first_line(&error).to_string()));
         notify_listeners(&listeners, &event);
     }
 }
@@ -337,7 +371,8 @@ fn first_line(value: &str) -> &str {
 
 fn same_path(a: &Path, b: &Path) -> bool {
     if cfg!(windows) {
-        a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
     } else {
         a == b
     }
@@ -380,7 +415,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("minesport-runtime-ready-{}-{stamp}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "minesport-runtime-ready-{}-{stamp}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let registry = root.join("registry.data");
         std::fs::write(&registry, b"ready").unwrap();
@@ -393,8 +431,15 @@ mod tests {
             state.fingerprint = "exact-fingerprint".into();
             state.ready_path = registry.clone();
         }
-        assert_eq!(manager.ready_path_for_loader("1.21.10", "Forge", Path::new("mods")), Some(registry));
-        assert!(manager.ready_path_for_loader("1.21.10", "fabric", Path::new("mods")).is_none());
+        assert_eq!(
+            manager.ready_path_for_loader("1.21.10", "Forge", Path::new("mods")),
+            Some(registry)
+        );
+        assert!(
+            manager
+                .ready_path_for_loader("1.21.10", "fabric", Path::new("mods"))
+                .is_none()
+        );
         assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -416,7 +461,10 @@ mod tests {
 
     #[test]
     fn listener_error_is_single_line_but_operation_error_can_stay_detailed() {
-        assert_eq!(first_line("download failed\nstack\ntrace"), "download failed");
+        assert_eq!(
+            first_line("download failed\nstack\ntrace"),
+            "download failed"
+        );
         assert_eq!(first_line("cancelled"), "cancelled");
     }
 

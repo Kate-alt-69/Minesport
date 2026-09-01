@@ -3,8 +3,8 @@ mod legacy {
 }
 
 pub use legacy::{
-    CaptureNotice, DEFAULT_ADDRESS, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint,
-    runtime_registry_root, snapshot_exists, snapshot_path,
+    CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint, snapshot_exists,
+    snapshot_path,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -110,10 +110,7 @@ impl StreamWriter {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let temporary_path = folder.join(format!(
-            ".registry-{}-{nonce}.tmp",
-            std::process::id()
-        ));
+        let temporary_path = folder.join(format!(".registry-{}-{nonce}.tmp", std::process::id()));
         let file = File::create(&temporary_path)
             .with_context(|| format!("create {}", temporary_path.display()))?;
         let mut writer = BufWriter::with_capacity(256 * 1024, file);
@@ -191,11 +188,7 @@ impl StreamWriter {
         if let Some(folder) = self.final_path.parent() {
             let _ = fs::remove_file(folder.join("registry.json"));
         }
-        prune_sibling_fingerprints(
-            &self.cache_root,
-            &self.minecraft_version,
-            &self.fingerprint,
-        )?;
+        prune_sibling_fingerprints(&self.cache_root, &self.minecraft_version, &self.fingerprint)?;
         Ok(self.final_path.clone())
     }
 }
@@ -310,7 +303,10 @@ where
             break;
         }
         if line.len() > MAX_MESSAGE_BYTES {
-            bail!("runtime registry packet exceeded {} bytes", MAX_MESSAGE_BYTES);
+            bail!(
+                "runtime registry packet exceeded {} bytes",
+                MAX_MESSAGE_BYTES
+            );
         }
         while matches!(line.last(), Some(b'\n' | b'\r')) {
             line.pop();
@@ -542,7 +538,11 @@ fn write_header(
     Ok(())
 }
 
-fn write_block(writer: &mut impl Write, block_id: &str, block: &legacy::RuntimeBlock) -> Result<()> {
+fn write_block(
+    writer: &mut impl Write,
+    block_id: &str,
+    block: &legacy::RuntimeBlock,
+) -> Result<()> {
     write_string(writer, block_id)?;
     write_string(writer, &block.vanilla_mapping)?;
     write_string(writer, &block.loader_type)?;
@@ -597,7 +597,10 @@ fn write_count(writer: &mut impl Write, count: usize, maximum: usize, label: &st
 fn write_string(writer: &mut impl Write, value: &str) -> Result<()> {
     let bytes = value.as_bytes();
     if bytes.len() > MAX_STRING_BYTES {
-        bail!("runtime registry string is too large: {} bytes", bytes.len());
+        bail!(
+            "runtime registry string is too large: {} bytes",
+            bytes.len()
+        );
     }
     write_i32(writer, bytes.len() as i32)?;
     writer.write_all(bytes).context("write registry string")?;
@@ -626,8 +629,8 @@ fn prune_sibling_fingerprints(cache_root: &Path, version: &str, keep: &str) -> R
     }
 
     let mut siblings = Vec::new();
-    for entry in fs::read_dir(version_root)
-        .with_context(|| format!("read {}", version_root.display()))?
+    for entry in
+        fs::read_dir(version_root).with_context(|| format!("read {}", version_root.display()))?
     {
         let entry = entry?;
         if !entry.file_type()?.is_dir() || entry.path() == keep_dir {
@@ -689,15 +692,8 @@ mod tests {
         ));
         let final_path = snapshot_path(&cache, "1.21.10", "drop-test");
         {
-            let mut writer = StreamWriter::begin(
-                &cache,
-                "1.21.10",
-                "0.18.5",
-                &[],
-                "drop-test",
-                2,
-            )
-            .unwrap();
+            let mut writer =
+                StreamWriter::begin(&cache, "1.21.10", "0.18.5", &[], "drop-test", 2).unwrap();
             writer
                 .write_block("minecraft:stone", &legacy::RuntimeBlock::default())
                 .unwrap();

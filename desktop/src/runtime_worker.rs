@@ -223,10 +223,7 @@ where
             |elapsed| {
                 progress(Progress {
                     percent: 54,
-                    message: format!(
-                        "Preparing Minecraft launch… · {}s",
-                        elapsed.as_secs()
-                    ),
+                    message: format!("Preparing Minecraft launch… · {}s", elapsed.as_secs()),
                 });
             },
         )?)
@@ -259,7 +256,9 @@ where
                         .rsplit(':')
                         .next()
                         .and_then(|value| value.parse::<u16>().ok())
-                        .ok_or_else(|| anyhow!("invalid runtime registry listener address {address}"));
+                        .ok_or_else(|| {
+                            anyhow!("invalid runtime registry listener address {address}")
+                        });
                     let _ = listen_tx.send(port);
                 }
                 registry::CaptureNotice::Progress {
@@ -425,11 +424,7 @@ where
                 format!("runtime capture stalled after {last_captured_blocks} blocks")
             };
             return Err(runtime_worker_failure(
-                &workspace,
-                &version,
-                &log_path,
-                reason,
-                80,
+                &workspace, &version, &log_path, reason, 80,
             ));
         }
         if now >= deadline {

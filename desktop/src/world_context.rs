@@ -48,7 +48,13 @@ pub fn all_worlds() -> WorldDiscovery {
     let catalog = launcher::discover_catalog();
     let world_count = catalog
         .iter()
-        .map(|entry| entry.instances.iter().map(|instance| instance.worlds.len()).sum::<usize>())
+        .map(|entry| {
+            entry
+                .instances
+                .iter()
+                .map(|instance| instance.worlds.len())
+                .sum::<usize>()
+        })
         .sum();
     WorldDiscovery {
         catalog,

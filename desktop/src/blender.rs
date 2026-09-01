@@ -7,8 +7,7 @@ use std::{
 
 pub const TRANSLATOR_VERSION: &str = "0.1.8";
 
-static ADDON_DIR: Dir<'_> =
-    include_dir!("$CARGO_MANIFEST_DIR/assets/blender/minesport_translator");
+static ADDON_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/blender/minesport_translator");
 
 #[derive(Debug, Clone)]
 pub struct InstallReport {
@@ -47,8 +46,7 @@ pub fn install_detected_profiles() -> Result<InstallReport> {
         let addons = target.profile_dir.join("scripts").join("addons");
         let destination = addons.join("minesport_translator");
         let temporary = addons.join(".minesport_translator.tmp");
-        fs::create_dir_all(&addons)
-            .with_context(|| format!("create {}", addons.display()))?;
+        fs::create_dir_all(&addons).with_context(|| format!("create {}", addons.display()))?;
         if temporary.exists() {
             fs::remove_dir_all(&temporary)
                 .with_context(|| format!("reset {}", temporary.display()))?;
@@ -59,10 +57,7 @@ pub fn install_detected_profiles() -> Result<InstallReport> {
 
         if destination.exists() {
             fs::remove_dir_all(&destination).with_context(|| {
-                format!(
-                    "replace old Minesport add-on at {}",
-                    destination.display()
-                )
+                format!("replace old Minesport add-on at {}", destination.display())
             })?;
         }
         fs::rename(&temporary, &destination).with_context(|| {
@@ -328,24 +323,30 @@ mod tests {
     #[test]
     fn installation_status_matches_fyne_completion_rules() {
         assert!(!InstallationStatus::default().complete());
-        assert!(InstallationStatus {
-            detected: 2,
-            installed: 2,
-            up_to_date: 2,
-        }
-        .complete());
-        assert!(!InstallationStatus {
-            detected: 2,
-            installed: 1,
-            up_to_date: 1,
-        }
-        .complete());
-        assert!(!InstallationStatus {
-            detected: 2,
-            installed: 2,
-            up_to_date: 1,
-        }
-        .complete());
+        assert!(
+            InstallationStatus {
+                detected: 2,
+                installed: 2,
+                up_to_date: 2,
+            }
+            .complete()
+        );
+        assert!(
+            !InstallationStatus {
+                detected: 2,
+                installed: 1,
+                up_to_date: 1,
+            }
+            .complete()
+        );
+        assert!(
+            !InstallationStatus {
+                detected: 2,
+                installed: 2,
+                up_to_date: 1,
+            }
+            .complete()
+        );
     }
 
     #[test]

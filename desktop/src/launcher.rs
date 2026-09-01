@@ -220,7 +220,9 @@ fn env_path(name: &str) -> Option<PathBuf> {
 }
 
 fn push_candidate(paths: &mut Vec<PathBuf>, base: Option<&Path>, segments: &[&str]) {
-    let Some(base) = base else { return; };
+    let Some(base) = base else {
+        return;
+    };
     let mut path = base.to_path_buf();
     for segment in segments {
         path.push(segment);
@@ -279,7 +281,9 @@ fn discover_multi_instances(launcher: &Launcher) -> Vec<Instance> {
     let mut instances = Vec::new();
 
     for entry in entries.flatten() {
-        let Ok(kind) = entry.file_type() else { continue; };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         if !kind.is_dir() || entry.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
@@ -488,12 +492,7 @@ pub fn detect_loader(minecraft_dir: &Path) -> ModLoader {
     };
     let names: Vec<String> = entries
         .flatten()
-        .map(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .to_ascii_lowercase()
-        })
+        .map(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase())
         .collect();
     for name in &names {
         if name.contains("fabric-loader") || name.contains("fabric_loader") {
@@ -611,10 +610,7 @@ mod tests {
         let minecraft = root.join("minecraft");
         fs::create_dir_all(&minecraft).unwrap();
         fs::create_dir_all(root.join(".minecraft")).unwrap();
-        assert_eq!(
-            multi_game_root(&root).as_deref(),
-            Some(minecraft.as_path())
-        );
+        assert_eq!(multi_game_root(&root).as_deref(), Some(minecraft.as_path()));
         let _ = fs::remove_dir_all(root);
     }
 }

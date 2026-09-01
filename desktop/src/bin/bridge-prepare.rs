@@ -23,8 +23,7 @@ mod toolchain;
 use anyhow::{Context, Result, anyhow, bail};
 use bridge_family::BridgeFamily;
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -38,7 +37,11 @@ fn main() -> Result<()> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-version" | "--version" => version = args.next(),
-            "-loader" | "--loader" => loader = args.next().ok_or_else(|| anyhow!("--loader requires a value"))?,
+            "-loader" | "--loader" => {
+                loader = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--loader requires a value"))?
+            }
             "-output" | "--output" => output = args.next().map(PathBuf::from),
             "-source-only" | "--source-only" => source_only = true,
             "-h" | "--help" => {
@@ -69,7 +72,11 @@ fn main() -> Result<()> {
         .as_millis();
     let workspace = runtime::cache_root()
         .join("bridge-build")
-        .join(if source_only { "prepared-sources" } else { "ci-recipes" })
+        .join(if source_only {
+            "prepared-sources"
+        } else {
+            "ci-recipes"
+        })
         .join(format!(
             "{}-{}-{}-{stamp}",
             family.label().to_ascii_lowercase(),

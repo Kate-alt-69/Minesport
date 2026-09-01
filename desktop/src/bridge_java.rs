@@ -8,12 +8,21 @@ pub fn tooling_java(target_java: u32, loom_version: Option<&str>) -> u32 {
         return target_java;
     }
 
-    let Some(loom_version) = loom_version.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(loom_version) = loom_version
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return target_java;
     };
     let mut parts = loom_version.split('.');
-    let major = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
-    let minor = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+    let major = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    let minor = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
 
     if major > 1 || (major == 1 && minor >= 17) {
         21

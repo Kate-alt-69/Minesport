@@ -1,8 +1,7 @@
 use crate::runtime;
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -44,9 +43,12 @@ pub fn compile_bridge(workspace: &Path, java_home: &Path, clean: bool) -> Result
     sanitize_java_environment(&mut command, java_home);
     command.env("GRADLE_USER_HOME", runtime::cache_root().join("gradle"));
 
-    let status = command
-        .status()
-        .with_context(|| format!("launch Gradle compatibility Export Worker build in {}", workspace.display()))?;
+    let status = command.status().with_context(|| {
+        format!(
+            "launch Gradle compatibility Export Worker build in {}",
+            workspace.display()
+        )
+    })?;
     if !status.success() {
         bail!("Gradle compatibility Export Worker build failed with {status}");
     }
@@ -77,9 +79,10 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
 
 fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
     let libs = workspace.join("build").join("libs");
-    let expected_name = read_gradle_property(&workspace.join("gradle.properties"), "archives_base_name")
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("{}.jar", value.trim()));
+    let expected_name =
+        read_gradle_property(&workspace.join("gradle.properties"), "archives_base_name")
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!("{}.jar", value.trim()));
 
     let mut candidates = Vec::new();
     for entry in fs::read_dir(&libs)
@@ -105,7 +108,10 @@ fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
         {
             continue;
         }
-        if expected_name.as_ref().is_some_and(|expected| name == *expected) {
+        if expected_name
+            .as_ref()
+            .is_some_and(|expected| name == *expected)
+        {
             return Ok(path);
         }
         candidates.push(path);
@@ -135,7 +141,12 @@ fn find_built_bridge(workspace: &Path) -> Result<PathBuf> {
         _ => {
             let names = candidates
                 .iter()
-                .map(|path| path.file_name().unwrap_or_default().to_string_lossy().to_string())
+                .map(|path| {
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             if let Some(expected) = expected_name {
@@ -171,7 +182,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_workspace(label: &str) -> PathBuf {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         env::temp_dir().join(format!(
             "minesport-bridge-build-{label}-{}-{stamp}",
             std::process::id()
@@ -180,9 +194,19 @@ mod tests {
 
     #[test]
     fn gradle_property_parser_reads_exact_key() {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = env::temp_dir().join(format!("minesport-gradle-props-{}-{stamp}", std::process::id()));
-        fs::write(&path, "foo=bar\narchives_base_name=minesport_export_worker-fabric-1.20.1\n").unwrap();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "minesport-gradle-props-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            "foo=bar\narchives_base_name=minesport_export_worker-fabric-1.20.1\n",
+        )
+        .unwrap();
         assert_eq!(
             read_gradle_property(&path, "archives_base_name").as_deref(),
             Some("minesport_export_worker-fabric-1.20.1")

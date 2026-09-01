@@ -185,7 +185,9 @@ where
 
             let weak = window.as_weak();
             window.on_copy_all(move || {
-                let Some(window) = weak.upgrade() else { return; };
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
                 if let Err(error) = copy_to_clipboard(&window.get_diagnostics().to_string()) {
                     diagnostics::append(&format!("Could not copy debug console text: {error}"));
                 }
@@ -245,8 +247,13 @@ fn sync_debug_values(window: &DebugConsoleWindow, main: &MainWindow) {
     window.set_log_path(diagnostics::log_path().display().to_string().into());
 }
 
-pub fn show_runtime_cache<C>(_main: &MainWindow, version: &str, stage: &str, progress: f32, on_cancel: C)
-where
+pub fn show_runtime_cache<C>(
+    _main: &MainWindow,
+    version: &str,
+    stage: &str,
+    progress: f32,
+    on_cancel: C,
+) where
     C: Fn() + 'static,
 {
     RUNTIME_WINDOW.with(|slot| {
@@ -282,7 +289,9 @@ where
             // Closing the progress window only hides the progress UI. The cache
             // worker keeps running in the background; the explicit Cancel button
             // is the only UI action that cancels runtime preparation.
-            window.window().on_close_requested(move || CloseRequestResponse::HideWindow);
+            window
+                .window()
+                .on_close_requested(move || CloseRequestResponse::HideWindow);
             *slot = Some(window);
         }
 
@@ -329,7 +338,9 @@ fn copy_to_clipboard(text: &str) -> io::Result<()> {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let mut command = Command::new("clip.exe");
-        command.stdin(Stdio::piped()).creation_flags(CREATE_NO_WINDOW);
+        command
+            .stdin(Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW);
         let mut child = command.spawn()?;
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(text.as_bytes())?;

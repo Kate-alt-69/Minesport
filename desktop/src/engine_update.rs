@@ -13,8 +13,7 @@ use std::{
 };
 
 const RELEASE_API: &str = "https://api.github.com/repos/Kate-alt-69/Minesport/releases/latest";
-const RELEASE_DOWNLOAD_PREFIX: &str =
-    "https://github.com/Kate-alt-69/Minesport/releases/download/";
+const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/Kate-alt-69/Minesport/releases/download/";
 const USER_AGENT: &str = "Minesport/0.2.1 engine-updater";
 const ENGINE_MANIFEST_SCHEMA: u32 = 1;
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -74,7 +73,8 @@ struct StagedEngineUpdate {
 /// GUI session. This runs before `app::run()`, so no minesport-engine process is
 /// alive and Windows can safely replace the sidecar executable.
 pub fn apply_staged_update() -> Result<()> {
-    let executable = env::current_exe().context("resolve current Minesport executable for staged engine update")?;
+    let executable = env::current_exe()
+        .context("resolve current Minesport executable for staged engine update")?;
     if !is_installed_layout(&executable) {
         return Ok(());
     }
@@ -208,7 +208,8 @@ pub fn spawn_background_check() {
 }
 
 fn check_and_stage_update_if_due() -> Result<()> {
-    let executable = env::current_exe().context("resolve current Minesport executable for engine update")?;
+    let executable =
+        env::current_exe().context("resolve current Minesport executable for engine update")?;
     let installed = installed_engine_state(&executable);
     if !is_installed_layout(&executable) {
         if !matches!(installed, LocalEngine::Valid(_)) {
@@ -282,10 +283,15 @@ fn check_and_stage_update_if_due() -> Result<()> {
         .assets
         .iter()
         .find(|asset| asset.name.eq_ignore_ascii_case("minesport-engine.json"))
-        .ok_or_else(|| anyhow!("latest release {} has no minesport-engine.json asset", release.tag_name))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "latest release {} has no minesport-engine.json asset",
+                release.tag_name
+            )
+        })?;
     let remote_bytes = download_small_verified_asset(&agent, manifest_asset, MAX_ENGINE_MANIFEST)?;
-    let remote: EngineManifest = serde_json::from_slice(&remote_bytes)
-        .context("parse release minesport-engine.json")?;
+    let remote: EngineManifest =
+        serde_json::from_slice(&remote_bytes).context("parse release minesport-engine.json")?;
     validate_manifest_shape(&remote)?;
     if remote.protocol_version != ipc::ENGINE_PROTOCOL_VERSION {
         bail!(
@@ -372,22 +378,30 @@ fn fetch_latest_release(agent: &ureq::Agent) -> Result<Option<Release>> {
         Err(error) => return Err(anyhow!(error)).context("query latest Minesport GitHub Release"),
     };
     let reader = response.into_reader().take(MAX_RELEASE_JSON + 1);
-    let release: Release = serde_json::from_reader(reader).context("decode latest Minesport GitHub Release")?;
+    let release: Release =
+        serde_json::from_reader(reader).context("decode latest Minesport GitHub Release")?;
     Ok(Some(release))
 }
 
 fn select_installer_asset(release: &Release) -> Result<&ReleaseAsset> {
     let version = release.tag_name.trim_start_matches(['v', 'V']);
     let exact = format!("Minesport-{version}-Setup-x64.exe");
-    if let Some(asset) = release.assets.iter().find(|asset| asset.name.eq_ignore_ascii_case(&exact)) {
+    if let Some(asset) = release
+        .assets
+        .iter()
+        .find(|asset| asset.name.eq_ignore_ascii_case(&exact))
+    {
         return Ok(asset);
     }
     let mut candidates = release.assets.iter().filter(|asset| {
         asset.name.starts_with("Minesport-") && asset.name.ends_with("-Setup-x64.exe")
     });
-    let first = candidates
-        .next()
-        .ok_or_else(|| anyhow!("latest release {} has no x64 NSIS setup asset", release.tag_name))?;
+    let first = candidates.next().ok_or_else(|| {
+        anyhow!(
+            "latest release {} has no x64 NSIS setup asset",
+            release.tag_name
+        )
+    })?;
     if candidates.next().is_some() {
         bail!(
             "latest release {} has multiple x64 setup assets and none matches expected name {exact}",
@@ -403,7 +417,11 @@ fn download_small_verified_asset(
     max_size: u64,
 ) -> Result<Vec<u8>> {
     if asset.size == 0 || asset.size > max_size {
-        bail!("release asset {} has unsafe size {}", asset.name, asset.size);
+        bail!(
+            "release asset {} has unsafe size {}",
+            asset.name,
+            asset.size
+        );
     }
     validate_release_asset_url(asset)?;
     let expected = release_asset_sha256(asset)?;
@@ -439,7 +457,11 @@ fn download_verified_asset(
     max_size: u64,
 ) -> Result<()> {
     if asset.size == 0 || asset.size > max_size {
-        bail!("release asset {} has unsafe size {}", asset.name, asset.size);
+        bail!(
+            "release asset {} has unsafe size {}",
+            asset.name,
+            asset.size
+        );
     }
     validate_release_asset_url(asset)?;
     let expected = release_asset_sha256(asset)?;
@@ -468,7 +490,10 @@ fn download_verified_asset(
         total = total.saturating_add(read as u64);
         if total > max_size || total > asset.size {
             let _ = fs::remove_file(&temporary);
-            bail!("release asset {} exceeded declared/allowed size", asset.name);
+            bail!(
+                "release asset {} exceeded declared/allowed size",
+                asset.name
+            );
         }
         file.write_all(&buffer[..read])
             .with_context(|| format!("write update download {}", temporary.display()))?;
@@ -503,7 +528,10 @@ fn download_verified_asset(
 }
 
 fn validate_release_asset_url(asset: &ReleaseAsset) -> Result<()> {
-    if !asset.browser_download_url.starts_with(RELEASE_DOWNLOAD_PREFIX) {
+    if !asset
+        .browser_download_url
+        .starts_with(RELEASE_DOWNLOAD_PREFIX)
+    {
         bail!(
             "refusing release asset {} from unexpected URL {}",
             asset.name,
@@ -520,7 +548,12 @@ fn release_asset_sha256(asset: &ReleaseAsset) -> Result<String> {
         .ok_or_else(|| anyhow!("release asset {} has no GitHub SHA-256 digest", asset.name))?;
     let value = digest
         .strip_prefix("sha256:")
-        .ok_or_else(|| anyhow!("release asset {} uses unsupported digest {digest}", asset.name))?
+        .ok_or_else(|| {
+            anyhow!(
+                "release asset {} uses unsupported digest {digest}",
+                asset.name
+            )
+        })?
         .to_ascii_lowercase();
     validate_sha256(&value)?;
     Ok(value)
@@ -544,8 +577,12 @@ fn validate_installed_engine(engine: &Path) -> Result<EngineManifest> {
     let manifest_path = engine.with_file_name("minesport-engine.json");
     let bytes = fs::read(&manifest_path)
         .with_context(|| format!("read installed engine manifest {}", manifest_path.display()))?;
-    let manifest: EngineManifest = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parse installed engine manifest {}", manifest_path.display()))?;
+    let manifest: EngineManifest = serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "parse installed engine manifest {}",
+            manifest_path.display()
+        )
+    })?;
     validate_manifest_shape(&manifest)?;
     if manifest.protocol_version != ipc::ENGINE_PROTOCOL_VERSION {
         bail!(
@@ -627,7 +664,10 @@ fn validate_staged_update(stage: &StagedEngineUpdate) -> Result<()> {
     }
     validate_sha256(&stage.installer_sha256.to_ascii_lowercase())?;
     if stage.installer_size == 0 || stage.installer_size > MAX_INSTALLER_SIZE {
-        bail!("staged engine installer has unsafe size {}", stage.installer_size);
+        bail!(
+            "staged engine installer has unsafe size {}",
+            stage.installer_size
+        );
     }
     let path = Path::new(&stage.installer_name);
     if path.file_name().and_then(|name| name.to_str()) != Some(stage.installer_name.as_str()) {
@@ -654,13 +694,17 @@ fn clear_staged_update(stage: &StagedEngineUpdate) {
 }
 
 fn discard_previous_engine(desktop_executable: &Path) {
-    let Some(root) = desktop_executable.parent() else { return; };
+    let Some(root) = desktop_executable.parent() else {
+        return;
+    };
     let _ = fs::remove_file(root.join("minesport-engine.exe.prev"));
     let _ = fs::remove_file(root.join("minesport-engine.json.prev"));
 }
 
 fn rollback_previous_engine(desktop_executable: &Path) {
-    let Some(root) = desktop_executable.parent() else { return; };
+    let Some(root) = desktop_executable.parent() else {
+        return;
+    };
     let engine = root.join("minesport-engine.exe");
     let manifest = root.join("minesport-engine.json");
     let previous_engine = root.join("minesport-engine.exe.prev");
@@ -701,7 +745,14 @@ fn authenticode_thumbprint(path: &Path) -> Result<String> {
     let script = "$s=Get-AuthenticodeSignature -LiteralPath $env:MINESPORT_VERIFY_FILE; if($s.Status -ne [System.Management.Automation.SignatureStatus]::Valid){exit 31}; if($null -eq $s.SignerCertificate){exit 32}; [Console]::Out.Write($s.SignerCertificate.Thumbprint)";
     let mut command = Command::new(powershell);
     command
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .env("MINESPORT_VERIFY_FILE", path)
         .env_remove("MINESPORT_ENGINE_UPDATE_CHECK");
     hide_console_window(&mut command);
@@ -729,7 +780,14 @@ fn run_engine_only_installer_elevated(installer: &Path) -> Result<i32> {
     let script = "$ErrorActionPreference='Stop'; $p=Start-Process -FilePath $env:MINESPORT_ENGINE_INSTALLER -ArgumentList @('--installonly-engine','--nogui') -Verb RunAs -Wait -PassThru; [Console]::Out.Write($p.ExitCode)";
     let mut command = Command::new(powershell);
     command
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .env("MINESPORT_ENGINE_INSTALLER", installer)
         .env_remove("MINESPORT_ENGINE_UPDATE_CHECK");
     hide_console_window(&mut command);
@@ -740,11 +798,15 @@ fn run_engine_only_installer_elevated(installer: &Path) -> Result<i32> {
         bail!(
             "could not launch elevated engine-only installer (PowerShell status {}{}); UAC may have been cancelled",
             output.status,
-            if stderr.is_empty() { String::new() } else { format!(": {stderr}") }
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
         );
     }
-    let text = String::from_utf8(output.stdout)
-        .context("decode engine-only installer exit code")?;
+    let text =
+        String::from_utf8(output.stdout).context("decode engine-only installer exit code")?;
     text.trim()
         .parse::<i32>()
         .with_context(|| format!("parse engine-only installer exit code from {text:?}"))
@@ -844,8 +906,14 @@ fn is_installed_layout(executable: &Path) -> bool {
 }
 
 fn path_starts_with_case_insensitive(path: &Path, parent: &Path) -> bool {
-    let path = path.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
-    let mut parent = parent.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    let path = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let mut parent = parent
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
     while parent.ends_with('\\') {
         parent.pop();
     }
@@ -911,9 +979,18 @@ mod tests {
 
     #[test]
     fn semantic_engine_versions_compare_numerically() {
-        assert_eq!(compare_versions("0.2.10", "0.2.9").unwrap(), Ordering::Greater);
-        assert_eq!(compare_versions("v1.0.0", "1.0.0").unwrap(), Ordering::Equal);
-        assert_eq!(compare_versions("0.3.0-beta.1", "0.2.99").unwrap(), Ordering::Greater);
+        assert_eq!(
+            compare_versions("0.2.10", "0.2.9").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("v1.0.0", "1.0.0").unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_versions("0.3.0-beta.1", "0.2.99").unwrap(),
+            Ordering::Greater
+        );
     }
 
     #[test]

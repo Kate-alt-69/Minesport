@@ -11,22 +11,39 @@ use std::{
 const VENDOR_DIR: &str = "kastrick's_software";
 const APP_DIR: &str = "minesport";
 const ENGINE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/minesport-engine.jar"));
-const FABRIC_EXPORT_WORKER_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-fabric.jar"));
-const FORGE_EXPORT_WORKER_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-forge.jar"));
-const NEOFORGE_EXPORT_WORKER_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-neoforge.jar"));
-const QUILT_EXPORT_WORKER_BYTES: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/minesport_export_worker-quilt.jar"));
+const ENGINE_VERSION_RAW: &str = include_str!("../../engine/VERSION");
+const FABRIC_EXPORT_WORKER_BYTES: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/minesport_export_worker-fabric.jar"
+));
+const FORGE_EXPORT_WORKER_BYTES: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/minesport_export_worker-forge.jar"
+));
+const NEOFORGE_EXPORT_WORKER_BYTES: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/minesport_export_worker-neoforge.jar"
+));
+const QUILT_EXPORT_WORKER_BYTES: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/minesport_export_worker-quilt.jar"
+));
 static GENERATED_CACHE_USE: RwLock<()> = RwLock::new(());
 
 pub fn materialize_engine() -> Result<PathBuf> {
-    materialize_runtime_asset(
-        "minesport-engine-0.2.1.jar",
-        ".minesport-engine-0.2.1.tmp",
-        ENGINE_BYTES,
-    )
+    let version = ENGINE_VERSION_RAW.trim();
+    if version.is_empty() {
+        bail!("engine/VERSION must not be empty");
+    }
+    if !version
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_'))
+    {
+        bail!("engine/VERSION contains unsafe cache-name characters");
+    }
+    let name = format!("minesport-engine-{version}.jar");
+    let temporary_name = format!(".minesport-engine-{version}.tmp");
+    materialize_runtime_asset(&name, &temporary_name, ENGINE_BYTES)
 }
 
 /// Backward-compatible name for callers that historically meant the Fabric
@@ -165,7 +182,9 @@ fn acquire_generated_cache_cleanup() -> Result<RwLockWriteGuard<'static, ()>> {
     match GENERATED_CACHE_USE.try_write() {
         Ok(guard) => Ok(guard),
         Err(TryLockError::WouldBlock) => {
-            bail!("Minesport generated cache is currently in use; stop runtime preparation before clearing it")
+            bail!(
+                "Minesport generated cache is currently in use; stop runtime preparation before clearing it"
+            )
         }
         Err(TryLockError::Poisoned(_)) => {
             bail!("Minesport generated-cache cleanup lock is poisoned")
@@ -183,16 +202,21 @@ pub fn remove_generated_cache() -> Result<()> {
 
     if cache.exists() {
         if !cache.is_dir() {
-            bail!("refusing to remove non-directory Minesport cache path {}", cache.display());
+            bail!(
+                "refusing to remove non-directory Minesport cache path {}",
+                cache.display()
+            );
         }
         fs::remove_dir_all(&cache).with_context(|| format!("remove {}", cache.display()))?;
     }
     if compiled.exists() {
         if !compiled.is_dir() {
-            bail!("refusing to remove non-directory Bridge cache path {}", compiled.display());
+            bail!(
+                "refusing to remove non-directory Bridge cache path {}",
+                compiled.display()
+            );
         }
-        fs::remove_dir_all(&compiled)
-            .with_context(|| format!("remove {}", compiled.display()))?;
+        fs::remove_dir_all(&compiled).with_context(|| format!("remove {}", compiled.display()))?;
     }
     fs::create_dir_all(&cache).with_context(|| format!("recreate {}", cache.display()))?;
     Ok(())
@@ -232,7 +256,10 @@ pub(crate) fn terminate_process_tree(child: &mut Child, timeout: Duration) -> Op
 /// Run a tiny probe command with captured output and a hard deadline. This is
 /// used for Java/Javac version detection where an unhealthy launcher/shim must
 /// never freeze Minesport startup or runtime preparation.
-pub(crate) fn output_with_timeout(command: &mut Command, timeout: Duration) -> std::io::Result<Option<Output>> {
+pub(crate) fn output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<Option<Output>> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -268,7 +295,9 @@ fn terminate_windows_process_tree(pid: u32, timeout: Duration) {
         .stderr(Stdio::null());
     hide_process_window(&mut command);
 
-    let Ok(mut killer) = command.spawn() else { return; };
+    let Ok(mut killer) = command.spawn() else {
+        return;
+    };
     let deadline = Instant::now() + timeout;
     loop {
         match killer.try_wait() {
@@ -322,21 +351,33 @@ fn clean_path(path: &Path) -> PathBuf {
 fn validate_cache_root(path: &Path) -> Result<()> {
     let clean = clean_path(path);
     if clean.as_os_str().is_empty() || path_depth(&clean) < 2 {
-        bail!("refusing to remove an overly broad Minesport cache path: {}", clean.display());
+        bail!(
+            "refusing to remove an overly broad Minesport cache path: {}",
+            clean.display()
+        );
     }
     if is_filesystem_root(&clean) {
-        bail!("refusing to remove filesystem root as Minesport cache: {}", clean.display());
+        bail!(
+            "refusing to remove filesystem root as Minesport cache: {}",
+            clean.display()
+        );
     }
 
     if let Some(home) = user_home().map(|path| clean_path(&path)) {
         if same_path(&clean, &home) || contains_path(&clean, &home) {
-            bail!("refusing to remove a path that contains the user home directory: {}", clean.display());
+            bail!(
+                "refusing to remove a path that contains the user home directory: {}",
+                clean.display()
+            );
         }
     }
 
     let durable = clean_path(&data_root());
     if same_path(&clean, &durable) || contains_path(&clean, &durable) {
-        bail!("refusing to remove a path that contains Minesport durable data: {}", clean.display());
+        bail!(
+            "refusing to remove a path that contains Minesport durable data: {}",
+            clean.display()
+        );
     }
     Ok(())
 }
@@ -350,7 +391,10 @@ fn validate_compiled_bridge_path(path: &Path) -> Result<()> {
         .and_then(|parent| parent.file_name())
         .and_then(|name| name.to_str());
     if parent != Some("bridge-data") {
-        bail!("refusing bridge cache outside bridge-data: {}", path.display());
+        bail!(
+            "refusing bridge cache outside bridge-data: {}",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -371,7 +415,8 @@ fn contains_path(parent: &Path, child: &Path) -> bool {
 
 fn same_path(left: &Path, right: &Path) -> bool {
     if cfg!(windows) {
-        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
     } else {
         left == right
     }
@@ -396,7 +441,9 @@ mod tests {
 
     #[test]
     fn dedicated_custom_cache_shape_is_allowed() {
-        let custom = env::temp_dir().join("custom-minesport-tests").join("generated");
+        let custom = env::temp_dir()
+            .join("custom-minesport-tests")
+            .join("generated");
         assert!(validate_cache_root(&custom).is_ok());
     }
 

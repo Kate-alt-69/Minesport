@@ -1,7 +1,16 @@
-use crate::{bridge_build, bridge_compat, bridge_family::{self, BridgeFamily}, bridge_java, launcher, runtime, toolchain};
+use crate::{
+    bridge_build, bridge_compat,
+    bridge_family::{self, BridgeFamily},
+    bridge_java, launcher, runtime, toolchain,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, env, fs, io::Read, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeSet,
+    env, fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 const VERSION: &str = "0.2.1";
 
@@ -13,7 +22,10 @@ pub fn handle() -> Result<bool> {
             println!("Export Worker ready: {}", jar.display());
             Ok(true)
         }
-        [flag, loader_flag, loader, version] if (flag == "--build-export-worker" || flag == "--build-bridge") && loader_flag == "--loader" => {
+        [flag, loader_flag, loader, version]
+            if (flag == "--build-export-worker" || flag == "--build-bridge")
+                && loader_flag == "--loader" =>
+        {
             let family = BridgeFamily::parse(loader)
                 .ok_or_else(|| anyhow!("unsupported Export Worker loader {loader:?}; expected fabric, forge, neoforge or quilt"))?;
             let jar = ensure_bridge(family, version)?;
@@ -21,13 +33,19 @@ pub fn handle() -> Result<bool> {
             Ok(true)
         }
         [flag, ..] if flag == "--build-export-worker" || flag == "--build-bridge" => {
-            bail!("usage: minesport --build-export-worker [--loader fabric|forge|neoforge|quilt] <minecraft-version>")
+            bail!(
+                "usage: minesport --build-export-worker [--loader fabric|forge|neoforge|quilt] <minecraft-version>"
+            )
         }
-        [flag] if flag == "--build-export-workers-detected" || flag == "--build-bridges-detected" => {
+        [flag]
+            if flag == "--build-export-workers-detected" || flag == "--build-bridges-detected" =>
+        {
             build_detected_bridges()?;
             Ok(true)
         }
-        [flag, ..] if flag == "--build-export-workers-detected" || flag == "--build-bridges-detected" => {
+        [flag, ..]
+            if flag == "--build-export-workers-detected" || flag == "--build-bridges-detected" =>
+        {
             bail!("usage: minesport --build-export-workers-detected")
         }
         [flag] if flag == "-h" || flag == "--help" => {
@@ -42,7 +60,10 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
     let version = bridge_compat::normalize_version(raw_version)
         .ok_or_else(|| anyhow!("could not determine Minecraft version from {raw_version:?}"))?;
     if !bridge_family::is_supported(family, &version) {
-        bail!("Minesport has no embedded {} compatibility recipe for Minecraft {version}", family.label());
+        bail!(
+            "Minesport has no embedded {} compatibility recipe for Minecraft {version}",
+            family.label()
+        );
     }
 
     if family == BridgeFamily::Fabric && bridge_compat::is_bundled_compatible(&version)? {
@@ -66,11 +87,17 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
             .ok()
             .is_some_and(|value| value.trim() == expected_fingerprint)
     {
-        println!("{} · Minecraft {version} · cached Export Worker reused", family.label());
+        println!(
+            "{} · Minecraft {version} · cached Export Worker reused",
+            family.label()
+        );
         return Ok(destination);
     }
     if destination.is_file() {
-        println!("{} · Minecraft {version} · cached Export Worker is stale; rebuilding", family.label());
+        println!(
+            "{} · Minecraft {version} · cached Export Worker is stale; rebuilding",
+            family.label()
+        );
     }
 
     if family == BridgeFamily::Fabric {
@@ -82,7 +109,10 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
             display_or(&manifest.base.source_root, "bridge")
         );
     } else {
-        println!("Compatibility source: embedded canonical {} 1.21.10 Bridge", family.label());
+        println!(
+            "Compatibility source: embedded canonical {} 1.21.10 Bridge",
+            family.label()
+        );
     }
 
     let workspace = runtime::cache_root()
@@ -110,7 +140,11 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
     let java_home = toolchain::ensure_jdk(build_java, |update| {
         print_progress(update.percent, "JDK", &update.message);
     })?;
-    println!("Building {} compatibility Export Worker with {}", family.label(), java_home.display());
+    println!(
+        "Building {} compatibility Export Worker with {}",
+        family.label(),
+        java_home.display()
+    );
     let built = bridge_build::compile_bridge(&workspace, &java_home, true)?;
 
     if let Some(parent) = destination.parent() {
@@ -124,14 +158,26 @@ fn ensure_bridge(family: BridgeFamily, raw_version: &str) -> Result<PathBuf> {
     let _ = fs::remove_file(&destination);
     fs::rename(&temporary, &destination)
         .with_context(|| format!("install compiled Bridge {}", destination.display()))?;
-    fs::write(&fingerprint_path, format!("{expected_fingerprint}\n"))
-        .with_context(|| format!("write Export Worker fingerprint {}", fingerprint_path.display()))?;
+    fs::write(&fingerprint_path, format!("{expected_fingerprint}\n")).with_context(|| {
+        format!(
+            "write Export Worker fingerprint {}",
+            fingerprint_path.display()
+        )
+    })?;
 
-    println!("[100%] {} Export Worker compiled · {}", family.label(), destination.display());
+    println!(
+        "[100%] {} Export Worker compiled · {}",
+        family.label(),
+        destination.display()
+    );
     Ok(destination)
 }
 
-fn build_java_for(family: BridgeFamily, target_java: u32, variables: &std::collections::HashMap<String, String>) -> u32 {
+fn build_java_for(
+    family: BridgeFamily,
+    target_java: u32,
+    variables: &std::collections::HashMap<String, String>,
+) -> u32 {
     if family == BridgeFamily::Fabric {
         return bridge_java::tooling_java(
             target_java,
@@ -166,7 +212,9 @@ fn build_detected_bridges() -> Result<()> {
     }
 
     if targets.is_empty() {
-        println!("No supported mod-loader Minecraft installations with a known version were detected.");
+        println!(
+            "No supported mod-loader Minecraft installations with a known version were detected."
+        );
         return Ok(());
     }
 
@@ -177,7 +225,10 @@ fn build_detected_bridges() -> Result<()> {
         };
         println!("\n{} · Minecraft {version}", family.label());
         if let Err(error) = ensure_bridge(family, &version) {
-            eprintln!("{} Export Worker preparation failed for {version}: {error:#}", family.label());
+            eprintln!(
+                "{} Export Worker preparation failed for {version}: {error:#}",
+                family.label()
+            );
             failures.push(format!("{} {version}: {error}", family.label()));
         }
     }
@@ -199,7 +250,11 @@ fn compiled_bridge_path(family: BridgeFamily, version: &str) -> PathBuf {
         .join("compiled")
         .join(family.label().to_ascii_lowercase())
         .join(safe_version(version))
-        .join(format!("minesport_export_worker-{}-{}.jar", family.label().to_ascii_lowercase(), safe_version(version)))
+        .join(format!(
+            "minesport_export_worker-{}-{}.jar",
+            family.label().to_ascii_lowercase(),
+            safe_version(version)
+        ))
 }
 
 fn compiled_bridge_fingerprint_path(jar: &Path) -> PathBuf {
@@ -207,9 +262,14 @@ fn compiled_bridge_fingerprint_path(jar: &Path) -> PathBuf {
 }
 
 fn compiled_bridge_fingerprint(family: BridgeFamily, version: &str) -> Result<String> {
-    let executable = env::current_exe().context("resolve current Minesport executable for Export Worker cache fingerprint")?;
-    let mut file = fs::File::open(&executable)
-        .with_context(|| format!("open {} for Export Worker cache fingerprint", executable.display()))?;
+    let executable = env::current_exe()
+        .context("resolve current Minesport executable for Export Worker cache fingerprint")?;
+    let mut file = fs::File::open(&executable).with_context(|| {
+        format!(
+            "open {} for Export Worker cache fingerprint",
+            executable.display()
+        )
+    })?;
     let mut hash = Sha256::new();
     hash.update(b"minesport-export-worker-cache-v2\n");
     hash.update(VERSION.as_bytes());
@@ -220,9 +280,15 @@ fn compiled_bridge_fingerprint(family: BridgeFamily, version: &str) -> Result<St
     hash.update(b"\n");
     let mut buffer = vec![0u8; 256 * 1024];
     loop {
-        let count = file.read(&mut buffer)
-            .with_context(|| format!("read {} for Export Worker cache fingerprint", executable.display()))?;
-        if count == 0 { break; }
+        let count = file.read(&mut buffer).with_context(|| {
+            format!(
+                "read {} for Export Worker cache fingerprint",
+                executable.display()
+            )
+        })?;
+        if count == 0 {
+            break;
+        }
         hash.update(&buffer[..count]);
     }
     Ok(format!("{:x}", hash.finalize()))

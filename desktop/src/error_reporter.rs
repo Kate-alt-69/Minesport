@@ -139,7 +139,9 @@ slint::slint! {
 /// the helper remains independent of the process it is supervising.
 pub fn handle_mode() -> Result<bool> {
     let mut args = env::args().skip(1);
-    let Some(first) = args.next() else { return Ok(false); };
+    let Some(first) = args.next() else {
+        return Ok(false);
+    };
     if first != REPORTER_ARG {
         return Ok(false);
     }
@@ -167,7 +169,8 @@ pub fn spawn_for_current_process() -> Result<()> {
 
         let logger = diagnostics::Logger::new("REPORTER");
         let operation = logger.operation("ErrorReporterSupervisorSpawn");
-        let executable = env::current_exe().context("resolve Minesport executable for crash reporter")?;
+        let executable =
+            env::current_exe().context("resolve Minesport executable for crash reporter")?;
         let pid = std::process::id();
         let mut command = Command::new(&executable);
         command
@@ -245,19 +248,40 @@ fn run_reporter(parent_pid: u32) -> Result<()> {
         }
     });
 
-    window.run().context("run Minesport crash reporter window")?;
+    window
+        .run()
+        .context("run Minesport crash reporter window")?;
     Ok(())
 }
 
 fn latest_operation_summary() -> Option<String> {
     let text = read_file_tail(diagnostics::operations_path(), OPERATION_TAIL_BYTES)?;
     for line in text.lines().rev().filter(|line| !line.trim().is_empty()) {
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
-        let Some(operation_id) = record.get("operation_id").and_then(serde_json::Value::as_str) else { continue; };
-        let trace = record.get("trace_id").and_then(serde_json::Value::as_str).unwrap_or("unknown");
-        let event = record.get("event").and_then(serde_json::Value::as_str).unwrap_or("unknown event");
-        let level = record.get("level").and_then(serde_json::Value::as_str).unwrap_or("?");
-        let message = record.get("message").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(operation_id) = record
+            .get("operation_id")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let trace = record
+            .get("trace_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let event = record
+            .get("event")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown event");
+        let level = record
+            .get("level")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?");
+        let message = record
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
         return Some(format!(
             "{level} · operation={operation_id} · trace={trace}\n{event}: {message}"
         ));
@@ -274,7 +298,11 @@ fn latest_human_log_tail() -> Option<String> {
         .map(str::to_string)
         .collect::<Vec<_>>();
     lines.reverse();
-    if lines.is_empty() { None } else { Some(lines.join("\n")) }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
 fn read_file_tail(path: std::path::PathBuf, maximum_bytes: u64) -> Option<String> {
@@ -287,7 +315,12 @@ fn read_file_tail(path: std::path::PathBuf, maximum_bytes: u64) -> Option<String
     file.read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes);
     if start > 0 {
-        Some(text.split_once('\n').map(|(_, tail)| tail).unwrap_or_default().to_string())
+        Some(
+            text.split_once('\n')
+                .map(|(_, tail)| tail)
+                .unwrap_or_default()
+                .to_string(),
+        )
     } else {
         Some(text.into_owned())
     }
@@ -383,7 +416,8 @@ fn wait_for_parent_exit(parent_pid: u32) -> Result<u32> {
     let wait_result = unsafe { wait_for_single_object(handle, INFINITE) };
     if wait_result != WAIT_OBJECT_0 {
         unsafe { close_handle(handle) };
-        return Err(std::io::Error::last_os_error()).context("wait for supervised Minesport process");
+        return Err(std::io::Error::last_os_error())
+            .context("wait for supervised Minesport process");
     }
 
     let mut exit_code = 0u32;

@@ -1,9 +1,11 @@
 use crate::{
     MainWindow, aux_windows, blender, bridge_compat,
-    bridge_family::{self, BridgeFamily}, diagnostics, heightmap_cache,
+    bridge_family::{self, BridgeFamily},
+    diagnostics, heightmap_cache,
     ipc::{Engine as JavaEngine, EngineEvent, Response},
-    preview, runtime, runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager}, selection, settings,
-    viewer_selection, world_context, world_picker,
+    preview, runtime,
+    runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager},
+    selection, settings, viewer_selection, world_context, world_picker,
 };
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -11,13 +13,18 @@ use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use settings::DesktopSettings;
-use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use slint::{
+    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+};
 use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, Mutex, mpsc::{Receiver, RecvTimeoutError}},
+    sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, RecvTimeoutError},
+    },
     thread,
     time::Duration,
 };
@@ -27,11 +34,21 @@ const BACKEND_RESTART_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, Copy)]
 enum PreviewCameraAction {
-    Orbit { dx: f32, dy: f32 },
-    Pan { dx: f32, dy: f32 },
+    Orbit {
+        dx: f32,
+        dy: f32,
+    },
+    Pan {
+        dx: f32,
+        dy: f32,
+    },
     Dolly(f32),
     Fit,
-    Highlight { min: [i32; 3], max: [i32; 3], count: usize },
+    Highlight {
+        min: [i32; 3],
+        max: [i32; 3],
+        count: usize,
+    },
     ClearHighlight,
 }
 
@@ -72,14 +89,54 @@ struct DocPage {
 }
 
 const DOC_PAGES: &[DocPage] = &[
-    DocPage { title: "Start Here", body: include_str!("../../doc/page/01.md"), github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/01.md", video: "" },
-    DocPage { title: "Minesport Main App", body: include_str!("../../doc/page/02.md"), github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/02.md", video: "" },
-    DocPage { title: "Blender Beginner Basics", body: include_str!("../../doc/page/10.md"), github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/10.md", video: "" },
-    DocPage { title: "Find the Minesport Panel", body: include_str!("../../doc/page/11.md"), github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/11.md", video: "" },
-    DocPage { title: "FLATTER for Blender Beginners", body: include_str!("../../doc/page/12.md"), github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/12.md", video: "" },
-    DocPage { title: "Minecraft Light Blocks in Blender", body: include_str!("../../doc/page/13.md"), github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/13.md", video: "" },
-    DocPage { title: "Troubleshooting", body: include_str!("../../doc/page/20.md"), github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/20.md", video: "" },
-    DocPage { title: "Runtime Model Cache", body: include_str!("../../doc/page/90.md"), github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/90.md", video: "" },
+    DocPage {
+        title: "Start Here",
+        body: include_str!("../../doc/page/01.md"),
+        github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/01.md",
+        video: "",
+    },
+    DocPage {
+        title: "Minesport Main App",
+        body: include_str!("../../doc/page/02.md"),
+        github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/02.md",
+        video: "",
+    },
+    DocPage {
+        title: "Blender Beginner Basics",
+        body: include_str!("../../doc/page/10.md"),
+        github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/10.md",
+        video: "",
+    },
+    DocPage {
+        title: "Find the Minesport Panel",
+        body: include_str!("../../doc/page/11.md"),
+        github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/11.md",
+        video: "",
+    },
+    DocPage {
+        title: "FLATTER for Blender Beginners",
+        body: include_str!("../../doc/page/12.md"),
+        github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/12.md",
+        video: "",
+    },
+    DocPage {
+        title: "Minecraft Light Blocks in Blender",
+        body: include_str!("../../doc/page/13.md"),
+        github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/13.md",
+        video: "",
+    },
+    DocPage {
+        title: "Troubleshooting",
+        body: include_str!("../../doc/page/20.md"),
+        github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/20.md",
+        video: "",
+    },
+    DocPage {
+        title: "Runtime Model Cache",
+        body: include_str!("../../doc/page/90.md"),
+        github: "https://github.com/Kate-alt-69/Minesport/blob/main/doc/page/90.md",
+        video: "",
+    },
 ];
 
 pub fn run() -> Result<()> {
@@ -114,13 +171,34 @@ pub fn run() -> Result<()> {
     wire_docs(&ui);
     wire_blender(&ui, state.clone());
 
-    append_diagnostic(&ui, "Backend boundary: Minesport.exe --engine-worker → embedded Java engine");
-    append_diagnostic(&ui, "Desktop: Rust + Slint · Fyne UI archived under /archive/go-fyne-ui");
-    append_diagnostic(&ui, "Runtime registry: Rust binary registry.data capture + isolated loader worker");
-    append_diagnostic(&ui, "Compatibility: embedded Rust patch recipes cover supported loader/version families");
-    append_diagnostic(&ui, "World context: launcher/instance discovery is authoritative when available; folder inference is fallback-only");
-    append_diagnostic(&ui, "3D selection: Rust voxel picking + point A / point B box workflow");
-    append_diagnostic(&ui, "3D camera: retained Rust scene supports MMB orbit, Shift+MMB pan, wheel dolly and F6 fit without IPC reruns");
+    append_diagnostic(
+        &ui,
+        "Backend boundary: Minesport.exe --engine-worker → embedded Java engine",
+    );
+    append_diagnostic(
+        &ui,
+        "Desktop: Rust + Slint · Fyne UI archived under /archive/go-fyne-ui",
+    );
+    append_diagnostic(
+        &ui,
+        "Runtime registry: Rust binary registry.data capture + isolated loader worker",
+    );
+    append_diagnostic(
+        &ui,
+        "Compatibility: embedded Rust patch recipes cover supported loader/version families",
+    );
+    append_diagnostic(
+        &ui,
+        "World context: launcher/instance discovery is authoritative when available; folder inference is fallback-only",
+    );
+    append_diagnostic(
+        &ui,
+        "3D selection: Rust voxel picking + point A / point B box workflow",
+    );
+    append_diagnostic(
+        &ui,
+        "3D camera: retained Rust scene supports MMB orbit, Shift+MMB pan, wheel dolly and F6 fit without IPC reruns",
+    );
 
     let ping_engine = engine.clone();
     let ping_weak = ui.as_weak();
@@ -137,11 +215,15 @@ pub fn run() -> Result<()> {
     if cache.is_running() {
         let _ = cache.cancel();
         if !cache.wait_for_idle(Duration::from_secs(15)) {
-            diagnostics::append("Runtime cache did not stop within the 15-second desktop shutdown window");
+            diagnostics::append(
+                "Runtime cache did not stop within the 15-second desktop shutdown window",
+            );
         }
     }
     if let Err(error) = settings::save(&collect_settings(&ui, &state)) {
-        diagnostics::append(&format!("Could not save Minesport desktop settings: {error:#}"));
+        diagnostics::append(&format!(
+            "Could not save Minesport desktop settings: {error:#}"
+        ));
         eprintln!("Could not save Minesport desktop settings: {error:#}");
     }
     engine.shutdown();
@@ -150,7 +232,9 @@ pub fn run() -> Result<()> {
 
 fn handle_cli() -> Result<bool> {
     let mut args = std::env::args().skip(1);
-    let Some(arg) = args.next() else { return Ok(false); };
+    let Some(arg) = args.next() else {
+        return Ok(false);
+    };
     match arg.as_str() {
         "--engine-worker" => {
             let jar = runtime::materialize_engine()?;
@@ -159,14 +243,19 @@ fn handle_cli() -> Result<bool> {
         }
         "--install-blender-translator" => {
             let report = blender::install_detected_profiles()?;
-            println!("Installed Minesport Blender translator into {} profile(s).", report.installed_profiles.len());
+            println!(
+                "Installed Minesport Blender translator into {} profile(s).",
+                report.installed_profiles.len()
+            );
             for profile in report.installed_profiles {
                 println!("  {}", profile.display());
             }
             Ok(true)
         }
         "-h" | "--help" => {
-            println!("Minesport {VERSION}\nRust + Slint desktop by Kastrick\n\nUsage:\n  minesport                            Open the desktop app\n  minesport --install-blender-translator\n  minesport --version                  Print version\n  minesport --help                     Show this help");
+            println!(
+                "Minesport {VERSION}\nRust + Slint desktop by Kastrick\n\nUsage:\n  minesport                            Open the desktop app\n  minesport --install-blender-translator\n  minesport --version                  Print version\n  minesport --help                     Show this help"
+            );
             Ok(true)
         }
         "-V" | "--version" => {
@@ -216,14 +305,12 @@ fn collect_settings(ui: &MainWindow, state: &SharedState) -> DesktopSettings {
     }
 }
 
-fn wire_settings_persistence(
-    ui: &MainWindow,
-    state: SharedState,
-    cache: RuntimeCacheManager,
-) {
+fn wire_settings_persistence(ui: &MainWindow, state: SharedState, cache: RuntimeCacheManager) {
     let weak = ui.as_weak();
     ui.on_settings_changed(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let format_index = ui.get_export_format_index();
         let cancelled_pending_export = if let Ok(mut guard) = state.lock() {
             guard.export_format_index = format_index;
@@ -263,13 +350,17 @@ fn sync_debug_console(ui: &MainWindow, state: SharedState) {
     aux_windows::show_debug_console(
         ui,
         move || {
-            let Some(ui) = close_weak.upgrade() else { return; };
+            let Some(ui) = close_weak.upgrade() else {
+                return;
+            };
             ui.set_debug_mode(false);
             ui.set_debug_console_visible(false);
             persist_settings_snapshot(&ui, &close_state);
         },
         move || {
-            let Some(ui) = clear_weak.upgrade() else { return; };
+            let Some(ui) = clear_weak.upgrade() else {
+                return;
+            };
             ui.set_diagnostics("".into());
             aux_windows::update_debug_console(&ui);
         },
@@ -284,12 +375,19 @@ fn persist_settings_snapshot(ui: &MainWindow, state: &SharedState) {
     let generation = settings::reserve_save();
     thread::spawn(move || {
         if let Err(error) = settings::save_reserved(generation, &snapshot) {
-            diagnostics::append(&format!("Could not persist Minesport desktop settings: {error:#}"));
+            diagnostics::append(&format!(
+                "Could not persist Minesport desktop settings: {error:#}"
+            ));
         }
     });
 }
 
-fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: RuntimeCacheManager) {
+fn wire_file_pickers(
+    ui: &MainWindow,
+    engine: JavaEngine,
+    state: SharedState,
+    cache: RuntimeCacheManager,
+) {
     let world_state = state.clone();
     let weak = ui.as_weak();
     let picker_engine = engine.clone();
@@ -307,7 +405,10 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
             let count = worlds.len();
             let event_weak = weak.clone();
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                append_diagnostic(&ui, &format!("World picker discovered {count} world(s) across installed launchers"));
+                append_diagnostic(
+                    &ui,
+                    &format!("World picker discovered {count} world(s) across installed launchers"),
+                );
 
                 let select_weak = event_weak.clone();
                 let select_engine = engine.clone();
@@ -350,8 +451,12 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
         let weak = weak.clone();
         let state = output_state.clone();
         thread::spawn(move || {
-            let picked = rfd::FileDialog::new().set_title("Choose Minesport export folder").pick_folder();
-            let Some(path) = picked else { return; };
+            let picked = rfd::FileDialog::new()
+                .set_title("Choose Minesport export folder")
+                .pick_folder();
+            let Some(path) = picked else {
+                return;
+            };
             let display = path.display().to_string();
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 ui.set_output_path(display.clone().into());
@@ -364,9 +469,13 @@ fn wire_file_pickers(ui: &MainWindow, engine: JavaEngine, state: SharedState, ca
     let weak = ui.as_weak();
     let reload_engine = engine;
     ui.on_reload_map(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let world = PathBuf::from(ui.get_world_path().to_string());
-        if !world.join("level.dat").is_file() { return; }
+        if !world.join("level.dat").is_file() {
+            return;
+        }
         ui.set_map_loading(true);
         ui.set_map_available(false);
         ui.set_task_title("MAP REFRESH".into());
@@ -402,8 +511,12 @@ fn browse_world_folder(
     cache: RuntimeCacheManager,
 ) {
     thread::spawn(move || {
-        let picked = rfd::FileDialog::new().set_title("Select a Minecraft world folder").pick_folder();
-        let Some(path) = picked else { return; };
+        let picked = rfd::FileDialog::new()
+            .set_title("Select a Minecraft world folder")
+            .pick_folder();
+        let Some(path) = picked else {
+            return;
+        };
         activate_world(weak, engine, state, cache, path, None);
     });
 }
@@ -431,7 +544,11 @@ fn activate_world(
         let name = discovered
             .as_ref()
             .map(|context| context.world_name.clone())
-            .or_else(|| path.file_name().and_then(|name| name.to_str()).map(str::to_string))
+            .or_else(|| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| "Minecraft World".to_string());
         let version = discovered
             .as_ref()
@@ -456,18 +573,21 @@ fn activate_world(
                 context.instance,
                 context.version,
                 context.loader,
-                if context.has_polymer { " · Polymer" } else { "" },
+                if context.has_polymer {
+                    " · Polymer"
+                } else {
+                    ""
+                },
                 context.minecraft_dir.display()
             )
         });
 
-        let cancelled_previous_cache = if cache.is_running()
-            && !cache.is_running_for_loader(&version, &loader, &mods_path)
-        {
-            cache.cancel()
-        } else {
-            false
-        };
+        let cancelled_previous_cache =
+            if cache.is_running() && !cache.is_running_for_loader(&version, &loader, &mods_path) {
+                cache.cancel()
+            } else {
+                false
+            };
         viewer_selection::reset();
         let geometry_export = if let Ok(mut guard) = state.lock() {
             guard.pending_export = None;
@@ -486,13 +606,19 @@ fn activate_world(
             Ok(Some((metadata, png))) => match decode_png(&png) {
                 Ok(raster) => Some((metadata, raster)),
                 Err(error) => {
-                    diagnostics::append(&format!("Ignored unreadable heightmap cache for {}: {error:#}", path.display()));
+                    diagnostics::append(&format!(
+                        "Ignored unreadable heightmap cache for {}: {error:#}",
+                        path.display()
+                    ));
                     None
                 }
             },
             Ok(None) => None,
             Err(error) => {
-                diagnostics::append(&format!("Heightmap cache lookup failed for {}: {error:#}", path.display()));
+                diagnostics::append(&format!(
+                    "Heightmap cache lookup failed for {}: {error:#}",
+                    path.display()
+                ));
                 None
             }
         };
@@ -511,24 +637,49 @@ fn activate_world(
             ui.set_minecraft_version(version_for_ui.clone().into());
             ui.set_loader_type(loader_for_ui.clone().into());
             ui.set_runtime_cache_status(
-                if geometry_export { "STARTING" } else { "NOT REQUIRED FOR LITEMATICA" }.into()
+                if geometry_export {
+                    "STARTING"
+                } else {
+                    "NOT REQUIRED FOR LITEMATICA"
+                }
+                .into(),
             );
             ui.set_preview_available(false);
             ui.set_preview_loading(false);
             ui.set_preview_focus_label("LMB point A · RMB point B · LMB again confirms".into());
             if let Some((metadata, raster)) = cached_map {
-                apply_map_raster(&ui, raster, metadata.min_x, metadata.min_z, metadata.max_x, metadata.max_z, metadata.scale);
+                apply_map_raster(
+                    &ui,
+                    raster,
+                    metadata.min_x,
+                    metadata.min_z,
+                    metadata.max_x,
+                    metadata.max_z,
+                    metadata.scale,
+                );
                 ui.set_task_title("MAP CACHE HIT".into());
-                ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · saved 2D map restored").into());
+                ui.set_task_detail(
+                    format!("Minecraft {version_for_ui} · {loader_for_ui} · saved 2D map restored")
+                        .into(),
+                );
                 append_diagnostic(&ui, "2D map cache hit: using saved heightmap");
             } else {
                 ui.set_map_loading(true);
                 ui.set_map_available(false);
                 ui.set_task_title("WORLD".into());
-                ui.set_task_detail(format!("Minecraft {version_for_ui} · {loader_for_ui} · loading 2D map").into());
+                ui.set_task_detail(
+                    format!("Minecraft {version_for_ui} · {loader_for_ui} · loading 2D map").into(),
+                );
             }
-            append_diagnostic(&ui, &format!("Selected world: {display_for_ui} (Minecraft {version_for_ui}, {loader_for_ui})"));
-            if let Some(line) = context_line { append_diagnostic(&ui, &line); }
+            append_diagnostic(
+                &ui,
+                &format!(
+                    "Selected world: {display_for_ui} (Minecraft {version_for_ui}, {loader_for_ui})"
+                ),
+            );
+            if let Some(line) = context_line {
+                append_diagnostic(&ui, &line);
+            }
         });
 
         if !cache_hit {
@@ -554,7 +705,9 @@ fn activate_world(
             });
         } else if runtime_registry_supported(&loader, &version, &mods_path) {
             let running = cache.is_running_for_loader(&version, &loader, &mods_path);
-            let ready = cache.ready_path_for_loader(&version, &loader, &mods_path).is_some();
+            let ready = cache
+                .ready_path_for_loader(&version, &loader, &mods_path)
+                .is_some();
             let status = if running {
                 "PREPARING"
             } else if ready {
@@ -576,7 +729,12 @@ fn activate_world(
     });
 }
 
-fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: RuntimeCacheManager) {
+fn wire_export(
+    ui: &MainWindow,
+    engine: JavaEngine,
+    state: SharedState,
+    cache: RuntimeCacheManager,
+) {
     let weak = ui.as_weak();
     ui.on_export_requested(move || {
         let Some(ui) = weak.upgrade() else { return; };
@@ -711,7 +869,9 @@ fn wire_export(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: R
 }
 
 fn resolve_export_collision(path: &Path) -> Option<PathBuf> {
-    if !path.exists() { return Some(path.to_path_buf()); }
+    if !path.exists() {
+        return Some(path.to_path_buf());
+    }
     let replace = MessageDialog::new()
         .set_level(MessageLevel::Warning)
         .set_title("Replace existing Minesport export?")
@@ -729,8 +889,14 @@ fn resolve_export_collision(path: &Path) -> Option<PathBuf> {
 
 fn next_export_path(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("Minesport_Export");
-    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("");
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Minesport_Export");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
     for index in 2u32.. {
         let name = if extension.is_empty() {
             format!("{stem}_{index}")
@@ -738,7 +904,9 @@ fn next_export_path(path: &Path) -> PathBuf {
             format!("{stem}_{index}.{extension}")
         };
         let candidate = parent.join(name);
-        if !candidate.exists() { return candidate; }
+        if !candidate.exists() {
+            return candidate;
+        }
     }
     unreachable!("u32 export suffix space exhausted")
 }
@@ -762,9 +930,13 @@ fn send_export_now(ui: &MainWindow, engine: &JavaEngine, request: Value, output:
 fn wire_preflight(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     let weak = ui.as_weak();
     ui.on_run_preflight(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let world = PathBuf::from(ui.get_world_path().to_string());
-        if !world.join("level.dat").is_file() { return; }
+        if !world.join("level.dat").is_file() {
+            return;
+        }
 
         let mut request = block_list_request(&ui, &world, &state, "preflight");
         add_bubble_fields(&ui, &mut request);
@@ -785,25 +957,39 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     let weak = ui.as_weak();
     let open_state = state.clone();
     ui.on_open_3d(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         if !ui.get_engine_ready() {
             ui.set_preview_focus_label("3D preview is waiting for the Minesport engine".into());
             append_diagnostic(&ui, "3D preview blocked: backend is not ready.");
             return;
         }
         if has_pending_export(&open_state) {
-            ui.set_preview_focus_label("3D preview is unavailable while an export waits for runtime preparation".into());
-            append_diagnostic(&ui, "3D preview blocked: an export is queued for runtime preparation.");
+            ui.set_preview_focus_label(
+                "3D preview is unavailable while an export waits for runtime preparation".into(),
+            );
+            append_diagnostic(
+                &ui,
+                "3D preview blocked: an export is queued for runtime preparation.",
+            );
             return;
         }
         if ui.get_task_active() {
             let active = ui.get_task_title().to_string();
-            ui.set_preview_focus_label(format!("3D preview is unavailable while {active} is active").into());
-            append_diagnostic(&ui, &format!("3D preview blocked while another operation is active: {active}"));
+            ui.set_preview_focus_label(
+                format!("3D preview is unavailable while {active} is active").into(),
+            );
+            append_diagnostic(
+                &ui,
+                &format!("3D preview blocked while another operation is active: {active}"),
+            );
             return;
         }
         let world = PathBuf::from(ui.get_world_path().to_string());
-        if !world.join("level.dat").is_file() { return; }
+        if !world.join("level.dat").is_file() {
+            return;
+        }
         viewer_selection::reset();
         if let Ok(mut guard) = open_state.lock() {
             guard.preview_pick_map = None;
@@ -829,19 +1015,31 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     let weak = ui.as_weak();
     let orbit_state = state.clone();
     ui.on_preview_orbit(move |dx, dy| {
-        rerender_preview(weak.clone(), orbit_state.clone(), PreviewCameraAction::Orbit { dx, dy });
+        rerender_preview(
+            weak.clone(),
+            orbit_state.clone(),
+            PreviewCameraAction::Orbit { dx, dy },
+        );
     });
 
     let weak = ui.as_weak();
     let pan_state = state.clone();
     ui.on_preview_pan(move |dx, dy| {
-        rerender_preview(weak.clone(), pan_state.clone(), PreviewCameraAction::Pan { dx, dy });
+        rerender_preview(
+            weak.clone(),
+            pan_state.clone(),
+            PreviewCameraAction::Pan { dx, dy },
+        );
     });
 
     let weak = ui.as_weak();
     let dolly_state = state.clone();
     ui.on_preview_dolly(move |steps| {
-        rerender_preview(weak.clone(), dolly_state.clone(), PreviewCameraAction::Dolly(steps));
+        rerender_preview(
+            weak.clone(),
+            dolly_state.clone(),
+            PreviewCameraAction::Dolly(steps),
+        );
     });
 
     let weak = ui.as_weak();
@@ -854,36 +1052,60 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
     let clear_state = state.clone();
     ui.on_preview_clear(move || {
         viewer_selection::reset();
-        rerender_preview(weak.clone(), clear_state.clone(), PreviewCameraAction::ClearHighlight);
+        rerender_preview(
+            weak.clone(),
+            clear_state.clone(),
+            PreviewCameraAction::ClearHighlight,
+        );
     });
 
     let weak = ui.as_weak();
     let resize_state = state.clone();
     ui.on_preview_resize(move |delta| {
-        if delta == 0 { return; }
-        let Some(ui) = weak.upgrade() else { return; };
-        let pick_map = resize_state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+        if delta == 0 {
+            return;
+        }
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let pick_map = resize_state
+            .lock()
+            .ok()
+            .and_then(|guard| guard.preview_pick_map.clone());
         let Some(pick_map) = pick_map else {
             ui.set_preview_focus_label("Preview voxel picker is not ready yet".into());
             return;
         };
-        let Some(box_selection) = viewer_selection::resize_point_b(pick_map.look_direction(), delta) else {
+        let Some(box_selection) =
+            viewer_selection::resize_point_b(pick_map.look_direction(), delta)
+        else {
             ui.set_preview_focus_label("Set point A and point B before resizing".into());
             return;
         };
-        let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
+        let count = pick_map
+            .blocks_in_box(box_selection.min, box_selection.max)
+            .len();
         drop(ui);
         rerender_preview(
             weak.clone(),
             resize_state.clone(),
-            PreviewCameraAction::Highlight { min: box_selection.min, max: box_selection.max, count },
+            PreviewCameraAction::Highlight {
+                min: box_selection.min,
+                max: box_selection.max,
+                count,
+            },
         );
     });
 
     let weak = ui.as_weak();
     ui.on_preview_click(move |mouse_x, mouse_y, view_width, view_height| {
-        let Some(ui) = weak.upgrade() else { return; };
-        let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let pick_map = state
+            .lock()
+            .ok()
+            .and_then(|guard| guard.preview_pick_map.clone());
         let Some(pick_map) = pick_map else {
             ui.set_preview_focus_label("Preview voxel picker is not ready yet".into());
             return;
@@ -891,8 +1113,12 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
 
         let button = ui.get_preview_pick_button();
         if button == 1 {
-            if let viewer_selection::PrimaryAction::Confirm(box_selection) = viewer_selection::primary_action() {
-                let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
+            if let viewer_selection::PrimaryAction::Confirm(box_selection) =
+                viewer_selection::primary_action()
+            {
+                let count = pick_map
+                    .blocks_in_box(box_selection.min, box_selection.max)
+                    .len();
                 apply_viewer_box_selection(&ui, &state, box_selection, count);
                 return;
             }
@@ -907,7 +1133,12 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
 
         let (image_width, image_height) = pick_map.dimensions();
         let Some((source_x, source_y)) = selection::preview_source_point(
-            mouse_x, mouse_y, view_width, view_height, image_width, image_height,
+            mouse_x,
+            mouse_y,
+            view_width,
+            view_height,
+            image_width,
+            image_height,
         ) else {
             ui.set_preview_focus_label("Click inside the rendered 3D image".into());
             return;
@@ -920,35 +1151,55 @@ fn wire_viewer(ui: &MainWindow, engine: JavaEngine, state: SharedState) {
 
         if button == 1 {
             viewer_selection::set_point_a(point);
-            ui.set_preview_focus_label(format!(
-                "POINT A · {},{},{} · RMB chooses point B",
-                point[0], point[1], point[2]
-            ).into());
-            append_diagnostic(&ui, &format!("3D point A set: {},{},{}", point[0], point[1], point[2]));
+            ui.set_preview_focus_label(
+                format!(
+                    "POINT A · {},{},{} · RMB chooses point B",
+                    point[0], point[1], point[2]
+                )
+                .into(),
+            );
+            append_diagnostic(
+                &ui,
+                &format!("3D point A set: {},{},{}", point[0], point[1], point[2]),
+            );
             return;
         }
 
         let Some(box_selection) = viewer_selection::set_point_b(point) else {
             return;
         };
-        let count = pick_map.blocks_in_box(box_selection.min, box_selection.max).len();
+        let count = pick_map
+            .blocks_in_box(box_selection.min, box_selection.max)
+            .len();
         ui.set_preview_focus_label(format!(
             "POINT B · {},{},{} · {} solid block(s) · LMB confirms · E+wheel resizes · C clears",
             point[0], point[1], point[2], count
         ).into());
-        append_diagnostic(&ui, &format!(
-            "3D point B set: {},{},{} · box X {}..{} Y {}..{} Z {}..{} · {} solid block(s)",
-            point[0], point[1], point[2],
-            box_selection.min[0], box_selection.max[0],
-            box_selection.min[1], box_selection.max[1],
-            box_selection.min[2], box_selection.max[2],
-            count,
-        ));
+        append_diagnostic(
+            &ui,
+            &format!(
+                "3D point B set: {},{},{} · box X {}..{} Y {}..{} Z {}..{} · {} solid block(s)",
+                point[0],
+                point[1],
+                point[2],
+                box_selection.min[0],
+                box_selection.max[0],
+                box_selection.min[1],
+                box_selection.max[1],
+                box_selection.min[2],
+                box_selection.max[2],
+                count,
+            ),
+        );
         drop(ui);
         rerender_preview(
             weak.clone(),
             state.clone(),
-            PreviewCameraAction::Highlight { min: box_selection.min, max: box_selection.max, count },
+            PreviewCameraAction::Highlight {
+                min: box_selection.min,
+                max: box_selection.max,
+                count,
+            },
         );
     });
 }
@@ -966,31 +1217,52 @@ fn apply_viewer_box_selection(
     ui.set_max_x(box_selection.max[0]);
     ui.set_max_y(box_selection.max[1]);
     ui.set_max_z(box_selection.max[2]);
-    ui.set_preview_focus_label(format!(
-        "BOX CONFIRMED · {} solid block(s) · X {}..{} · Y {}..{} · Z {}..{}",
-        count,
-        box_selection.min[0], box_selection.max[0],
-        box_selection.min[1], box_selection.max[1],
-        box_selection.min[2], box_selection.max[2],
-    ).into());
+    ui.set_preview_focus_label(
+        format!(
+            "BOX CONFIRMED · {} solid block(s) · X {}..{} · Y {}..{} · Z {}..{}",
+            count,
+            box_selection.min[0],
+            box_selection.max[0],
+            box_selection.min[1],
+            box_selection.max[1],
+            box_selection.min[2],
+            box_selection.max[2],
+        )
+        .into(),
+    );
     if let Ok(mut guard) = state.lock() {
         guard.exact_selection = None;
     }
-    append_diagnostic(ui, &format!(
-        "3D box confirmed: X {}..{} · Y {}..{} · Z {}..{} · {} solid block(s)",
-        box_selection.min[0], box_selection.max[0],
-        box_selection.min[1], box_selection.max[1],
-        box_selection.min[2], box_selection.max[2],
-        count,
-    ));
+    append_diagnostic(
+        ui,
+        &format!(
+            "3D box confirmed: X {}..{} · Y {}..{} · Z {}..{} · {} solid block(s)",
+            box_selection.min[0],
+            box_selection.max[0],
+            box_selection.min[1],
+            box_selection.max[1],
+            box_selection.min[2],
+            box_selection.max[2],
+            count,
+        ),
+    );
 }
 
-fn rerender_preview(weak: slint::Weak<MainWindow>, state: SharedState, action: PreviewCameraAction) {
-    let Some(ui) = weak.upgrade() else { return; };
+fn rerender_preview(
+    weak: slint::Weak<MainWindow>,
+    state: SharedState,
+    action: PreviewCameraAction,
+) {
+    let Some(ui) = weak.upgrade() else {
+        return;
+    };
     if ui.get_preview_loading() {
         return;
     }
-    let pick_map = state.lock().ok().and_then(|guard| guard.preview_pick_map.clone());
+    let pick_map = state
+        .lock()
+        .ok()
+        .and_then(|guard| guard.preview_pick_map.clone());
     let Some(pick_map) = pick_map else {
         ui.set_preview_focus_label("Preview scene is not ready yet".into());
         return;
@@ -1081,11 +1353,18 @@ fn block_list_request_payload(
     })
 }
 
-fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, cache: RuntimeCacheManager) {
+fn wire_cache_actions(
+    ui: &MainWindow,
+    engine: JavaEngine,
+    state: SharedState,
+    cache: RuntimeCacheManager,
+) {
     let weak = ui.as_weak();
     let remove_cache = cache.clone();
     ui.on_remove_cache(move || {
-        if remove_cache.is_running() { return; }
+        if remove_cache.is_running() {
+            return;
+        }
         let weak = weak.clone();
         let cache = remove_cache.clone();
         thread::spawn(move || {
@@ -1095,16 +1374,23 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
                 .set_description("Delete all generated Minesport cache?")
                 .set_buttons(MessageButtons::YesNo)
                 .show();
-            if confirmed != MessageDialogResult::Yes { return; }
+            if confirmed != MessageDialogResult::Yes {
+                return;
+            }
             let root = runtime::cache_root();
             let result = runtime::remove_generated_cache();
-            if result.is_ok() { cache.invalidate(); }
+            if result.is_ok() {
+                cache.invalidate();
+            }
             let _ = weak.upgrade_in_event_loop(move |ui| match result {
                 Ok(()) => {
                     ui.set_runtime_cache_status("CLEARED".into());
                     ui.set_task_title("CACHE REMOVED".into());
                     ui.set_task_detail(root.display().to_string().into());
-                    append_diagnostic(&ui, &format!("Removed Minesport generated cache: {}", root.display()));
+                    append_diagnostic(
+                        &ui,
+                        &format!("Removed Minesport generated cache: {}", root.display()),
+                    );
                 }
                 Err(error) => {
                     ui.set_task_title("CACHE CLEANUP FAILED".into());
@@ -1120,17 +1406,31 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
     let rebuild_engine = engine.clone();
     let rebuild_state = state.clone();
     ui.on_rebuild_runtime_cache(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let world = PathBuf::from(ui.get_world_path().to_string());
-        if !world.join("level.dat").is_file() { return; }
+        if !world.join("level.dat").is_file() {
+            return;
+        }
         let (version, loader, mods) = selected_runtime_context(&rebuild_state, &ui, &world);
         if !runtime_registry_supported(&loader, &version, &mods) {
             ui.set_task_title("RUNTIME CACHE".into());
-            ui.set_task_detail(runtime_registry_unavailable_reason(&loader, &version, &mods).into());
+            ui.set_task_detail(
+                runtime_registry_unavailable_reason(&loader, &version, &mods).into(),
+            );
             return;
         }
         if let Err(error) = start_runtime_cache_job(
-            weak.clone(), rebuild_cache.clone(), rebuild_engine.clone(), rebuild_state.clone(), version, loader, mods, true, true,
+            weak.clone(),
+            rebuild_cache.clone(),
+            rebuild_engine.clone(),
+            rebuild_state.clone(),
+            version,
+            loader,
+            mods,
+            true,
+            true,
         ) {
             ui.set_task_title("RUNTIME CACHE FAILED".into());
             ui.set_task_detail(error.to_string().into());
@@ -1148,10 +1448,20 @@ fn wire_cache_actions(ui: &MainWindow, engine: JavaEngine, state: SharedState, c
             }
             if let Some(ui) = weak.upgrade() {
                 ui.set_runtime_cache_status(
-                    if cancelled_cache { "CANCELLING…" } else { "CANCELLED" }.into()
+                    if cancelled_cache {
+                        "CANCELLING…"
+                    } else {
+                        "CANCELLED"
+                    }
+                    .into(),
                 );
                 ui.set_task_title(
-                    if cancelled_pending_export { "EXPORT CANCELLED" } else { "RUNTIME CANCELLED" }.into()
+                    if cancelled_pending_export {
+                        "EXPORT CANCELLED"
+                    } else {
+                        "RUNTIME CANCELLED"
+                    }
+                    .into(),
                 );
                 ui.set_task_detail("Cancelling…".into());
                 append_diagnostic(&ui, "Runtime registry cancellation requested.");
@@ -1311,15 +1621,22 @@ fn runtime_cache_event_is_current(
     mods_path: &Path,
     forced_rebuild: bool,
 ) -> bool {
-    state.lock().map(|guard| {
-        let same_version = guard.selected_version.as_deref() == Some(version);
-        let same_loader = guard.selected_loader.as_deref()
-            .is_some_and(|selected| normalize_loader(selected) == normalize_loader(loader));
-        let same_mods = guard.selected_mods_path.as_deref()
-            .is_some_and(|selected| same_asset_path(selected, mods_path));
-        let format_still_needs_runtime = forced_rebuild || guard.export_format_index < 2;
-        same_version && same_loader && same_mods && format_still_needs_runtime
-    }).unwrap_or(false)
+    state
+        .lock()
+        .map(|guard| {
+            let same_version = guard.selected_version.as_deref() == Some(version);
+            let same_loader = guard
+                .selected_loader
+                .as_deref()
+                .is_some_and(|selected| normalize_loader(selected) == normalize_loader(loader));
+            let same_mods = guard
+                .selected_mods_path
+                .as_deref()
+                .is_some_and(|selected| same_asset_path(selected, mods_path));
+            let format_still_needs_runtime = forced_rebuild || guard.export_format_index < 2;
+            same_version && same_loader && same_mods && format_still_needs_runtime
+        })
+        .unwrap_or(false)
 }
 
 fn dispatch_pending_export(
@@ -1330,7 +1647,9 @@ fn dispatch_pending_export(
     cache_error: Option<String>,
 ) {
     if let Some(error) = cache_error.as_ref() {
-        if !cancel_pending_export(state) { return; }
+        if !cancel_pending_export(state) {
+            return;
+        }
         let error = first_line(error).to_string();
         let weak = weak.clone();
         let _ = weak.upgrade_in_event_loop(move |ui| {
@@ -1343,7 +1662,9 @@ fn dispatch_pending_export(
     }
 
     let Some(path) = registry_path else {
-        if !cancel_pending_export(state) { return; }
+        if !cancel_pending_export(state) {
+            return;
+        }
         let weak = weak.clone();
         let _ = weak.upgrade_in_event_loop(move |ui| {
             ui.set_task_active(false);
@@ -1369,7 +1690,9 @@ fn dispatch_pending_export(
                 return;
             }
         };
-        let Some(mut request) = guard.pending_export.take() else { return; };
+        let Some(mut request) = guard.pending_export.take() else {
+            return;
+        };
         attach_registry(&mut request, &path);
         engine.send_value(request)
     };
@@ -1394,18 +1717,25 @@ fn dispatch_pending_export(
 }
 
 fn cancel_pending_export(state: &SharedState) -> bool {
-    state.lock()
+    state
+        .lock()
         .map(|mut guard| guard.pending_export.take().is_some())
         .unwrap_or(false)
 }
 
 fn has_pending_export(state: &SharedState) -> bool {
-    state.lock().map(|guard| guard.pending_export.is_some()).unwrap_or(false)
+    state
+        .lock()
+        .map(|guard| guard.pending_export.is_some())
+        .unwrap_or(false)
 }
 
 fn attach_registry(request: &mut Value, path: &Path) {
     if let Some(options) = request.get_mut("options").and_then(Value::as_object_mut) {
-        options.insert("bridgeRegistry".to_string(), Value::String(path.display().to_string()));
+        options.insert(
+            "bridgeRegistry".to_string(),
+            Value::String(path.display().to_string()),
+        );
     }
 }
 
@@ -1413,21 +1743,39 @@ fn attach_exact_selection(ui: &MainWindow, state: &SharedState, request: &mut Va
     let min = [ui.get_min_x(), ui.get_min_y(), ui.get_min_z()];
     let max = [ui.get_max_x(), ui.get_max_y(), ui.get_max_z()];
     let exact = {
-        let mut guard = state.lock().map_err(|_| anyhow!("exact-selection state lock poisoned"))?;
-        let Some(exact) = guard.exact_selection.clone() else { return Ok(()); };
+        let mut guard = state
+            .lock()
+            .map_err(|_| anyhow!("exact-selection state lock poisoned"))?;
+        let Some(exact) = guard.exact_selection.clone() else {
+            return Ok(());
+        };
         if ui.get_selection_mode() != 0 || !exact.matches_bounds(min, max) {
             guard.exact_selection = None;
-            ui.set_preview_focus_label("Exact 3D selection cleared because selection bounds changed".into());
+            ui.set_preview_focus_label(
+                "Exact 3D selection cleared because selection bounds changed".into(),
+            );
             append_diagnostic(ui, "Exact 3D selection cleared after bounds/mode changed");
             return Ok(());
         }
         exact
     };
     let path = selection::write_selection_file(&runtime::cache_root(), &exact)?;
-    let options = request.get_mut("options").and_then(Value::as_object_mut)
+    let options = request
+        .get_mut("options")
+        .and_then(Value::as_object_mut)
         .ok_or_else(|| anyhow!("export request does not contain an options object"))?;
-    options.insert("customSelectionFile".to_string(), Value::String(path.display().to_string()));
-    append_diagnostic(ui, &format!("Exact custom selection attached: {} block(s) · {}", exact.coordinates.len(), path.display()));
+    options.insert(
+        "customSelectionFile".to_string(),
+        Value::String(path.display().to_string()),
+    );
+    append_diagnostic(
+        ui,
+        &format!(
+            "Exact custom selection attached: {} block(s) · {}",
+            exact.coordinates.len(),
+            path.display()
+        ),
+    );
     Ok(())
 }
 
@@ -1438,9 +1786,17 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
         let weak = weak.clone();
         let state = resource_state.clone();
         thread::spawn(move || {
-            let picked = rfd::FileDialog::new().set_title("Add Minecraft resource pack (.zip)").add_filter("Minecraft resource pack", &["zip"]).pick_file();
-            let Some(path) = picked else { return; };
-            let added = state.lock().map(|mut guard| add_unique_path(&mut guard.resource_packs, path.clone())).unwrap_or(false);
+            let picked = rfd::FileDialog::new()
+                .set_title("Add Minecraft resource pack (.zip)")
+                .add_filter("Minecraft resource pack", &["zip"])
+                .pick_file();
+            let Some(path) = picked else {
+                return;
+            };
+            let added = state
+                .lock()
+                .map(|mut guard| add_unique_path(&mut guard.resource_packs, path.clone()))
+                .unwrap_or(false);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 refresh_asset_summaries(&ui, &state);
                 let message = if added {
@@ -1460,9 +1816,16 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
         let weak = weak.clone();
         let state = resource_state.clone();
         thread::spawn(move || {
-            let picked = rfd::FileDialog::new().set_title("Add Minecraft resource pack folder").pick_folder();
-            let Some(path) = picked else { return; };
-            let added = state.lock().map(|mut guard| add_unique_path(&mut guard.resource_packs, path.clone())).unwrap_or(false);
+            let picked = rfd::FileDialog::new()
+                .set_title("Add Minecraft resource pack folder")
+                .pick_folder();
+            let Some(path) = picked else {
+                return;
+            };
+            let added = state
+                .lock()
+                .map(|mut guard| add_unique_path(&mut guard.resource_packs, path.clone()))
+                .unwrap_or(false);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 refresh_asset_summaries(&ui, &state);
                 let message = if added {
@@ -1479,7 +1842,9 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
     let weak = ui.as_weak();
     let resource_state = state.clone();
     ui.on_move_resource_pack(move |delta| {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let index = ui.get_resource_pack_selected();
         if let Ok(mut guard) = resource_state.lock() {
             if move_path_entry(&mut guard.resource_packs, index, delta) {
@@ -1493,7 +1858,9 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
     let weak = ui.as_weak();
     let resource_state = state.clone();
     ui.on_remove_resource_pack(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let index = ui.get_resource_pack_selected();
         if let Ok(mut guard) = resource_state.lock() {
             remove_path_entry(&mut guard.resource_packs, index);
@@ -1508,9 +1875,16 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
         let weak = weak.clone();
         let state = data_state.clone();
         thread::spawn(move || {
-            let picked = rfd::FileDialog::new().set_title("Add Minecraft data pack folder").pick_folder();
-            let Some(path) = picked else { return; };
-            let added = state.lock().map(|mut guard| add_unique_path(&mut guard.data_packs, path.clone())).unwrap_or(false);
+            let picked = rfd::FileDialog::new()
+                .set_title("Add Minecraft data pack folder")
+                .pick_folder();
+            let Some(path) = picked else {
+                return;
+            };
+            let added = state
+                .lock()
+                .map(|mut guard| add_unique_path(&mut guard.data_packs, path.clone()))
+                .unwrap_or(false);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 refresh_asset_summaries(&ui, &state);
                 let message = if added {
@@ -1527,7 +1901,9 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
     let weak = ui.as_weak();
     let data_state = state.clone();
     ui.on_move_data_pack(move |delta| {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let index = ui.get_data_pack_selected();
         if let Ok(mut guard) = data_state.lock() {
             if move_path_entry(&mut guard.data_packs, index, delta) {
@@ -1540,7 +1916,9 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
 
     let weak = ui.as_weak();
     ui.on_remove_data_pack(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let index = ui.get_data_pack_selected();
         if let Ok(mut guard) = state.lock() {
             remove_path_entry(&mut guard.data_packs, index);
@@ -1551,12 +1929,19 @@ fn wire_asset_pickers(ui: &MainWindow, state: SharedState) {
 }
 
 fn refresh_asset_summaries(ui: &MainWindow, state: &SharedState) {
-    let (resource_packs, data_packs) = state.lock().map(|guard| (guard.resource_packs.clone(), guard.data_packs.clone())).unwrap_or_default();
+    let (resource_packs, data_packs) = state
+        .lock()
+        .map(|guard| (guard.resource_packs.clone(), guard.data_packs.clone()))
+        .unwrap_or_default();
 
     ui.set_resource_pack_summary(if resource_packs.is_empty() {
         "No resource-pack overrides".into()
     } else {
-        format!("{} resource-pack override(s) · highest priority first", resource_packs.len()).into()
+        format!(
+            "{} resource-pack override(s) · highest priority first",
+            resource_packs.len()
+        )
+        .into()
     });
     ui.set_data_pack_summary(if data_packs.is_empty() {
         "No data-pack overrides".into()
@@ -1566,31 +1951,59 @@ fn refresh_asset_summaries(ui: &MainWindow, state: &SharedState) {
 
     ui.set_resource_pack_items(path_model(&resource_packs));
     ui.set_data_pack_items(path_model(&data_packs));
-    ui.set_resource_pack_selected(clamp_selection(ui.get_resource_pack_selected(), resource_packs.len()));
-    ui.set_data_pack_selected(clamp_selection(ui.get_data_pack_selected(), data_packs.len()));
+    ui.set_resource_pack_selected(clamp_selection(
+        ui.get_resource_pack_selected(),
+        resource_packs.len(),
+    ));
+    ui.set_data_pack_selected(clamp_selection(
+        ui.get_data_pack_selected(),
+        data_packs.len(),
+    ));
 }
 
 fn path_model(paths: &[PathBuf]) -> ModelRc<SharedString> {
-    let rows = paths.iter().enumerate().map(|(index, path)| {
-        let kind = match fs::metadata(path) {
-            Ok(metadata) if metadata.is_dir() => "FOLDER",
-            Ok(_) if path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) => "ZIP",
-            Ok(_) => "FILE",
-            Err(_) => "MISSING",
-        };
-        let name = path.file_name().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).unwrap_or_else(|| path.to_str().unwrap_or("path"));
-        SharedString::from(format!("{} · {} · {}", index + 1, name, kind))
-    }).collect::<Vec<_>>();
+    let rows = paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let kind = match fs::metadata(path) {
+                Ok(metadata) if metadata.is_dir() => "FOLDER",
+                Ok(_)
+                    if path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) =>
+                {
+                    "ZIP"
+                }
+                Ok(_) => "FILE",
+                Err(_) => "MISSING",
+            };
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| path.to_str().unwrap_or("path"));
+            SharedString::from(format!("{} · {} · {}", index + 1, name, kind))
+        })
+        .collect::<Vec<_>>();
     ModelRc::new(VecModel::from(rows))
 }
 
 fn clamp_selection(index: i32, len: usize) -> i32 {
-    if len == 0 { 0 } else { index.clamp(0, len.saturating_sub(1) as i32) }
+    if len == 0 {
+        0
+    } else {
+        index.clamp(0, len.saturating_sub(1) as i32)
+    }
 }
 
 fn add_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) -> bool {
     let cleaned = path.components().collect::<PathBuf>();
-    if paths.iter().any(|existing| same_asset_path(existing, &cleaned)) {
+    if paths
+        .iter()
+        .any(|existing| same_asset_path(existing, &cleaned))
+    {
         return false;
     }
     paths.push(cleaned);
@@ -1599,25 +2012,36 @@ fn add_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) -> bool {
 
 fn same_asset_path(left: &Path, right: &Path) -> bool {
     if cfg!(windows) {
-        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
     } else {
         left == right
     }
 }
 
 fn move_path_entry(paths: &mut [PathBuf], index: i32, delta: i32) -> bool {
-    if index < 0 { return false; }
-    let Some(target) = index.checked_add(delta) else { return false; };
-    if target < 0 { return false; }
+    if index < 0 {
+        return false;
+    }
+    let Some(target) = index.checked_add(delta) else {
+        return false;
+    };
+    if target < 0 {
+        return false;
+    }
     let index = index as usize;
     let target = target as usize;
-    if index >= paths.len() || target >= paths.len() { return false; }
+    if index >= paths.len() || target >= paths.len() {
+        return false;
+    }
     paths.swap(index, target);
     true
 }
 
 fn remove_path_entry(paths: &mut Vec<PathBuf>, index: i32) -> bool {
-    if index < 0 || index as usize >= paths.len() { return false; }
+    if index < 0 || index as usize >= paths.len() {
+        return false;
+    }
     paths.remove(index as usize);
     true
 }
@@ -1625,31 +2049,51 @@ fn remove_path_entry(paths: &mut Vec<PathBuf>, index: i32) -> bool {
 fn wire_docs(ui: &MainWindow) {
     let weak = ui.as_weak();
     ui.on_open_docs(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         show_doc_page(&ui, 0);
         ui.set_docs_visible(true);
     });
 
     let weak = ui.as_weak();
     ui.on_docs_navigate(move |action| {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let current = ui.get_doc_page().max(1) as usize - 1;
-        let next = match action { 0 => 0, -1 => current.saturating_sub(1), 1 => (current + 1).min(DOC_PAGES.len().saturating_sub(1)), 2 => DOC_PAGES.len().saturating_sub(1), _ => current };
+        let next = match action {
+            0 => 0,
+            -1 => current.saturating_sub(1),
+            1 => (current + 1).min(DOC_PAGES.len().saturating_sub(1)),
+            2 => DOC_PAGES.len().saturating_sub(1),
+            _ => current,
+        };
         show_doc_page(&ui, next);
     });
 
     let weak = ui.as_weak();
     ui.on_docs_open_github(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let index = ui.get_doc_page().max(1) as usize - 1;
-        if let Some(page) = DOC_PAGES.get(index) { let _ = open_external(page.github); }
+        if let Some(page) = DOC_PAGES.get(index) {
+            let _ = open_external(page.github);
+        }
     });
 
     let weak = ui.as_weak();
     ui.on_docs_open_video(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         let index = ui.get_doc_page().max(1) as usize - 1;
-        if let Some(page) = DOC_PAGES.get(index) { if !page.video.is_empty() { let _ = open_external(page.video); } }
+        if let Some(page) = DOC_PAGES.get(index) {
+            if !page.video.is_empty() {
+                let _ = open_external(page.video);
+            }
+        }
     });
 }
 
@@ -1670,7 +2114,9 @@ fn wire_blender(ui: &MainWindow, state: SharedState) {
 
     let weak = ui.as_weak();
     ui.on_blender_prompt_later(move || {
-        let Some(ui) = weak.upgrade() else { return; };
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
         ui.set_blender_prompt_visible(false);
         ui.set_blender_translator_prompted(true);
         persist_settings_snapshot(&ui, &state);
@@ -1706,7 +2152,9 @@ fn refresh_blender_status(weak: slint::Weak<MainWindow>, allow_prompt: bool) {
 }
 
 fn start_blender_install(weak: slint::Weak<MainWindow>, state: SharedState, from_prompt: bool) {
-    let Some(ui) = weak.upgrade() else { return; };
+    let Some(ui) = weak.upgrade() else {
+        return;
+    };
     if from_prompt {
         ui.set_blender_prompt_visible(false);
         ui.set_blender_translator_prompted(true);
@@ -1715,7 +2163,13 @@ fn start_blender_install(weak: slint::Weak<MainWindow>, state: SharedState, from
     ui.set_task_active(true);
     ui.set_task_progress(0.1);
     ui.set_task_title("BLENDER ADD-ON".into());
-    ui.set_task_detail(format!("Installing embedded Minesport translator {}…", blender::TRANSLATOR_VERSION).into());
+    ui.set_task_detail(
+        format!(
+            "Installing embedded Minesport translator {}…",
+            blender::TRANSLATOR_VERSION
+        )
+        .into(),
+    );
     drop(ui);
 
     thread::spawn(move || {
@@ -1727,9 +2181,18 @@ fn start_blender_install(weak: slint::Weak<MainWindow>, state: SharedState, from
                     ui.set_task_active(false);
                     ui.set_task_progress(1.0);
                     ui.set_task_title("BLENDER ADD-ON INSTALLED".into());
-                    ui.set_task_detail(format!("Updated {} Blender profile(s)", report.installed_profiles.len()).into());
+                    ui.set_task_detail(
+                        format!(
+                            "Updated {} Blender profile(s)",
+                            report.installed_profiles.len()
+                        )
+                        .into(),
+                    );
                     for profile in report.installed_profiles {
-                        append_diagnostic(&ui, &format!("Blender translator installed: {}", profile.display()));
+                        append_diagnostic(
+                            &ui,
+                            &format!("Blender translator installed: {}", profile.display()),
+                        );
                     }
                     if from_prompt {
                         ui.set_blender_export(true);
@@ -1740,7 +2203,10 @@ fn start_blender_install(weak: slint::Weak<MainWindow>, state: SharedState, from
                     ui.set_task_active(false);
                     ui.set_task_title("BLENDER INSTALL FAILED".into());
                     ui.set_task_detail(error.to_string().into());
-                    append_diagnostic(&ui, &format!("Blender translator installation failed: {error:#}"));
+                    append_diagnostic(
+                        &ui,
+                        &format!("Blender translator installation failed: {error:#}"),
+                    );
                 }
             }
 
@@ -1751,11 +2217,17 @@ fn start_blender_install(weak: slint::Weak<MainWindow>, state: SharedState, from
                 }
                 Err(error) => {
                     ui.set_blender_translator_current(false);
-                    ui.set_blender_translator_status(format!(
-                        "Blender translator {}: ✕ status check failed",
-                        blender::TRANSLATOR_VERSION
-                    ).into());
-                    append_diagnostic(&ui, &format!("Blender translator status refresh failed: {error:#}"));
+                    ui.set_blender_translator_status(
+                        format!(
+                            "Blender translator {}: ✕ status check failed",
+                            blender::TRANSLATOR_VERSION
+                        )
+                        .into(),
+                    );
+                    append_diagnostic(
+                        &ui,
+                        &format!("Blender translator status refresh failed: {error:#}"),
+                    );
                 }
             }
         });
@@ -1776,7 +2248,9 @@ fn pump_engine_events(
         let mut pending_logs: Vec<String> = Vec::with_capacity(64);
         loop {
             match events.recv_timeout(Duration::from_millis(100)) {
-                Ok(EngineEvent::Started { pid, process }) => pending_logs.push(format!("Started Minesport backend (PID {pid}) with {process}")),
+                Ok(EngineEvent::Started { pid, process }) => pending_logs.push(format!(
+                    "Started Minesport backend (PID {pid}) with {process}"
+                )),
                 Ok(EngineEvent::Stderr(line)) => pending_logs.push(format!("[backend] {line}")),
                 Ok(EngineEvent::ReadEnded(message)) => {
                     flush_logs(&weak, &mut pending_logs);
@@ -1786,8 +2260,12 @@ fn pump_engine_events(
                         ui.set_engine_status("ENGINE RESTARTING".into());
                         ui.set_task_completing(false);
                         ui.set_task_active(false);
-                        if ui.get_map_loading() { ui.set_map_loading(false); }
-                        if ui.get_preview_loading() { ui.set_preview_loading(false); }
+                        if ui.get_map_loading() {
+                            ui.set_map_loading(false);
+                        }
+                        if ui.get_preview_loading() {
+                            ui.set_preview_loading(false);
+                        }
                         ui.set_task_title("ENGINE RESTARTING".into());
                         ui.set_task_detail("Previous engine operation was interrupted".into());
                         append_diagnostic(&ui, &first_message);
@@ -1817,7 +2295,8 @@ fn pump_engine_events(
                                 }
                             },
                             Err(error) => {
-                                last_error = format!("restart attempt {} failed: {error:#}", attempt + 1);
+                                last_error =
+                                    format!("restart attempt {} failed: {error:#}", attempt + 1);
                             }
                         }
                     }
@@ -1841,14 +2320,19 @@ fn pump_engine_events(
                 Ok(EngineEvent::Response(response)) => {
                     if response.kind == "log" {
                         pending_logs.push(response.message);
-                        if pending_logs.len() >= 96 { flush_logs(&weak, &mut pending_logs); }
+                        if pending_logs.len() >= 96 {
+                            flush_logs(&weak, &mut pending_logs);
+                        }
                     } else {
                         flush_logs(&weak, &mut pending_logs);
                         apply_response(&weak, response, state.clone());
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => flush_logs(&weak, &mut pending_logs),
-                Err(RecvTimeoutError::Disconnected) => { flush_logs(&weak, &mut pending_logs); break; }
+                Err(RecvTimeoutError::Disconnected) => {
+                    flush_logs(&weak, &mut pending_logs);
+                    break;
+                }
             }
         }
     });
@@ -1859,15 +2343,32 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         if !response_world_matches_current(&response, &state) {
             let requested = response.client_world_path.clone();
             let _ = weak.clone().upgrade_in_event_loop(move |ui| {
-                append_diagnostic(&ui, &format!("Ignored stale heightmap response for previous world: {requested}"));
+                append_diagnostic(
+                    &ui,
+                    &format!("Ignored stale heightmap response for previous world: {requested}"),
+                );
             });
             return;
         }
         let requested_world = PathBuf::from(response.client_world_path.clone());
         let decoded = decode_heightmap_payload(&response.image);
-        let bounds = (response.min_x, response.min_z, response.max_x, response.max_z, response.scale);
+        let bounds = (
+            response.min_x,
+            response.min_z,
+            response.max_x,
+            response.max_z,
+            response.scale,
+        );
         let cache_note = match &decoded {
-            Ok((_, png)) => match heightmap_cache::save(&requested_world, png, bounds.0, bounds.1, bounds.2, bounds.3, bounds.4) {
+            Ok((_, png)) => match heightmap_cache::save(
+                &requested_world,
+                png,
+                bounds.0,
+                bounds.1,
+                bounds.2,
+                bounds.3,
+                bounds.4,
+            ) {
                 Ok(()) => Some("2D map cached for the next launch".to_string()),
                 Err(error) => Some(format!("[WARN] Could not cache 2D map: {error:#}")),
             },
@@ -1877,18 +2378,25 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
             ui.set_map_loading(false);
             match decoded {
                 Ok((raster, _)) => {
-                    apply_map_raster(&ui, raster, bounds.0, bounds.1, bounds.2, bounds.3, bounds.4);
+                    apply_map_raster(
+                        &ui, raster, bounds.0, bounds.1, bounds.2, bounds.3, bounds.4,
+                    );
                     ui.set_task_title("MAP READY".into());
-                    ui.set_task_detail(format!(
-                        "X {}..{} · Z {}..{} · scale {}",
-                        bounds.0,
-                        bounds.2.saturating_sub(1),
-                        bounds.1,
-                        bounds.3.saturating_sub(1),
-                        bounds.4,
-                    ).into());
+                    ui.set_task_detail(
+                        format!(
+                            "X {}..{} · Z {}..{} · scale {}",
+                            bounds.0,
+                            bounds.2.saturating_sub(1),
+                            bounds.1,
+                            bounds.3.saturating_sub(1),
+                            bounds.4,
+                        )
+                        .into(),
+                    );
                     append_diagnostic(&ui, "IPC <- heightmap");
-                    if let Some(note) = cache_note { append_diagnostic(&ui, &note); }
+                    if let Some(note) = cache_note {
+                        append_diagnostic(&ui, &note);
+                    }
                 }
                 Err(error) => {
                     ui.set_map_available(false);
@@ -1925,7 +2433,13 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                             ui.set_task_active(false);
                             ui.set_task_progress(1.0);
                             ui.set_task_title("PREFLIGHT READY".into());
-                            ui.set_task_detail(format!("{count} solid blocks · {} unique block IDs", summary.unique_ids).into());
+                            ui.set_task_detail(
+                                format!(
+                                    "{count} solid blocks · {} unique block IDs",
+                                    summary.unique_ids
+                                )
+                                .into(),
+                            );
                             ui.set_preflight_summary(summary.compact.clone().into());
                             append_diagnostic(&ui, &summary.diagnostics);
                         }
@@ -1977,7 +2491,12 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                 let _ = fs::remove_file(&path);
                 let other = other.to_string();
                 let _ = weak.upgrade_in_event_loop(move |ui| {
-                    append_diagnostic(&ui, &format!("Discarded block-list response with unknown client purpose: {other}"));
+                    append_diagnostic(
+                        &ui,
+                        &format!(
+                            "Discarded block-list response with unknown client purpose: {other}"
+                        ),
+                    );
                 });
             }
         }
@@ -1997,7 +2516,9 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                 let detail = if kind == "done" {
                     format!("Background {purpose} for previous world completed: {requested}")
                 } else {
-                    format!("Background {purpose} for previous world failed: {requested} · {message}")
+                    format!(
+                        "Background {purpose} for previous world failed: {requested} · {message}"
+                    )
                 };
                 append_diagnostic(&ui, &detail);
             }
@@ -2005,53 +2526,77 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
         return;
     }
 
-    let _ = weak.clone().upgrade_in_event_loop(move |ui| match response.kind.as_str() {
-        "workerInfo" => append_diagnostic(&ui, &format!("[backend] {}", response.message)),
-        "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
-        "pong" => {
-            ui.set_engine_ready(true);
-            ui.set_engine_status("ENGINE READY".into());
-            ui.set_task_title("READY".into());
-            ui.set_task_detail("Ready".into());
-            append_diagnostic(&ui, "IPC <- pong");
-        }
-        "progress" => {
-            ui.set_task_active(true);
-            // Percent 0 is the engine's indeterminate sentinel. Keep the
-            // last real value so phase announcements cannot rewind the bar.
-            if response.percent > 0 {
-                let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
-                ui.set_task_progress(if ui.get_task_title() == "EXPORT" { progress.min(0.99) } else { progress });
+    let _ = weak
+        .clone()
+        .upgrade_in_event_loop(move |ui| match response.kind.as_str() {
+            "workerInfo" => {
+                let message = response.message.clone();
+                append_diagnostic(&ui, &format!("[backend] {message}"));
+                if response.percent > 0 {
+                    ui.set_engine_ready(false);
+                    ui.set_engine_status("ENGINE STARTING".into());
+                    ui.set_task_active(true);
+                    ui.set_task_progress((response.percent.clamp(0, 100) as f32) / 100.0);
+                    ui.set_task_title("ENGINE STARTING".into());
+                    ui.set_task_detail(message.into());
+                }
             }
-            ui.set_task_detail(response.message.into());
-        }
-        "done" => {
-            let detail = format!(
-                "{} · {} blocks · {} faces · {} vertices",
-                response.output,
-                response.block_count,
-                response.quad_count,
-                response.vertex_count
-            );
-            ui.set_task_active(true);
-            ui.set_task_progress(0.99);
-            ui.set_task_title("EXPORT".into());
-            ui.set_task_detail("Backend complete · finishing animation".into());
-            ui.set_task_completion_detail(detail.into());
-            ui.set_task_completing(true);
-            append_diagnostic(&ui, &format!("IPC <- done · {}", response.output));
-        }
-        "error" => {
-            ui.set_task_completing(false);
-            ui.set_task_active(false);
-            if ui.get_map_loading() { ui.set_map_loading(false); }
-            if ui.get_preview_loading() { ui.set_preview_loading(false); }
-            ui.set_task_title("ENGINE OPERATION FAILED".into());
-            ui.set_task_detail(response.message.clone().into());
-            append_diagnostic(&ui, &format!("[ERROR] {}", response.message));
-        }
-        other => append_diagnostic(&ui, &format!("IPC <- {other}")),
-    });
+            "info" => append_diagnostic(&ui, &format!("Engine version: {}", response.version)),
+            "pong" => {
+                ui.set_engine_ready(true);
+                ui.set_engine_status("ENGINE READY".into());
+                ui.set_task_completing(false);
+                ui.set_task_active(false);
+                ui.set_task_progress(1.0);
+                ui.set_task_title("READY".into());
+                ui.set_task_detail("Ready".into());
+                append_diagnostic(&ui, "IPC <- pong");
+            }
+            "progress" => {
+                ui.set_task_active(true);
+                // Percent 0 is the engine's indeterminate sentinel. Keep the
+                // last real value so phase announcements cannot rewind the bar.
+                if response.percent > 0 {
+                    let progress = (response.percent.clamp(0, 100) as f32) / 100.0;
+                    ui.set_task_progress(if ui.get_task_title() == "EXPORT" {
+                        progress.min(0.99)
+                    } else {
+                        progress
+                    });
+                }
+                ui.set_task_detail(response.message.into());
+            }
+            "done" => {
+                let detail = format!(
+                    "{} · {} blocks · {} faces · {} vertices",
+                    response.output,
+                    response.block_count,
+                    response.quad_count,
+                    response.vertex_count
+                );
+                ui.set_task_active(true);
+                ui.set_task_progress(0.99);
+                ui.set_task_title("EXPORT".into());
+                ui.set_task_detail("Backend complete · finishing animation".into());
+                ui.set_task_completion_detail(detail.into());
+                ui.set_task_completing(true);
+                append_diagnostic(&ui, &format!("IPC <- done · {}", response.output));
+            }
+            "error" => {
+                ui.set_task_completing(false);
+                ui.set_task_active(false);
+                if ui.get_map_loading() {
+                    ui.set_map_loading(false);
+                }
+                if ui.get_preview_loading() {
+                    ui.set_preview_loading(false);
+                }
+                ui.set_task_title("ENGINE OPERATION FAILED".into());
+                ui.set_task_detail(response.message.clone().into());
+                append_diagnostic(&ui, &format!("[ERROR] {}", response.message));
+            }
+            other => append_diagnostic(&ui, &format!("IPC <- {other}")),
+        });
 }
 
 fn response_world_matches_current(response: &Response, state: &SharedState) -> bool {
@@ -2059,17 +2604,22 @@ fn response_world_matches_current(response: &Response, state: &SharedState) -> b
         return false;
     }
     let response_world = Path::new(&response.client_world_path);
-    state.lock().ok()
+    state
+        .lock()
+        .ok()
         .and_then(|guard| guard.selected_world.clone())
         .is_some_and(|selected| same_asset_path(&selected, response_world))
 }
 
 fn response_has_stale_world_target(response: &Response, state: &SharedState) -> bool {
-    !response.client_world_path.trim().is_empty() && !response_world_matches_current(response, state)
+    !response.client_world_path.trim().is_empty()
+        && !response_world_matches_current(response, state)
 }
 
 #[derive(Debug, Deserialize)]
-struct PreflightBlock { id: String }
+struct PreflightBlock {
+    id: String,
+}
 
 struct PreflightSummary {
     unique_ids: usize,
@@ -2103,9 +2653,15 @@ impl<'de> serde::de::Visitor<'de> for PreflightVisitor {
         while let Some(block) = sequence.next_element::<PreflightBlock>()? {
             let id = block.id;
             stats.total = stats.total.saturating_add(1);
-            if looks_transparent(&id) { stats.transparent = stats.transparent.saturating_add(1); }
-            if looks_shape_heavy(&id) { stats.shape_heavy = stats.shape_heavy.saturating_add(1); }
-            if looks_cube_like(&id) { stats.cube_like = stats.cube_like.saturating_add(1); }
+            if looks_transparent(&id) {
+                stats.transparent = stats.transparent.saturating_add(1);
+            }
+            if looks_shape_heavy(&id) {
+                stats.shape_heavy = stats.shape_heavy.saturating_add(1);
+            }
+            if looks_cube_like(&id) {
+                stats.cube_like = stats.cube_like.saturating_add(1);
+            }
             *stats.counts.entry(id).or_default() += 1;
         }
         Ok(stats)
@@ -2121,30 +2677,67 @@ fn read_preflight_stats<R: std::io::Read>(reader: R) -> Result<PreflightStats> {
 fn analyze_preflight(path: &Path) -> Result<PreflightSummary> {
     let file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let stats = read_preflight_stats(std::io::BufReader::new(file))?;
-    let PreflightStats { counts, total: block_count, transparent, shape_heavy, cube_like } = stats;
+    let PreflightStats {
+        counts,
+        total: block_count,
+        transparent,
+        shape_heavy,
+        cube_like,
+    } = stats;
     let mut common: Vec<_> = counts.iter().collect();
     common.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-    let top = common.iter().take(5).map(|(id, count)| format!("{id} × {count}")).collect::<Vec<_>>().join(" · ");
+    let top = common
+        .iter()
+        .take(5)
+        .map(|(id, count)| format!("{id} × {count}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
     let total = block_count.max(1);
-    let compact = format!("{} blocks · {} IDs · {} transparent/cutout · {} shape-heavy", block_count, counts.len(), transparent, shape_heavy);
+    let compact = format!(
+        "{} blocks · {} IDs · {} transparent/cutout · {} shape-heavy",
+        block_count,
+        counts.len(),
+        transparent,
+        shape_heavy
+    );
     let diagnostics = format!(
         "Preflight diagnostics:\nSolid blocks: {}\nUnique block states/types: {}\nGeometry upper bound before culling/FLATTER: ~{} faces · ~{} vertices\nMost common: {}\nCube-like IDs: {} ({:.1}%)\nTransparent/cutout-like IDs: {} ({:.1}%)\nShape-heavy IDs: {} ({:.1}%)\nExact faces saved are reported only after Java geometry compilation.",
-        block_count, counts.len(), block_count.saturating_mul(6), block_count.saturating_mul(24), if top.is_empty() { "—" } else { &top },
-        cube_like, cube_like as f64 * 100.0 / total as f64,
-        transparent, transparent as f64 * 100.0 / total as f64,
-        shape_heavy, shape_heavy as f64 * 100.0 / total as f64,
+        block_count,
+        counts.len(),
+        block_count.saturating_mul(6),
+        block_count.saturating_mul(24),
+        if top.is_empty() { "—" } else { &top },
+        cube_like,
+        cube_like as f64 * 100.0 / total as f64,
+        transparent,
+        transparent as f64 * 100.0 / total as f64,
+        shape_heavy,
+        shape_heavy as f64 * 100.0 / total as f64,
     );
-    Ok(PreflightSummary { unique_ids: counts.len(), compact, diagnostics })
+    Ok(PreflightSummary {
+        unique_ids: counts.len(),
+        compact,
+        diagnostics,
+    })
 }
 
 fn looks_transparent(id: &str) -> bool {
     let value = id.to_ascii_lowercase();
-    ["glass", "leaves", "water", "ice", "pane", "door", "trapdoor", "flower", "grass", "vine"].iter().any(|needle| value.contains(needle))
+    [
+        "glass", "leaves", "water", "ice", "pane", "door", "trapdoor", "flower", "grass", "vine",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
 }
 
 fn looks_shape_heavy(id: &str) -> bool {
     let value = id.to_ascii_lowercase();
-    ["stair", "slab", "fence", "wall", "chair", "bench", "table", "chest", "rail", "bed", "lantern"].iter().any(|needle| value.contains(needle))
+    [
+        "stair", "slab", "fence", "wall", "chair", "bench", "table", "chest", "rail", "bed",
+        "lantern",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
 }
 
 fn looks_cube_like(id: &str) -> bool {
@@ -2158,21 +2751,41 @@ struct DecodedRaster {
 }
 
 fn decode_png(bytes: &[u8]) -> Result<DecodedRaster> {
-    let rgba = image::load_from_memory(bytes).context("decode heightmap PNG")?.into_rgba8();
+    let rgba = image::load_from_memory(bytes)
+        .context("decode heightmap PNG")?
+        .into_rgba8();
     let width = rgba.width();
     let height = rgba.height();
-    Ok(DecodedRaster { rgba: rgba.into_raw(), width, height })
+    Ok(DecodedRaster {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    })
 }
 
 fn decode_heightmap_payload(encoded: &str) -> Result<(DecodedRaster, Vec<u8>)> {
-    if encoded.is_empty() { return Err(anyhow!("heightmap response did not contain PNG data")); }
+    if encoded.is_empty() {
+        return Err(anyhow!("heightmap response did not contain PNG data"));
+    }
     let bytes = BASE64.decode(encoded).context("decode heightmap base64")?;
     let raster = decode_png(&bytes)?;
     Ok((raster, bytes))
 }
 
-fn apply_map_raster(ui: &MainWindow, raster: DecodedRaster, min_x: i32, min_z: i32, max_x: i32, max_z: i32, scale: i32) {
-    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&raster.rgba, raster.width, raster.height);
+fn apply_map_raster(
+    ui: &MainWindow,
+    raster: DecodedRaster,
+    min_x: i32,
+    min_z: i32,
+    max_x: i32,
+    max_z: i32,
+    scale: i32,
+) {
+    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+        &raster.rgba,
+        raster.width,
+        raster.height,
+    );
     ui.set_map_image(Image::from_rgba8(buffer));
     ui.set_map_loading(false);
     ui.set_map_available(true);
@@ -2190,20 +2803,30 @@ fn apply_map_raster(ui: &MainWindow, raster: DecodedRaster, min_x: i32, min_z: i
 }
 
 fn flush_logs(weak: &slint::Weak<MainWindow>, logs: &mut Vec<String>) {
-    if logs.is_empty() { return; }
+    if logs.is_empty() {
+        return;
+    }
     let batch = logs.join("\n");
     logs.clear();
-    let _ = weak.clone().upgrade_in_event_loop(move |ui| append_diagnostic(&ui, &batch));
+    let _ = weak
+        .clone()
+        .upgrade_in_event_loop(move |ui| append_diagnostic(&ui, &batch));
 }
 
 fn append_diagnostic(ui: &MainWindow, line: &str) {
     diagnostics::append(line);
     let current = ui.get_diagnostics().to_string();
-    let mut combined = if current.is_empty() { line.to_string() } else { format!("{current}\n{line}") };
+    let mut combined = if current.is_empty() {
+        line.to_string()
+    } else {
+        format!("{current}\n{line}")
+    };
     const MAX_BYTES: usize = 64 * 1024;
     if combined.len() > MAX_BYTES {
         let mut start = combined.len() - MAX_BYTES;
-        while !combined.is_char_boundary(start) { start += 1; }
+        while !combined.is_char_boundary(start) {
+            start += 1;
+        }
         combined = format!("… older diagnostics trimmed …\n{}", &combined[start..]);
     }
     ui.set_diagnostics(combined.into());
@@ -2211,8 +2834,12 @@ fn append_diagnostic(ui: &MainWindow, line: &str) {
 }
 
 fn add_bubble_fields(ui: &MainWindow, request: &mut Value) {
-    if ui.get_selection_mode() != 1 { return; }
-    let Some(object) = request.as_object_mut() else { return; };
+    if ui.get_selection_mode() != 1 {
+        return;
+    }
+    let Some(object) = request.as_object_mut() else {
+        return;
+    };
     object.insert("centerX".to_string(), json!(ui.get_center_x()));
     object.insert("centerY".to_string(), json!(ui.get_center_y()));
     object.insert("centerZ".to_string(), json!(ui.get_center_z()));
@@ -2223,15 +2850,31 @@ fn add_bubble_fields(ui: &MainWindow, request: &mut Value) {
 
 fn asset_paths(state: &SharedState) -> (String, String) {
     let guard = state.lock().expect("asset state");
-    let join = |paths: &[PathBuf]| paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(";");
+    let join = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";")
+    };
     (join(&guard.resource_packs), join(&guard.data_packs))
 }
 
-fn selected_runtime_context(state: &SharedState, ui: &MainWindow, world: &Path) -> (String, String, PathBuf) {
+fn selected_runtime_context(
+    state: &SharedState,
+    ui: &MainWindow,
+    world: &Path,
+) -> (String, String, PathBuf) {
     if let Ok(guard) = state.lock() {
         if guard.selected_world.as_deref() == Some(world) {
-            let version = guard.selected_version.clone().filter(|value| !value.trim().is_empty() && value != "?");
-            let loader = guard.selected_loader.clone().filter(|value| !value.trim().is_empty());
+            let version = guard
+                .selected_version
+                .clone()
+                .filter(|value| !value.trim().is_empty() && value != "?");
+            let loader = guard
+                .selected_loader
+                .clone()
+                .filter(|value| !value.trim().is_empty());
             let mods = guard.selected_mods_path.clone();
             if let (Some(version), Some(loader), Some(mods)) = (version, loader, mods) {
                 return (version, normalize_loader(&loader), mods);
@@ -2257,23 +2900,50 @@ fn show_doc_page(ui: &MainWindow, index: usize) {
 }
 
 fn open_external(url: &str) -> Result<()> {
-    if !url.starts_with("https://") { return Err(anyhow!("only https URLs may be opened")); }
-    #[cfg(windows)] { Command::new("cmd").args(["/C", "start", "", url]).spawn().context("open URL")?; }
-    #[cfg(target_os = "macos")] { Command::new("open").arg(url).spawn().context("open URL")?; }
-    #[cfg(all(unix, not(target_os = "macos")))] { Command::new("xdg-open").arg(url).spawn().context("open URL")?; }
+    if !url.starts_with("https://") {
+        return Err(anyhow!("only https URLs may be opened"));
+    }
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .context("open URL")?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn().context("open URL")?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .context("open URL")?;
+    }
     Ok(())
 }
 
-fn bool_text(value: bool) -> &'static str { if value { "true" } else { "false" } }
+fn bool_text(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
 
 fn normalize_loader(value: &str) -> String {
     let loader = value.trim().to_ascii_lowercase();
-    if loader.is_empty() || loader == "—" { "fabric".to_string() } else { loader }
+    if loader.is_empty() || loader == "—" {
+        "fabric".to_string()
+    } else {
+        loader
+    }
 }
 
 fn runtime_registry_supported(loader: &str, version: &str, mods_path: &Path) -> bool {
-    let Some(family) = BridgeFamily::parse(loader) else { return false; };
-    if !mods_path.is_dir() { return false; }
+    let Some(family) = BridgeFamily::parse(loader) else {
+        return false;
+    };
+    if !mods_path.is_dir() {
+        return false;
+    }
     match family {
         BridgeFamily::Fabric => bridge_compat::is_supported(version),
         _ => bridge_family::is_supported(family, version),
@@ -2285,26 +2955,42 @@ fn runtime_registry_unavailable_reason(loader: &str, version: &str, mods_path: &
         return format!("STATIC RESOLVER · unsupported loader: {loader}");
     };
     if !mods_path.is_dir() {
-        return format!("STATIC RESOLVER · mods folder unavailable: {}", mods_path.display());
+        return format!(
+            "STATIC RESOLVER · mods folder unavailable: {}",
+            mods_path.display()
+        );
     }
     let supported = match family {
         BridgeFamily::Fabric => bridge_compat::is_supported(version),
         _ => bridge_family::is_supported(family, version),
     };
     if !supported {
-        return format!("STATIC RESOLVER · no embedded {} runtime recipe for Minecraft {version}", family.label());
+        return format!(
+            "STATIC RESOLVER · no embedded {} runtime recipe for Minecraft {version}",
+            family.label()
+        );
     }
     "STATIC RESOLVER · runtime registry unavailable".to_string()
 }
 
 fn output_directory(ui: &MainWindow) -> PathBuf {
     let selected = ui.get_output_path().to_string();
-    if !selected.trim().is_empty() { return PathBuf::from(selected); }
-    std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("Minesport_Exports")
+    if !selected.trim().is_empty() {
+        return PathBuf::from(selected);
+    }
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Minesport_Exports")
 }
 
 fn infer_mods_path(world: &Path) -> PathBuf {
-    world.parent().and_then(Path::parent).map(|minecraft| minecraft.join("mods")).unwrap_or_else(|| world.join("mods"))
+    world
+        .parent()
+        .and_then(Path::parent)
+        .map(|minecraft| minecraft.join("mods"))
+        .unwrap_or_else(|| world.join("mods"))
 }
 
 fn detect_loader(world: &Path) -> String {
@@ -2313,10 +2999,18 @@ fn detect_loader(world: &Path) -> String {
         if let Ok(entries) = fs::read_dir(&mods) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-                if name.contains("fabric") || name.contains("sodium") || name.contains("lithium") { return "Fabric".to_string(); }
-                if name.contains("neoforge") { return "NeoForge".to_string(); }
-                if name.contains("forge") { return "Forge".to_string(); }
-                if name.contains("quilt") { return "Quilt".to_string(); }
+                if name.contains("fabric") || name.contains("sodium") || name.contains("lithium") {
+                    return "Fabric".to_string();
+                }
+                if name.contains("neoforge") {
+                    return "NeoForge".to_string();
+                }
+                if name.contains("forge") {
+                    return "Forge".to_string();
+                }
+                if name.contains("quilt") {
+                    return "Quilt".to_string();
+                }
             }
         }
     }
@@ -2327,7 +3021,9 @@ fn detect_minecraft_version(world: &Path) -> Option<String> {
     for component in world.components().rev() {
         let value = component.as_os_str().to_string_lossy();
         for token in value.split(|ch: char| !(ch.is_ascii_digit() || ch == '.')) {
-            if looks_like_minecraft_version(token) { return Some(token.to_string()); }
+            if looks_like_minecraft_version(token) {
+                return Some(token.to_string());
+            }
         }
     }
     None
@@ -2335,22 +3031,41 @@ fn detect_minecraft_version(world: &Path) -> Option<String> {
 
 fn looks_like_minecraft_version(value: &str) -> bool {
     let parts: Vec<&str> = value.split('.').collect();
-    if parts.len() < 2 || parts.len() > 3 || parts.iter().any(|part| part.is_empty() || !part.chars().all(|c| c.is_ascii_digit())) { return false; }
+    if parts.len() < 2
+        || parts.len() > 3
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()))
+    {
+        return false;
+    }
     parts[0] == "1" || parts[0].parse::<u32>().is_ok_and(|major| major >= 20)
 }
 
 fn sanitize_export_name(value: &str) -> String {
-    let cleaned: String = value.trim().chars().map(|ch| match ch {
-        '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
-        ch if ch.is_control() => '_',
-        _ => ch,
-    }).collect();
+    let cleaned: String = value
+        .trim()
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            _ => ch,
+        })
+        .collect();
     let cleaned = cleaned.trim_matches([' ', '.']);
-    if cleaned.is_empty() { "Minesport_Export".to_string() } else { cleaned.to_string() }
+    if cleaned.is_empty() {
+        "Minesport_Export".to_string()
+    } else {
+        cleaned.to_string()
+    }
 }
 
-fn short_hash(value: &str) -> &str { value.get(..12).unwrap_or(value) }
-fn first_line(value: &str) -> &str { value.lines().next().unwrap_or(value) }
+fn short_hash(value: &str) -> &str {
+    value.get(..12).unwrap_or(value)
+}
+fn first_line(value: &str) -> &str {
+    value.lines().next().unwrap_or(value)
+}
 
 #[cfg(test)]
 mod tests {
@@ -2370,8 +3085,14 @@ mod tests {
 
     #[test]
     fn next_export_path_skips_existing_suffixes() {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("minesport-export-path-{}-{stamp}", std::process::id()));
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "minesport-export-path-{}-{stamp}",
+            std::process::id()
+        ));
         fs::create_dir_all(&root).unwrap();
         let base = root.join("scene.gltf");
         fs::write(&base, b"old").unwrap();
@@ -2416,9 +3137,16 @@ mod tests {
         assert!(bridge_compat::is_supported("26.2"));
         assert!(!bridge_compat::is_supported("1.5"));
         assert!(bridge_family::is_supported(BridgeFamily::Forge, "1.21.10"));
-        assert!(bridge_family::is_supported(BridgeFamily::NeoForge, "1.21.10"));
+        assert!(bridge_family::is_supported(
+            BridgeFamily::NeoForge,
+            "1.21.10"
+        ));
         assert!(bridge_family::is_supported(BridgeFamily::Quilt, "1.21.10"));
-        assert!(!runtime_registry_supported("unknown-loader", "1.21.10", Path::new("mods")));
+        assert!(!runtime_registry_supported(
+            "unknown-loader",
+            "1.21.10",
+            Path::new("mods")
+        ));
     }
 
     #[test]
@@ -2476,8 +3204,14 @@ mod tests {
     fn response_world_identity_rejects_previous_selection() {
         let state: SharedState = Arc::new(Mutex::new(AppState::default()));
         state.lock().unwrap().selected_world = Some(PathBuf::from("world-b"));
-        let current = Response { client_world_path: "world-b".into(), ..Response::default() };
-        let stale = Response { client_world_path: "world-a".into(), ..Response::default() };
+        let current = Response {
+            client_world_path: "world-b".into(),
+            ..Response::default()
+        };
+        let stale = Response {
+            client_world_path: "world-a".into(),
+            ..Response::default()
+        };
         let missing = Response::default();
         assert!(response_world_matches_current(&current, &state));
         assert!(!response_world_matches_current(&stale, &state));
@@ -2513,9 +3247,18 @@ mod tests {
             [-8, -4, -2],
             [8, 4, 2],
         );
-        assert_eq!(preview.get("clientPurpose").and_then(Value::as_str), Some("preview"));
-        assert_eq!(preflight.get("clientPurpose").and_then(Value::as_str), Some("preflight"));
-        assert_eq!(preview.get("command").and_then(Value::as_str), Some("listBlocks"));
+        assert_eq!(
+            preview.get("clientPurpose").and_then(Value::as_str),
+            Some("preview")
+        );
+        assert_eq!(
+            preflight.get("clientPurpose").and_then(Value::as_str),
+            Some("preflight")
+        );
+        assert_eq!(
+            preview.get("command").and_then(Value::as_str),
+            Some("listBlocks")
+        );
         assert_eq!(preview.get("minX").and_then(Value::as_i64), Some(-8));
         assert_eq!(preview.get("maxZ").and_then(Value::as_i64), Some(2));
     }
@@ -2524,7 +3267,10 @@ mod tests {
     fn asset_path_move_and_remove_preserve_priority() {
         let mut values = vec![PathBuf::from("A"), PathBuf::from("B"), PathBuf::from("C")];
         assert!(move_path_entry(&mut values, 1, -1));
-        assert_eq!(values, vec![PathBuf::from("B"), PathBuf::from("A"), PathBuf::from("C")]);
+        assert_eq!(
+            values,
+            vec![PathBuf::from("B"), PathBuf::from("A"), PathBuf::from("C")]
+        );
         assert!(remove_path_entry(&mut values, 1));
         assert_eq!(values, vec![PathBuf::from("B"), PathBuf::from("C")]);
     }

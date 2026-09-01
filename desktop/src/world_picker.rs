@@ -239,13 +239,17 @@ where
     let weak = picker.as_weak();
     let activate_state = state.clone();
     picker.on_activate(move |index| {
-        let Some(picker) = weak.upgrade() else { return; };
+        let Some(picker) = weak.upgrade() else {
+            return;
+        };
         let choice = activate_state
             .borrow()
             .visible
             .get(index.max(0) as usize)
             .copied();
-        let Some(choice) = choice else { return; };
+        let Some(choice) = choice else {
+            return;
+        };
 
         let mut navigated = false;
         {
@@ -280,7 +284,9 @@ where
     let weak = picker.as_weak();
     let search_state = state.clone();
     picker.on_search_edited(move |value| {
-        let Some(picker) = weak.upgrade() else { return; };
+        let Some(picker) = weak.upgrade() else {
+            return;
+        };
         search_state.borrow_mut().query = value.to_string();
         refresh(&picker, &search_state);
     });
@@ -288,7 +294,9 @@ where
     let weak = picker.as_weak();
     let back_state = state.clone();
     picker.on_go_back(move || {
-        let Some(picker) = weak.upgrade() else { return; };
+        let Some(picker) = weak.upgrade() else {
+            return;
+        };
         {
             let mut state = back_state.borrow_mut();
             match state.step {
@@ -344,11 +352,8 @@ fn refresh(picker: &LauncherWorldPicker, state: &Rc<RefCell<PickerState>>) {
     match state.step {
         Step::Launcher => {
             for (launcher_index, entry) in state.launchers.iter().enumerate() {
-                let searchable = format!(
-                    "{} {}",
-                    entry.launcher.name,
-                    entry.launcher.root.display()
-                );
+                let searchable =
+                    format!("{} {}", entry.launcher.name, entry.launcher.root.display());
                 if !matches_query(&searchable, &query) {
                     continue;
                 }
@@ -388,7 +393,11 @@ fn refresh(picker: &LauncherWorldPicker, state: &Rc<RefCell<PickerState>>) {
                             instance.version,
                             instance.loader.label(),
                             instance.worlds.len(),
-                            if instance.has_polymer { " · Polymer" } else { "" }
+                            if instance.has_polymer {
+                                " · Polymer"
+                            } else {
+                                ""
+                            }
                         )
                         .into(),
                     });
@@ -426,11 +435,7 @@ fn refresh(picker: &LauncherWorldPicker, state: &Rc<RefCell<PickerState>>) {
                     visible.push(Choice::World(world_index));
                 }
                 picker.set_breadcrumb(
-                    format!(
-                        "{}  ›  {}  ›  World",
-                        entry.launcher.name, instance.name
-                    )
-                    .into(),
+                    format!("{}  ›  {}  ›  World", entry.launcher.name, instance.name).into(),
                 );
                 empty_message = if instance.worlds.is_empty() {
                     "This instance has no discovered saves. Go back to choose another instance."
@@ -583,11 +588,9 @@ fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let day_of_era = z - era * 146_097;
     let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096)
-            / 365;
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let mut year = year_of_era + era * 400;
-    let day_of_year =
-        day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_prime = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };

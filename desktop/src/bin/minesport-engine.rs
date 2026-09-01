@@ -1,12 +1,6 @@
 #[allow(dead_code)]
-#[path = "../runtime.rs"]
-mod runtime;
-#[allow(dead_code)]
 #[path = "../diagnostics.rs"]
 mod diagnostics;
-#[allow(dead_code)]
-#[path = "../toolchain.rs"]
-mod toolchain;
 #[allow(dead_code)]
 #[path = "../engine_java.rs"]
 mod engine_java;
@@ -14,6 +8,12 @@ mod engine_java;
 #[cfg_attr(not(windows), allow(unused_imports))]
 #[path = "../ipc.rs"]
 mod ipc;
+#[allow(dead_code)]
+#[path = "../runtime.rs"]
+mod runtime;
+#[allow(dead_code)]
+#[path = "../toolchain.rs"]
+mod toolchain;
 
 use anyhow::{Result, bail};
 

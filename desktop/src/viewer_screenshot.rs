@@ -12,7 +12,10 @@ pub fn save_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<PathBuf> {
     }
     let expected = width as usize * height as usize * 4;
     if rgba.len() != expected {
-        bail!("viewport RGBA buffer has {} bytes; expected {expected}", rgba.len());
+        bail!(
+            "viewport RGBA buffer has {} bytes; expected {expected}",
+            rgba.len()
+        );
     }
 
     let directory = pictures_directory()?.join("Minesport");
@@ -73,7 +76,10 @@ mod tests {
     #[test]
     fn pictures_path_ends_in_pictures() {
         if let Ok(path) = pictures_directory() {
-            assert_eq!(path.file_name().and_then(|value| value.to_str()), Some("Pictures"));
+            assert_eq!(
+                path.file_name().and_then(|value| value.to_str()),
+                Some("Pictures")
+            );
         }
     }
 }

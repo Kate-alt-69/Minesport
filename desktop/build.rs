@@ -215,7 +215,10 @@ fn copy_tree(source: &Path, target: &Path) {
             copy_tree(&entry.path(), &destination);
         } else if kind.is_file() {
             fs::copy(entry.path(), &destination).unwrap_or_else(|error| {
-                panic!("copy recipe validation file {}: {error}", destination.display())
+                panic!(
+                    "copy recipe validation file {}: {error}",
+                    destination.display()
+                )
             });
         }
     }
@@ -296,7 +299,10 @@ fn replace_at(
         panic!("recipe {recipe} operation {index} has an invalid rename_at location");
     }
     let text = fs::read_to_string(file).unwrap_or_else(|error| {
-        panic!("recipe {recipe} operation {index} could not read {}: {error}", file.display())
+        panic!(
+            "recipe {recipe} operation {index} could not read {}: {error}",
+            file.display()
+        )
     });
     let mut offsets = vec![0usize];
     for (offset, byte) in text.bytes().enumerate() {
@@ -305,7 +311,10 @@ fn replace_at(
         }
     }
     let start_of_line = *offsets.get(line - 1).unwrap_or_else(|| {
-        panic!("recipe {recipe} operation {index}: line {line} does not exist in {}", file.display())
+        panic!(
+            "recipe {recipe} operation {index}: line {line} does not exist in {}",
+            file.display()
+        )
     });
     let start = start_of_line + column - 1;
     let line_end = text[start_of_line..]
@@ -327,7 +336,10 @@ fn replace_at(
     output.push_str(to);
     output.push_str(&text[start + from.len()..]);
     fs::write(file, output).unwrap_or_else(|error| {
-        panic!("recipe {recipe} operation {index} could not update {}: {error}", file.display())
+        panic!(
+            "recipe {recipe} operation {index} could not update {}: {error}",
+            file.display()
+        )
     });
 }
 
@@ -347,14 +359,19 @@ fn path_has_extension(path: &Path, extensions: &[String]) -> bool {
 
 fn replace_tree(root: &Path, extensions: &[String], from: &str, to: &str) {
     if !root.exists() {
-        panic!("compatibility recipe tree does not exist: {}", root.display());
+        panic!(
+            "compatibility recipe tree does not exist: {}",
+            root.display()
+        );
     }
-    for entry in fs::read_dir(root)
-        .unwrap_or_else(|error| panic!("read compatibility recipe tree {}: {error}", root.display()))
-    {
+    for entry in fs::read_dir(root).unwrap_or_else(|error| {
+        panic!("read compatibility recipe tree {}: {error}", root.display())
+    }) {
         let entry = entry.expect("read compatibility recipe entry");
         let path = entry.path();
-        let kind = entry.file_type().expect("read compatibility recipe entry type");
+        let kind = entry
+            .file_type()
+            .expect("read compatibility recipe entry type");
         if kind.is_symlink() {
             continue;
         }
@@ -370,7 +387,10 @@ fn replace_tree(root: &Path, extensions: &[String], from: &str, to: &str) {
         };
         if text.contains(from) {
             fs::write(&path, text.replace(from, to)).unwrap_or_else(|error| {
-                panic!("update compatibility recipe tree file {}: {error}", path.display())
+                panic!(
+                    "update compatibility recipe tree file {}: {error}",
+                    path.display()
+                )
             });
         }
     }
@@ -415,7 +435,10 @@ fn apply_recipe_validation_operation(
         "regex_replace" => {
             let file = workspace.join(safe_manifest_relative(&expand("file")));
             let text = fs::read_to_string(&file).unwrap_or_else(|error| {
-                panic!("recipe {recipe} operation {index} could not read {}: {error}", file.display())
+                panic!(
+                    "recipe {recipe} operation {index} could not read {}: {error}",
+                    file.display()
+                )
             });
             let pattern = expand("pattern");
             let replacement = expand("replacement");
@@ -428,10 +451,18 @@ fn apply_recipe_validation_operation(
                     file.display()
                 );
             }
-            fs::write(&file, expression.replace_all(&text, replacement.as_str()).as_bytes())
-                .unwrap_or_else(|error| {
-                    panic!("recipe {recipe} operation {index} could not update {}: {error}", file.display())
-                });
+            fs::write(
+                &file,
+                expression
+                    .replace_all(&text, replacement.as_str())
+                    .as_bytes(),
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "recipe {recipe} operation {index} could not update {}: {error}",
+                    file.display()
+                )
+            });
         }
         "replace_tree" | "rename_package" => {
             let root = workspace.join(safe_manifest_relative(&expand("root")));
@@ -506,11 +537,17 @@ fn apply_recipe_validation_operation(
             let target = workspace.join(safe_manifest_relative(&raw));
             if target.is_dir() {
                 fs::remove_dir_all(&target).unwrap_or_else(|error| {
-                    panic!("recipe {recipe} operation {index} could not delete {}: {error}", target.display())
+                    panic!(
+                        "recipe {recipe} operation {index} could not delete {}: {error}",
+                        target.display()
+                    )
                 });
             } else if target.exists() {
                 fs::remove_file(&target).unwrap_or_else(|error| {
-                    panic!("recipe {recipe} operation {index} could not delete {}: {error}", target.display())
+                    panic!(
+                        "recipe {recipe} operation {index} could not delete {}: {error}",
+                        target.display()
+                    )
                 });
             }
         }
@@ -553,10 +590,7 @@ fn validate_bridge_recipes(root: &Path, out: &Path) {
         ("loom_version", "1.17.18"),
     ]);
     let validation_root = out.join("bridge-recipe-validation");
-    reset_directory(
-        &validation_root,
-        "reset bridge recipe validation directory",
-    );
+    reset_directory(&validation_root, "reset bridge recipe validation directory");
 
     let staged = out.join("bridge-source");
     let mut recipes = recipes.into_iter().collect::<Vec<_>>();
@@ -595,8 +629,7 @@ fn validate_bridge_recipes(root: &Path, out: &Path) {
 }
 
 fn write_placeholder_runtime_assets(out: &Path, label: &[u8]) {
-    fs::write(out.join("minesport-engine.jar"), label)
-        .expect("write placeholder engine payload");
+    fs::write(out.join("minesport-engine.jar"), label).expect("write placeholder engine payload");
     for (_, _, _, embedded_name) in BUNDLED_EXPORT_WORKERS {
         fs::write(out.join(embedded_name), label)
             .unwrap_or_else(|error| panic!("write placeholder {embedded_name} payload: {error}"));
@@ -651,9 +684,8 @@ fn main() {
         return;
     }
 
-    let engine = find_engine_jar().expect(
-        "Minesport engine JAR not found. Build /engine first or set MINESPORT_ENGINE_JAR.",
-    );
+    let engine = find_engine_jar()
+        .expect("Minesport engine JAR not found. Build /engine first or set MINESPORT_ENGINE_JAR.");
     fs::copy(&engine, out.join("minesport-engine.jar"))
         .expect("embed Minesport engine JAR into Rust desktop build");
 
