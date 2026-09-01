@@ -167,7 +167,10 @@ pub fn apply_staged_update() -> Result<()> {
     let installed = installed_engine_state(&executable);
     match installed {
         LocalEngine::Valid(installed) if manifests_match(&installed, &stage.manifest) => {
-            discard_previous_engine(&executable);
+            // Keep one previous engine generation after a successful update.
+            // Hash/protocol validation proves the files are intact, but the new
+            // sidecar has not completed a real process/IPC startup yet. The next
+            // installer replacement may rotate this rollback generation.
             clear_staged_update(&stage);
             diagnostics::Logger::new("ENGINE").child("UPDATE").info(
                 "EngineStagedUpdateInstalled",
@@ -725,14 +728,6 @@ fn clear_staged_update(stage: &StagedEngineUpdate) {
         let _ = fs::remove_file(installer);
     }
     let _ = fs::remove_file(staged_update_path());
-}
-
-fn discard_previous_engine(desktop_executable: &Path) {
-    let Some(root) = desktop_executable.parent() else {
-        return;
-    };
-    let _ = fs::remove_file(root.join("minesport-engine.exe.prev"));
-    let _ = fs::remove_file(root.join("minesport-engine.json.prev"));
 }
 
 fn rollback_previous_engine(desktop_executable: &Path) {
