@@ -100,7 +100,7 @@ public class ResolverChain implements AutoCloseable {
         return MissingTexture.image();
     }
 
-    /** Resolve .png.mcmeta from the exact resolver that wins the PNG lookup. */
+    /** Resolve .png.mcmeta from the exact source that wins the PNG lookup. */
     public String resolveTextureMetadata(String texturePath) {
         String normalized = texturePath;
         String ns = normalized.contains(":") ? normalized.substring(0, normalized.indexOf(':')) : "minecraft";
@@ -111,15 +111,18 @@ public class ResolverChain implements AutoCloseable {
             if (img == null) continue;
             textureSources.put(texturePath, r.name());
 
-            String metadata = r.resolveTextureMetadata(normalized);
-            if (metadata == null && r instanceof VanillaResolver vanilla) {
-                metadata = AnimationAwareVanillaResolver.readFrom(vanilla, normalized);
-            } else if (metadata == null && (r instanceof QuiltResolver || r instanceof ForgeResolver)) {
+            String metadata;
+            if (r instanceof FabricResolver || r instanceof QuiltResolver || r instanceof ForgeResolver) {
                 metadata = ModJarTextureMetadata.read(r, normalized);
+            } else {
+                metadata = r.resolveTextureMetadata(normalized);
+                if (metadata == null && r instanceof VanillaResolver vanilla) {
+                    metadata = AnimationAwareVanillaResolver.readFrom(vanilla, normalized);
+                }
             }
 
             // The winning PNG owns the animation decision. Null means static;
-            // never continue into a lower-priority resolver after this point.
+            // never continue into a lower-priority resolver or layered source.
             return metadata;
         }
         return null;

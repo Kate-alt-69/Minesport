@@ -7,7 +7,6 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-/** Read-only adapter for mod resolvers whose winning assets live in namespaceJars. */
 final class ModJarTextureMetadata {
     private ModJarTextureMetadata() {}
 
@@ -16,29 +15,22 @@ final class ModJarTextureMetadata {
         String normalized = texturePath.contains(":") ? texturePath : "minecraft:" + texturePath;
         String[] parts = normalized.split(":", 2);
         if (parts.length != 2) return null;
-        String path = "assets/" + parts[0] + "/textures/" + parts[1] + ".png.mcmeta";
+        String imagePath = "assets/" + parts[0] + "/textures/" + parts[1] + ".png";
+        String metadataPath = imagePath + ".mcmeta";
         try {
             Field field = resolver.getClass().getDeclaredField("namespaceJars");
             field.setAccessible(true);
             Object value = field.get(resolver);
             if (!(value instanceof Map<?, ?> map)) return null;
             Object sources = map.get(parts[0]);
-
-            // Older resolver revisions stored one ZipFile per namespace. Keep
-            // that shape readable so this adapter remains tolerant of mixed
-            // engine/resolver revisions during compatibility work.
             if (sources instanceof ZipFile zip) {
-                return readEntry(zip, path);
+                return zip.getEntry(imagePath) == null ? null : readEntry(zip, metadataPath);
             }
-
-            // Current Forge/Quilt resolvers layer multiple JARs per namespace.
-            // Iterate in exactly the stored order used by their PNG/model
-            // openEntry() paths so animation metadata follows the same winner.
             if (sources instanceof Iterable<?> layered) {
                 for (Object source : layered) {
                     if (!(source instanceof ZipFile zip)) continue;
-                    String metadata = readEntry(zip, path);
-                    if (metadata != null) return metadata;
+                    if (zip.getEntry(imagePath) == null) continue;
+                    return readEntry(zip, metadataPath);
                 }
             }
             return null;

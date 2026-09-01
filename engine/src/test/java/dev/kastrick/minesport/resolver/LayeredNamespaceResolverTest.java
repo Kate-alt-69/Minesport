@@ -3,6 +3,9 @@ package dev.kastrick.minesport.resolver;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +14,7 @@ import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LayeredNamespaceResolverTest {
@@ -81,8 +85,7 @@ class LayeredNamespaceResolverTest {
         Path mods = Files.createDirectories(tempDir.resolve("quilt-metadata"));
         writeJar(mods.resolve("a.jar"), "quilt.mod.json", quiltMeta("quilt_a"),
             "assets/shared/blockstates/test.json", BLOCKSTATE);
-        writeJar(mods.resolve("b.jar"), "quilt.mod.json", quiltMeta("quilt_b"),
-            "assets/shared/textures/block/animated.png.mcmeta", ANIMATION_METADATA);
+        writeTextureJar(mods.resolve("b.jar"), "quilt.mod.json", quiltMeta("quilt_b"), true, true);
 
         QuiltResolver resolver = QuiltResolver.load(mods.toFile(), null);
         try {
@@ -100,8 +103,7 @@ class LayeredNamespaceResolverTest {
         Path mods = Files.createDirectories(tempDir.resolve("forge-metadata"));
         writeJar(mods.resolve("a.jar"), "META-INF/mods.toml", forgeMeta("forge_a"),
             "assets/shared/blockstates/test.json", BLOCKSTATE);
-        writeJar(mods.resolve("b.jar"), "META-INF/mods.toml", forgeMeta("forge_b"),
-            "assets/shared/textures/block/animated.png.mcmeta", ANIMATION_METADATA);
+        writeTextureJar(mods.resolve("b.jar"), "META-INF/mods.toml", forgeMeta("forge_b"), true, true);
 
         ForgeResolver resolver = ForgeResolver.load(mods.toFile(), null);
         try {
@@ -111,6 +113,37 @@ class LayeredNamespaceResolverTest {
             );
         } finally {
             resolver.close();
+        }
+    }
+
+    @Test
+    void fabricMetadataDoesNotFallThroughPastWinningPng() throws Exception {
+        Path mods = Files.createDirectories(tempDir.resolve("fabric-winner"));
+        writeTextureJar(mods.resolve("a.jar"), "fabric.mod.json", fabricMeta("fabric_a"), true, false);
+        writeTextureJar(mods.resolve("b.jar"), "fabric.mod.json", fabricMeta("fabric_b"), false, true);
+        assertNull(resolveMetadata(FabricResolver.load(mods.toFile(), null)));
+    }
+
+    @Test
+    void quiltMetadataDoesNotFallThroughPastWinningPng() throws Exception {
+        Path mods = Files.createDirectories(tempDir.resolve("quilt-winner"));
+        writeTextureJar(mods.resolve("a.jar"), "quilt.mod.json", quiltMeta("quilt_a"), true, false);
+        writeTextureJar(mods.resolve("b.jar"), "quilt.mod.json", quiltMeta("quilt_b"), false, true);
+        assertNull(resolveMetadata(QuiltResolver.load(mods.toFile(), null)));
+    }
+
+    @Test
+    void forgeMetadataDoesNotFallThroughPastWinningPng() throws Exception {
+        Path mods = Files.createDirectories(tempDir.resolve("forge-winner"));
+        writeTextureJar(mods.resolve("a.jar"), "META-INF/mods.toml", forgeMeta("forge_a"), true, false);
+        writeTextureJar(mods.resolve("b.jar"), "META-INF/mods.toml", forgeMeta("forge_b"), false, true);
+        assertNull(resolveMetadata(ForgeResolver.load(mods.toFile(), null)));
+    }
+
+    private static String resolveMetadata(AssetResolver resolver) {
+        try (ResolverChain chain = new ResolverChain()) {
+            chain.addResolver(resolver);
+            return chain.resolveTextureMetadata("shared:block/animated");
         }
     }
 
@@ -138,12 +171,43 @@ class LayeredNamespaceResolverTest {
         String asset
     ) throws Exception {
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(jar))) {
-            zip.putNextEntry(new ZipEntry(metadataPath));
-            zip.write(metadata.getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
-            zip.putNextEntry(new ZipEntry(assetPath));
-            zip.write(asset.getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
+            writeEntry(zip, metadataPath, metadata.getBytes(StandardCharsets.UTF_8));
+            writeEntry(zip, assetPath, asset.getBytes(StandardCharsets.UTF_8));
         }
+    }
+
+    private static void writeTextureJar(
+        Path jar,
+        String metadataPath,
+        String metadata,
+        boolean includePng,
+        boolean includeAnimationMetadata
+    ) throws Exception {
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(jar))) {
+            writeEntry(zip, metadataPath, metadata.getBytes(StandardCharsets.UTF_8));
+            if (includePng) {
+                writeEntry(zip, "assets/shared/textures/block/animated.png", tinyPng());
+            }
+            if (includeAnimationMetadata) {
+                writeEntry(
+                    zip,
+                    "assets/shared/textures/block/animated.png.mcmeta",
+                    ANIMATION_METADATA.getBytes(StandardCharsets.UTF_8)
+                );
+            }
+        }
+    }
+
+    private static byte[] tinyPng() throws Exception {
+        BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(image, "PNG", out);
+        return out.toByteArray();
+    }
+
+    private static void writeEntry(ZipOutputStream zip, String path, byte[] bytes) throws Exception {
+        zip.putNextEntry(new ZipEntry(path));
+        zip.write(bytes);
+        zip.closeEntry();
     }
 }
