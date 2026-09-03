@@ -30,94 +30,72 @@ jobs:
           path = Path("desktop/src/engine_update.rs")
           text = path.read_text(encoding="utf-8")
 
-          old_load = '''    let stage_bytes = fs::read(&stage_path)
-              .with_context(|| format!("read staged engine update {}", stage_path.display()))?;
-          let stage: StagedEngineUpdate = match serde_json::from_slice(&stage_bytes) {
-              Ok(stage) => stage,
-              Err(error) => {
-                  let _ = fs::remove_file(&stage_path);
-                  return Err(error).context("parse staged engine update metadata");
-              }
-          };
-          validate_staged_update(&stage)?;
-          '''
-          new_load = '''    let stage = load_staged_update_or_discard(&stage_path)?;
-          '''
-          if text.count(old_load) != 1:
-              raise SystemExit("BUG-120 load-stage anchor is stale")
-          text = text.replace(old_load, new_load, 1)
+          def replace_through(source: str, start: str, end: str, replacement: str) -> str:
+              start_at = source.find(start)
+              if start_at < 0:
+                  raise SystemExit(f"BUG-120 start anchor is stale: {start!r}")
+              end_at = source.find(end, start_at)
+              if end_at < 0:
+                  raise SystemExit(f"BUG-120 end anchor is stale: {end!r}")
+              end_at += len(end)
+              if source.find(start, start_at + len(start)) >= 0:
+                  raise SystemExit(f"BUG-120 start anchor is ambiguous: {start!r}")
+              return source[:start_at] + replacement + source[end_at:]
 
-          old_verify = '''    let installer = staged_installer_path(&stage)?;
-          let metadata = fs::metadata(&installer)
-              .with_context(|| format!("inspect staged engine installer {}", installer.display()))?;
-          if metadata.len() != stage.installer_size {
-              clear_staged_update(&stage);
-              bail!(
-                  "staged engine installer size mismatch: file={} metadata={}",
-                  metadata.len(),
-                  stage.installer_size
-              );
-          }
-          let installer_hash = sha256_file(&installer)?;
-          if installer_hash != stage.installer_sha256.to_ascii_lowercase() {
-              clear_staged_update(&stage);
-              bail!("staged engine installer SHA-256 does not match its saved release digest");
-          }
+          text = replace_through(
+              text,
+              "    let stage_bytes = fs::read(&stage_path)",
+              "    validate_staged_update(&stage)?;",
+              "    let stage = load_staged_update_or_discard(&stage_path)?;",
+          )
 
-          verify_same_authenticode_signer(&executable, &installer)?;
-          '''
-          new_verify = '''    let installer = match verify_staged_installer(&executable, &stage) {
-              Ok(installer) => installer,
-              Err(error) => {
-                  clear_staged_update(&stage);
-                  return Err(error).context("verify staged engine installer");
-              }
-          };
-          '''
-          if text.count(old_verify) != 1:
-              raise SystemExit("BUG-120 staged-installer verification anchor is stale")
-          text = text.replace(old_verify, new_verify, 1)
-
-          old_stage_skip = '''    if staged_update_path().is_file() {
-              diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
-                  "EngineUpdateAlreadyStaged",
-                  "a verified engine update is already staged for the next launch",
-                  &[],
-              );
-              return Ok(());
-          }
-          '''
-          new_stage_skip = '''    let existing_stage_path = staged_update_path();
-          if existing_stage_path.is_file() {
-              match load_staged_update_or_discard(&existing_stage_path) {
-                  Ok(_) => {
-                      diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
-                          "EngineUpdateAlreadyStaged",
-                          "a verified engine update is already staged for the next launch",
-                          &[],
-                      );
-                      return Ok(());
-                  }
+          text = replace_through(
+              text,
+              "    let installer = staged_installer_path(&stage)?;",
+              "    verify_same_authenticode_signer(&executable, &installer)?;",
+              '''    let installer = match verify_staged_installer(&executable, &stage) {
+                  Ok(installer) => installer,
                   Err(error) => {
-                      diagnostics::Logger::new("ENGINE").child("UPDATE").warn(
-                          "EngineInvalidStagedUpdateDiscarded",
-                          "discarded invalid staged engine update metadata so repair/update discovery can continue",
-                          &[("error", format!("{error:#}"))],
-                      );
+                      clear_staged_update(&stage);
+                      return Err(error).context("verify staged engine installer");
+                  }
+              };''',
+          )
+
+          stage_start = "    if staged_update_path().is_file() {"
+          force_start = '''    let force = env::var("MINESPORT_ENGINE_UPDATE_CHECK")'''
+          stage_at = text.find(stage_start)
+          force_at = text.find(force_start, stage_at)
+          if stage_at < 0 or force_at < 0:
+              raise SystemExit("BUG-120 background-stage anchors are stale")
+          stage_replacement = '''    let existing_stage_path = staged_update_path();
+              if existing_stage_path.is_file() {
+                  match load_staged_update_or_discard(&existing_stage_path) {
+                      Ok(_) => {
+                          diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
+                              "EngineUpdateAlreadyStaged",
+                              "a verified engine update is already staged for the next launch",
+                              &[],
+                          );
+                          return Ok(());
+                      }
+                      Err(error) => {
+                          diagnostics::Logger::new("ENGINE").child("UPDATE").warn(
+                              "EngineInvalidStagedUpdateDiscarded",
+                              "discarded invalid staged engine update metadata so repair/update discovery can continue",
+                              &[("error", format!("{error:#}"))],
+                          );
+                      }
                   }
               }
-          }
-          '''
-          if text.count(old_stage_skip) != 1:
-              raise SystemExit("BUG-120 background-stage anchor is stale")
-          text = text.replace(old_stage_skip, new_stage_skip, 1)
-
-          helper_anchor = '''fn staged_installer_path(stage: &StagedEngineUpdate) -> Result<PathBuf> {
-              validate_staged_update(stage)?;
-              Ok(update_root().join(&stage.installer_name))
-          }
 
           '''
+          text = text[:stage_at] + stage_replacement + text[force_at:]
+
+          helper_anchor = "fn staged_installer_path(stage: &StagedEngineUpdate) -> Result<PathBuf> {"
+          helper_at = text.find(helper_anchor)
+          if helper_at < 0 or text.find(helper_anchor, helper_at + 1) >= 0:
+              raise SystemExit("BUG-120 helper insertion anchor is stale or ambiguous")
           helpers = '''fn load_staged_update_or_discard(path: &Path) -> Result<StagedEngineUpdate> {
               let bytes = fs::read(path)
                   .with_context(|| format!("read staged engine update {}", path.display()))?;
@@ -133,11 +111,6 @@ jobs:
                   return Err(error).context("validate staged engine update metadata");
               }
               Ok(stage)
-          }
-
-          fn staged_installer_path(stage: &StagedEngineUpdate) -> Result<PathBuf> {
-              validate_staged_update(stage)?;
-              Ok(update_root().join(&stage.installer_name))
           }
 
           fn verify_staged_installer(
@@ -163,9 +136,7 @@ jobs:
           }
 
           '''
-          if text.count(helper_anchor) != 1:
-              raise SystemExit("BUG-120 helper insertion anchor is stale")
-          text = text.replace(helper_anchor, helpers, 1)
+          text = text[:helper_at] + helpers + text[helper_at:]
 
           if "fn invalid_staged_metadata_is_discarded()" in text:
               raise SystemExit("BUG-120 regression test already exists")
@@ -203,10 +174,10 @@ jobs:
                   let _ = fs::remove_dir_all(root);
               }
           '''
-          pos = text.rfind("\n}")
-          if pos < 0:
+          tests_end = text.rfind("\n}")
+          if tests_end < 0:
               raise SystemExit("BUG-120 tests module terminator not found")
-          text = text[:pos] + test + text[pos:]
+          text = text[:tests_end] + test + text[tests_end:]
           path.write_text(text, encoding="utf-8")
           PY
 
