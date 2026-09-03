@@ -1,0 +1,144 @@
+name: One Shot Windows Package Version V6
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-windows-package-version-v6.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minesport-windows-package-version-v6
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Sync latest main
+        shell: pwsh
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - name: Apply package fixes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $patch = '.github/windows_package_version_patch.py'
+          $text = Get-Content -LiteralPath $patch -Raw
+          $text = $text.Replace('if count != 1:', 'if count < 1:')
+          [IO.File]::WriteAllText($patch, $text, (New-Object System.Text.UTF8Encoding($false)))
+          python $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Primary package-version patch failed.' }
+          python .github/windows_package_version_engine_patch.py
+          if ($LASTEXITCODE -ne 0) { throw 'Engine-version independence patch failed.' }
+          python .github/windows_package_version_v6_patch.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer metadata/WiX component patch failed.' }
+
+      - name: Remove one-shot staging files
+        shell: pwsh
+        run: |
+          Remove-Item -Force .github/windows_package_version_patch.py
+          Remove-Item -Force .github/windows_package_version_engine_patch.py
+          Remove-Item -Force .github/windows_package_version_v6_patch.py
+          Remove-Item -Force .github/workflows/one-shot-windows-package-version.yml
+          Remove-Item -Force .github/workflows/one-shot-windows-package-version-v2.yml
+          Remove-Item -Force .github/workflows/one-shot-windows-package-version-v3.yml
+          Remove-Item -Force .github/workflows/one-shot-windows-package-version-v4.yml
+          Remove-Item -Force .github/workflows/one-shot-windows-package-version-v5.yml
+          Remove-Item -Force .github/workflows/one-shot-windows-package-version-v6.yml
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve versions and validate source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inPackage = $false
+          $version = $null
+          foreach ($line in Get-Content -LiteralPath .\desktop\Cargo.toml) {
+            $trimmed = $line.Trim()
+            if ($trimmed -match '^\[(.+)\]$') { $inPackage = $Matches[1] -eq 'package'; continue }
+            if ($inPackage -and $trimmed -match '^version\s*=\s*"([^"]+)"$') { $version = $Matches[1]; break }
+          }
+          if ([string]::IsNullOrWhiteSpace($version) -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Could not resolve x.y.z desktop package version.' }
+          $engineVersion = (Get-Content -LiteralPath .\engine\VERSION -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($engineVersion)) { throw 'engine/VERSION is empty.' }
+          "MINESPORT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "GUI/package version: $version"
+          Write-Host "Engine version: $engineVersion"
+
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile('build.ps1',[ref]$tokens,[ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; throw 'build.ps1 contains syntax errors' }
+          .\build.ps1 --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'build.ps1 --help failed.' }
+
+          $sources = @('build.ps1','installer\windows\minesport.nsi','installer\windows\minesport.iss','installer\windows\Minesport.wixproj','installer\windows\Product.wxs')
+          if (Select-String -Quiet -Path $sources -SimpleMatch '0.2.1') {
+            Select-String -Path $sources -SimpleMatch '0.2.1'
+            throw 'Windows packaging source still contains coupled version literals.'
+          }
+          if (Select-String -Quiet -Path .github\workflows\build.yml,.github\workflows\release-windows.yml -SimpleMatch 'Minesport-0.2.1') { throw 'CI/release filenames still contain coupled version literals.' }
+          if (-not (Select-String -Quiet -Path build.ps1 -SimpleMatch 'minesport-engine-$EngineVersion.jar')) { throw 'Engine fallback JAR is not based on engine/VERSION.' }
+          if (-not (Select-String -Quiet -Path installer\windows\Product.wxs -SimpleMatch '<Component Id="EngineManifest" Guid="*">')) { throw 'WiX engine manifest component is missing.' }
+          if (-not (Select-String -Quiet -Path installer\windows\Product.wxs -SimpleMatch '<ComponentRef Id="EngineManifest" />')) { throw 'WiX core feature does not include engine manifest.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey could not install NSIS.' }
+          $candidate = @('C:\Program Files (x86)\NSIS\makensis.exe','C:\Program Files\NSIS\makensis.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $candidate) { throw 'NSIS makensis.exe not found.' }
+          "NSIS_EXE=$candidate" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build dynamic-version installer fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force dist\source,dist\installer | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $pwd 'dist\source\Minesport.exe'), [byte[]](1,2,3,4))
+          [IO.File]::WriteAllBytes((Join-Path $pwd 'dist\source\minesport-engine.exe'), [byte[]](5,6,7,8))
+          [IO.File]::WriteAllText((Join-Path $pwd 'dist\source\minesport-engine.json'), '{"schema":1,"version":"fixture","protocolVersion":1,"sha256":"fixture","size":4}')
+          dotnet build .\installer\windows\Minesport.wixproj --configuration Release --output .\dist\installer --no-incremental "-p:SourceDir=$pwd" "-p:AppVersion=$env:MINESPORT_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'Dynamic-version WiX build failed.' }
+          & $env:NSIS_EXE '/V2' "/DSourceDir=$pwd" "/DAppVersion=$env:MINESPORT_VERSION" .\installer\windows\minesport.nsi
+          if ($LASTEXITCODE -ne 0) { throw 'Dynamic-version NSIS build failed.' }
+          $msi = ".\dist\installer\Minesport-$env:MINESPORT_VERSION-x64.msi"
+          $exe = ".\dist\installer\Minesport-$env:MINESPORT_VERSION-Setup-x64.exe"
+          if (-not (Test-Path $msi) -or -not (Test-Path $exe)) { throw 'Dynamic Windows package output is missing.' }
+          if ((Get-Item $msi).Length -le 0 -or (Get-Item $exe).Length -le 0) { throw 'Dynamic Windows package output is empty.' }
+
+      - name: Commit tested fix with collision-free ID
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+          git stash push -u -m windows-package-version-v6-tested
+          git pull --rebase origin main
+          git stash pop
+          if ($LASTEXITCODE -ne 0) { throw 'tested package patch no longer rebases cleanly on current main' }
+          $subjects = git log origin/main --format=%s
+          $ids = [regex]::Matches(($subjects -join "`n"), 'BUG-(\d+)') | ForEach-Object { [int]$_.Groups[1].Value }
+          $max = if ($ids) { ($ids | Measure-Object -Maximum).Maximum } else { 0 }
+          $next = $max + 1
+          git add build.ps1 installer/windows/minesport.nsi installer/windows/minesport.iss installer/windows/Minesport.wixproj installer/windows/Product.wxs .github/workflows/build.yml .github/workflows/release-windows.yml
+          git add -A -- .github/windows_package_version_patch.py .github/windows_package_version_engine_patch.py .github/windows_package_version_v6_patch.py .github/workflows/one-shot-windows-package-version.yml .github/workflows/one-shot-windows-package-version-v2.yml .github/workflows/one-shot-windows-package-version-v3.yml .github/workflows/one-shot-windows-package-version-v4.yml .github/workflows/one-shot-windows-package-version-v5.yml .github/workflows/one-shot-windows-package-version-v6.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-$next Derive package versions and split WiX engine files"
+          git push origin HEAD:main
