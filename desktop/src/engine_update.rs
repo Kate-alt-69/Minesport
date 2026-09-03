@@ -105,16 +105,7 @@ pub fn apply_staged_update() -> Result<()> {
         return Ok(());
     };
 
-    let stage_bytes = fs::read(&stage_path)
-        .with_context(|| format!("read staged engine update {}", stage_path.display()))?;
-    let stage: StagedEngineUpdate = match serde_json::from_slice(&stage_bytes) {
-        Ok(stage) => stage,
-        Err(error) => {
-            let _ = fs::remove_file(&stage_path);
-            return Err(error).context("parse staged engine update metadata");
-        }
-    };
-    validate_staged_update(&stage)?;
+    let stage = load_staged_update_or_discard(&stage_path)?;
 
     if let LocalEngine::Valid(local) = installed_engine_state(&executable) {
         if compare_versions(&local.version, &stage.manifest.version)? != Ordering::Less {
@@ -131,24 +122,13 @@ pub fn apply_staged_update() -> Result<()> {
         }
     }
 
-    let installer = staged_installer_path(&stage)?;
-    let metadata = fs::metadata(&installer)
-        .with_context(|| format!("inspect staged engine installer {}", installer.display()))?;
-    if metadata.len() != stage.installer_size {
-        clear_staged_update(&stage);
-        bail!(
-            "staged engine installer size mismatch: file={} metadata={}",
-            metadata.len(),
-            stage.installer_size
-        );
-    }
-    let installer_hash = sha256_file(&installer)?;
-    if installer_hash != stage.installer_sha256.to_ascii_lowercase() {
-        clear_staged_update(&stage);
-        bail!("staged engine installer SHA-256 does not match its saved release digest");
-    }
-
-    verify_same_authenticode_signer(&executable, &installer)?;
+    let installer = match verify_staged_installer(&executable, &stage) {
+        Ok(installer) => installer,
+        Err(error) => {
+            clear_staged_update(&stage);
+            return Err(error).context("verify staged engine installer");
+        }
+    };
     diagnostics::Logger::new("ENGINE").child("UPDATE").info(
         "EngineStagedInstallerLaunching",
         "installing previously verified engine update before the backend starts",
@@ -255,13 +235,25 @@ fn check_and_stage_update_if_due() -> Result<()> {
         return Ok(());
     };
 
-    if staged_update_path().is_file() {
-        diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
-            "EngineUpdateAlreadyStaged",
-            "a verified engine update is already staged for the next launch",
-            &[],
-        );
-        return Ok(());
+    let existing_stage_path = staged_update_path();
+    if existing_stage_path.is_file() {
+        match load_staged_update_or_discard(&existing_stage_path) {
+            Ok(_) => {
+                diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
+                    "EngineUpdateAlreadyStaged",
+                    "a verified engine update is already staged for the next launch",
+                    &[],
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                diagnostics::Logger::new("ENGINE").child("UPDATE").warn(
+                    "EngineInvalidStagedUpdateDiscarded",
+                    "discarded invalid staged engine update metadata so repair/update discovery can continue",
+                    &[("error", format!("{error:#}"))],
+                );
+            }
+        }
     }
 
     let force = env::var("MINESPORT_ENGINE_UPDATE_CHECK")
@@ -729,6 +721,45 @@ fn validate_staged_update(stage: &StagedEngineUpdate) -> Result<()> {
     Ok(())
 }
 
+fn load_staged_update_or_discard(path: &Path) -> Result<StagedEngineUpdate> {
+    let bytes =
+        fs::read(path).with_context(|| format!("read staged engine update {}", path.display()))?;
+    let stage: StagedEngineUpdate = match serde_json::from_slice(&bytes) {
+        Ok(stage) => stage,
+        Err(error) => {
+            let _ = fs::remove_file(path);
+            return Err(error).context("parse staged engine update metadata");
+        }
+    };
+    if let Err(error) = validate_staged_update(&stage) {
+        let _ = fs::remove_file(path);
+        return Err(error).context("validate staged engine update metadata");
+    }
+    Ok(stage)
+}
+
+fn verify_staged_installer(
+    desktop_executable: &Path,
+    stage: &StagedEngineUpdate,
+) -> Result<PathBuf> {
+    let installer = staged_installer_path(stage)?;
+    let metadata = fs::metadata(&installer)
+        .with_context(|| format!("inspect staged engine installer {}", installer.display()))?;
+    if metadata.len() != stage.installer_size {
+        bail!(
+            "staged engine installer size mismatch: file={} metadata={}",
+            metadata.len(),
+            stage.installer_size
+        );
+    }
+    let installer_hash = sha256_file(&installer)?;
+    if installer_hash != stage.installer_sha256.to_ascii_lowercase() {
+        bail!("staged engine installer SHA-256 does not match its saved release digest");
+    }
+    verify_same_authenticode_signer(desktop_executable, &installer)?;
+    Ok(installer)
+}
+
 fn staged_installer_path(stage: &StagedEngineUpdate) -> Result<PathBuf> {
     validate_staged_update(stage)?;
     Ok(update_root().join(&stage.installer_name))
@@ -1073,5 +1104,37 @@ mod tests {
             },
         };
         assert!(validate_staged_update(&stage).is_err());
+    }
+
+    #[test]
+    fn invalid_staged_metadata_is_discarded() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "minesport-invalid-staged-update-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("staged-engine-update.json");
+        let stage = StagedEngineUpdate {
+            release_tag: "v0.2.2".to_string(),
+            installer_name: "Minesport-0.2.2-Setup-x64.exe".to_string(),
+            installer_sha256: "a".repeat(64),
+            installer_size: 123,
+            manifest: EngineManifest {
+                schema: ENGINE_MANIFEST_SCHEMA + 1,
+                version: "0.2.2".to_string(),
+                protocol_version: ipc::ENGINE_PROTOCOL_VERSION,
+                sha256: "b".repeat(64),
+                size: 456,
+            },
+        };
+        fs::write(&path, serde_json::to_vec(&stage).unwrap()).unwrap();
+
+        assert!(load_staged_update_or_discard(&path).is_err());
+        assert!(!path.exists());
+        let _ = fs::remove_dir_all(root);
     }
 }
