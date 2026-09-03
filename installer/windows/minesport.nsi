@@ -2,8 +2,12 @@
   !define SourceDir "..\.."
 !endif
 
+!ifndef AppVersion
+  !error "AppVersion must be supplied from desktop/Cargo.toml"
+!endif
+
 !define APP_NAME "Minesport"
-!define APP_VERSION "0.2.1"
+!define APP_VERSION "${AppVersion}"
 !define APP_PUBLISHER "Kastrick"
 !define APP_EXE "minesport.exe"
 !define ENGINE_EXE "minesport-engine.exe"
@@ -20,7 +24,7 @@ SetCompressor /SOLID lzma
 CRCCheck force
 BrandingText "${APP_PUBLISHER}"
 
-VIProductVersion "0.2.1.0"
+VIProductVersion "${APP_VERSION}.0"
 VIAddVersionKey /LANG=1033 "ProductName" "${APP_NAME}"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=1033 "CompanyName" "${APP_PUBLISHER}"
@@ -196,10 +200,10 @@ translator_done:
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install Minesport 0.2.1, its independently replaceable engine sidecar, and embedded loader Export Workers."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install Minesport ${APP_VERSION}, its independently replaceable engine sidecar, and embedded loader Export Workers."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "Create a Minesport shortcut on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_BLENDER} "Download and install Blender 5.2 LTS from the official Blender Foundation mirror."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_TRANSLATOR} "Install the Minesport 0.2.1 Blender translator into detected Blender 4.3+ profiles."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_TRANSLATOR} "Install the Minesport Blender translator into detected Blender 4.3+ profiles."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"

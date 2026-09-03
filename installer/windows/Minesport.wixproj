@@ -2,11 +2,15 @@
   <PropertyGroup>
     <AcceptEula>wix7</AcceptEula>
     <InstallerPlatform>x64</InstallerPlatform>
-    <OutputName>Minesport-0.2.1-x64</OutputName>
+    <OutputName>Minesport-$(AppVersion)-x64</OutputName>
     <OutputType>Package</OutputType>
-    <DefineConstants>SourceDir=$(SourceDir)</DefineConstants>
+    <DefineConstants>SourceDir=$(SourceDir);AppVersion=$(AppVersion)</DefineConstants>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+
+  <Target Name="ValidatePackageVersion" BeforeTargets="Build">
+    <Error Condition="'$(AppVersion)' == ''" Text="AppVersion must be supplied from desktop/Cargo.toml." />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="WixToolset.UI.wixext" Version="7.0.0" />

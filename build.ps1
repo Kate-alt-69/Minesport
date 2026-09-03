@@ -1,9 +1,35 @@
 #!/usr/bin/env pwsh
-# Minesport 0.2.1 smart build + optional packaging script.
+# Minesport smart build + optional packaging script.
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AppVersion = '0.2.1'
+
+function Get-DesktopPackageVersion {
+    $manifest = Join-Path $Root 'desktop\Cargo.toml'
+    $inPackage = $false
+    foreach ($line in Get-Content -LiteralPath $manifest) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^\[(.+)\]$') {
+            $inPackage = $Matches[1] -eq 'package'
+            continue
+        }
+        if ($inPackage -and $trimmed -match '^version\s*=\s*"([^"]+)"$') {
+            $version = $Matches[1]
+            if ($version -notmatch '^\d+\.\d+\.\d+$') {
+                throw "desktop/Cargo.toml package version must be x.y.z for Windows packaging: $version"
+            }
+            return $version
+        }
+    }
+    throw 'Could not resolve [package] version from desktop/Cargo.toml.'
+}
+
+$AppVersion = Get-DesktopPackageVersion
+$engineVersionFile = Join-Path $Root 'engine\VERSION'
+$EngineVersion = (Get-Content -LiteralPath $engineVersionFile -Raw).Trim()
+if ([string]::IsNullOrWhiteSpace($EngineVersion) -or $EngineVersion -notmatch '^[0-9A-Za-z._+-]+$') {
+    throw "engine/VERSION contains an invalid engine version: $EngineVersion"
+}
 $WorkerMinecraftVersion = '1.21.10'
 $BuildNsisInstaller = $false
 $BuildInnoInstaller = $false
@@ -331,7 +357,7 @@ if (-not $DesktopOnly) {
         Where-Object { $_.Name -notmatch 'sources' } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
-    $existingEnginePath = if ($existingEngine) { $existingEngine.FullName } else { Join-Path $engineProject 'build\libs\minesport-engine-0.2.1.jar' }
+    $existingEnginePath = if ($existingEngine) { $existingEngine.FullName } else { Join-Path $engineProject "build\libs\minesport-engine-$EngineVersion.jar" }
 
     if (Test-NeedsRebuild 'engine' $engineFingerprint $existingEnginePath $engineProject) {
         Write-Host '  -> changed/missing, building...' -ForegroundColor Yellow
@@ -535,7 +561,7 @@ if ($BuildNsisInstaller -or $BuildInnoInstaller -or $BuildMsiInstaller) {
         Remove-Item -Force -ErrorAction SilentlyContinue $nsisOutput
         $makensis = Find-NSIS
         if (-not $makensis) { throw 'NSIS was not found. Install NSIS or use --build-installer-msi instead.' }
-        & $makensis '/V2' "/DSourceDir=$Root" (Join-Path $Root 'installer\windows\minesport.nsi')
+        & $makensis '/V2' "/DSourceDir=$Root" "/DAppVersion=$AppVersion" (Join-Path $Root 'installer\windows\minesport.nsi')
         if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed.' }
         if (-not (Test-Path $nsisOutput)) { throw "NSIS completed but did not produce $nsisOutput" }
         Write-Host "  NSIS: $nsisOutput" -ForegroundColor Green
@@ -546,7 +572,7 @@ if ($BuildNsisInstaller -or $BuildInnoInstaller -or $BuildMsiInstaller) {
         Remove-Item -Force -ErrorAction SilentlyContinue $innoOutput
         $iscc = Find-InnoSetup
         if (-not $iscc) { throw 'Inno Setup 6/7 was not found.' }
-        & $iscc "/DSourceDir=$Root" (Join-Path $Root 'installer\windows\minesport.iss')
+        & $iscc "/DSourceDir=$Root" "/DAppVersion=$AppVersion" (Join-Path $Root 'installer\windows\minesport.iss')
         if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
         if (-not (Test-Path $innoOutput)) { throw "Inno Setup completed but did not produce $innoOutput" }
         Write-Host "  Inno: $innoOutput" -ForegroundColor Green
@@ -559,7 +585,7 @@ if ($BuildNsisInstaller -or $BuildInnoInstaller -or $BuildMsiInstaller) {
         $wixProject = Join-Path $Root 'installer\windows\Minesport.wixproj'
         $msiOutput = Join-Path $installerOut "Minesport-$AppVersion-x64.msi"
         Remove-Item -Force -ErrorAction SilentlyContinue $msiOutput
-        & dotnet build $wixProject --configuration Release --output $installerOut --no-incremental "-p:SourceDir=$Root"
+        & dotnet build $wixProject --configuration Release --output $installerOut --no-incremental "-p:SourceDir=$Root" "-p:AppVersion=$AppVersion"
         if ($LASTEXITCODE -ne 0) { throw 'WiX 7 MSI build failed.' }
         if (-not (Test-Path $msiOutput)) { throw "WiX 7 completed but did not produce $msiOutput" }
         Write-Host "  MSI: $msiOutput" -ForegroundColor Green
