@@ -24,6 +24,12 @@ jobs:
         with:
           toolchain: 1.92.0
           components: rustfmt
+      - name: Install Rust/Slint build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
       - name: Apply safe loader-specific mod staging filter
         shell: bash
         run: |
@@ -220,6 +226,8 @@ jobs:
           subjects="$(git log origin/main --format=%s)"
           max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
           next=$(( ${max:-0} + 1 ))
+          git rm .github/workflows/one-shot-runtime-worker-mod-filter.yml
           git add desktop/src/runtime_worker.rs
+          git diff --cached --check
           git commit -m "FIX | BUG-${next} Skip irrelevant runtime-worker mods"
           git push origin HEAD:main
