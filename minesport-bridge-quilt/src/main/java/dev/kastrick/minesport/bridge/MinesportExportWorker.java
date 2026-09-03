@@ -24,6 +24,7 @@ public final class MinesportExportWorker implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        if (!isWorkerLaunch()) return;
         System.out.println("[MinesportExportWorker/Quilt] Initializing runtime registry worker...");
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
             hideWorkerWindow(client);
@@ -32,8 +33,12 @@ public final class MinesportExportWorker implements ClientModInitializer {
         });
     }
 
+    private static boolean isWorkerLaunch() {
+        return "1".equals(System.getenv("MINESPORT_EXPORT_WORKER"));
+    }
+
     private void hideWorkerWindow(Minecraft client) {
-        if (!"1".equals(System.getenv("MINESPORT_EXPORT_WORKER"))) return;
+        if (!isWorkerLaunch()) return;
         try {
             Object window = client.getWindow();
             long handle = findWindowHandle(window);

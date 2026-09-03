@@ -34,9 +34,13 @@ public final class MinesportExportWorker {
     public MinesportExportWorker(ModContainer container) {
     }
 
+    private static boolean isWorkerLaunch() {
+        return "1".equals(System.getenv("MINESPORT_EXPORT_WORKER"));
+    }
+
     @SubscribeEvent
     static void onClientStarted(ClientStartedEvent event) {
-        if (!STARTED.compareAndSet(false, true)) return;
+        if (!isWorkerLaunch() || !STARTED.compareAndSet(false, true)) return;
         Minecraft client = Minecraft.getInstance();
         hideWorkerWindow(client);
         System.out.println("[MinesportExportWorker/NeoForge] Client resources ready — starting registry/model dump");
@@ -44,7 +48,7 @@ public final class MinesportExportWorker {
     }
 
     private static void hideWorkerWindow(Minecraft client) {
-        if (!"1".equals(System.getenv("MINESPORT_EXPORT_WORKER"))) return;
+        if (!isWorkerLaunch()) return;
         try {
             Object window = client.getWindow();
             long handle = findWindowHandle(window);

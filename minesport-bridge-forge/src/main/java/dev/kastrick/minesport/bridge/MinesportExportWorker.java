@@ -28,11 +28,16 @@ public final class MinesportExportWorker {
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
 
     public MinesportExportWorker(FMLJavaModLoadingContext context) {
+        if (!isWorkerLaunch()) return;
         TickEvent.ClientTickEvent.Post.BUS.addListener(MinesportExportWorker::onClientTick);
     }
 
+    private static boolean isWorkerLaunch() {
+        return "1".equals(System.getenv("MINESPORT_EXPORT_WORKER"));
+    }
+
     private static void onClientTick(TickEvent.ClientTickEvent.Post event) {
-        if (!STARTED.compareAndSet(false, true)) return;
+        if (!isWorkerLaunch() || !STARTED.compareAndSet(false, true)) return;
         Minecraft client = Minecraft.getInstance();
         hideWorkerWindow(client);
         System.out.println("[MinesportExportWorker/Forge] Client resources ready — starting registry/model dump");
@@ -40,7 +45,7 @@ public final class MinesportExportWorker {
     }
 
     private static void hideWorkerWindow(Minecraft client) {
-        if (!"1".equals(System.getenv("MINESPORT_EXPORT_WORKER"))) return;
+        if (!isWorkerLaunch()) return;
         try {
             Object window = client.getWindow();
             long handle = findWindowHandle(window);
