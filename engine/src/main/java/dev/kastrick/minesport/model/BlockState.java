@@ -41,17 +41,23 @@ public class BlockState {
     }
 
     private List<ModelApplication> resolveVariants(Map<String, String> props, long seed) {
-        if (variants.containsKey("")) return chooseWeighted(variants.get(""), seed);
+        List<ModelApplication> fallback = variants.get("");
 
+        // Prefer an explicitly matching keyed variant. An empty-key variant is
+        // an intentional default and must not mask more specific state entries.
         for (var entry : variants.entrySet()) {
+            if (entry.getKey().isEmpty()) continue;
             if (matchesVariantKey(entry.getKey(), props)) {
                 return chooseWeighted(entry.getValue(), seed);
             }
         }
 
-        // Fail closed when no variant actually matches. Falling back to the
-        // first declared variant hides upstream state-decoding problems and
-        // produces plausible-but-wrong geometry.
+        if (fallback != null) return chooseWeighted(fallback, seed);
+
+        // Fail closed when no variant actually matches and no explicit default
+        // exists. Falling back to the first declared keyed variant hides
+        // upstream state-decoding problems and produces plausible-but-wrong
+        // geometry.
         return List.of();
     }
 

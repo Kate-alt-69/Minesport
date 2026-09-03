@@ -123,7 +123,7 @@ public class PolymerResolver implements AssetResolver {
             }
         }
 
-        // Strategy 3: scan the jar for any model whose name starts with the block name
+        // Strategy 3: scan the jar for any model whose name starts with blockName
         // Handles cases like "oak_bench" → finds "oak_bench_left", "oak_bench_right" etc.
         String bestMatch = findClosestModel(ns, name);
         if (bestMatch != null) {
@@ -135,45 +135,29 @@ public class PolymerResolver implements AssetResolver {
     }
 
     /**
-     * Builds a BlockState with keyed facing variants — "facing=north",
-     * "facing=south", "facing=east", "facing=west" — all pointing at the
-     * same resolved model with the correct Y rotation for each direction,
-     * matching how a real vanilla blockstate JSON would define them.
-     *
-     * This used to bake ONE hardcoded rotation into a single always-match
-     * ("") variant, guessed from a property lookup that could never
-     * succeed (see buildSyntheticBlockState's blockId note) — every
-     * Polymer block ended up rotation-locked to north regardless of its
-     * actual facing. Building real keyed variants here instead lets
-     * BlockState.resolve(block.properties) — called downstream in
-     * GeometryBuilder exactly like it is for every other resolver — pick
-     * the correct one from the block's real stored properties.
-     *
-     * Blocks with no "facing" property at all (non-directional decor)
-     * simply fall through BlockState's own "no key matched" fallback to
-     * the first variant (north / no extra rotation), which is the correct,
-     * neutral result for those.
+     * Builds keyed facing variants plus an explicit neutral default. The empty
+     * variant is only used when the block has no matching facing property; the
+     * BlockState resolver gives keyed matches priority over this fallback.
      */
     private BlockState makeRotatedState(String modelPath) {
         var bs = new BlockState();
         bs.format = BlockState.Format.VARIANTS;
 
-        for (var entry : FACING_ROTATIONS.entrySet()) {
-            var app = new BlockState.ModelApplication();
-            app.modelPath = modelPath;
-            app.y = entry.getValue();
-            bs.variants.put("facing=" + entry.getKey(), List.of(app));
-        }
+        bs.variants.put("", List.of(modelApplication(modelPath, 0)));
+        bs.variants.put("facing=north", List.of(modelApplication(modelPath, 0)));
+        bs.variants.put("facing=east", List.of(modelApplication(modelPath, 90)));
+        bs.variants.put("facing=south", List.of(modelApplication(modelPath, 180)));
+        bs.variants.put("facing=west", List.of(modelApplication(modelPath, 270)));
 
         return bs;
     }
 
-    private static final Map<String, Integer> FACING_ROTATIONS = Map.of(
-        "north", 0,
-        "east",  90,
-        "south", 180,
-        "west",  270
-    );
+    private static BlockState.ModelApplication modelApplication(String modelPath, int yRotation) {
+        var app = new BlockState.ModelApplication();
+        app.modelPath = modelPath;
+        app.y = yRotation;
+        return app;
+    }
 
     // ── Model existence check ─────────────────────────────────────────────────
 
