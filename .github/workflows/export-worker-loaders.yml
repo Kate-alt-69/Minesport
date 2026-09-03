@@ -81,16 +81,12 @@ jobs:
         include:
           - name: Fabric
             slug: fabric
-            jar: minesport_export_worker-fabric-1.21.5.jar
           - name: Forge
             slug: forge
-            jar: minesport_export_worker-forge-1.21.5.jar
           - name: NeoForge
             slug: neoforge
-            jar: minesport_export_worker-neoforge-1.21.5.jar
           - name: Quilt
             slug: quilt
-            jar: minesport_export_worker-quilt-1.21.5.jar
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
@@ -115,11 +111,11 @@ jobs:
             --loader '${{ matrix.slug }}' \
             --version '1.21.5' \
             --output dist/loader-floor
-          test -s 'dist/loader-floor/${{ matrix.jar }}'
+          test -s 'dist/loader-floor/minesport-bridge-${{ matrix.slug }}-1.21.5.jar'
       - name: Upload 1.21.5 Export Worker
         uses: actions/upload-artifact@v7
         with:
           name: minesport-export-worker-${{ matrix.slug }}-1.21.5
-          path: dist/loader-floor/${{ matrix.jar }}
+          path: dist/loader-floor/minesport-bridge-${{ matrix.slug }}-1.21.5.jar
           if-no-files-found: error
           retention-days: 14
