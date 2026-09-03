@@ -1,0 +1,225 @@
+name: One Shot Runtime Worker Mod Filter
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-runtime-worker-mod-filter
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | stage runtime worker mod filter'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+      - name: Apply safe loader-specific mod staging filter
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('desktop/src/runtime_worker.rs')
+          text = path.read_text(encoding='utf-8')
+
+          def once(old: str, new: str, label: str):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one anchor, found {count}')
+              text = text.replace(old, new, 1)
+
+          once(
+              'let count = copy_worker_mods(mods_path, &run_mods)?;',
+              'let count = copy_worker_mods(family, mods_path, &run_mods)?;',
+              'workspace mod staging call',
+          )
+          once(
+              'fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {',
+              'fn copy_worker_mods(family: BridgeFamily, source: &Path, target: &Path) -> Result<usize> {',
+              'copy_worker_mods signature',
+          )
+          once(
+              'if should_skip_runtime_worker_mod(&path, &filename) {',
+              'if should_skip_runtime_worker_mod(family, &path, &filename) {',
+              'worker mod skip call',
+          )
+
+          start = text.index('fn should_skip_runtime_worker_mod(')
+          end = text.index('\nfn copy_directory(', start)
+          replacement = r'''fn should_skip_runtime_worker_mod(
+              family: BridgeFamily,
+              jar_path: &Path,
+              filename: &str,
+          ) -> bool {
+              let lower = filename.to_ascii_lowercase();
+              if lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") {
+                  return true;
+              }
+
+              // Fabric metadata is meaningful for Fabric and Quilt's Fabric-compatible
+              // mod path. Forge/NeoForge workers should not open every JAR looking for
+              // fabric.mod.json when their loader will never consult it.
+              if !matches!(family, BridgeFamily::Fabric | BridgeFamily::Quilt) {
+                  return false;
+              }
+
+              runtime_worker_fabric_metadata(jar_path).is_some_and(|metadata| {
+                  metadata.id.eq_ignore_ascii_case("crash_assistant")
+                      || metadata.environment.eq_ignore_ascii_case("server")
+              })
+          }
+
+          #[derive(Debug, Deserialize)]
+          struct RuntimeWorkerFabricMetadata {
+              #[serde(default)]
+              id: String,
+              #[serde(default)]
+              environment: String,
+          }
+
+          fn runtime_worker_fabric_metadata(jar_path: &Path) -> Option<RuntimeWorkerFabricMetadata> {
+              let file = File::open(jar_path).ok()?;
+              let mut archive = zip::ZipArchive::new(file).ok()?;
+              let mut entry = archive.by_name("fabric.mod.json").ok()?;
+              let mut bytes = Vec::new();
+              entry
+                  .by_ref()
+                  .take(FABRIC_MOD_JSON_LIMIT + 1)
+                  .read_to_end(&mut bytes)
+                  .ok()?;
+              if bytes.len() as u64 > FABRIC_MOD_JSON_LIMIT {
+                  return None;
+              }
+              serde_json::from_slice(&bytes).ok()
+          }
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          once(
+              '''        assert_eq!(
+                      runtime_worker_fabric_mod_id(&jar).as_deref(),
+                      Some("crash_assistant")
+                  );
+                  assert!(should_skip_runtime_worker_mod(
+                      &jar,
+                      "totally-normal-mod.jar"
+                  ));''',
+              '''        assert_eq!(
+                      runtime_worker_fabric_metadata(&jar).map(|metadata| metadata.id),
+                      Some("crash_assistant".to_string())
+                  );
+                  assert!(should_skip_runtime_worker_mod(
+                      BridgeFamily::Fabric,
+                      &jar,
+                      "totally-normal-mod.jar"
+                  ));''',
+              'crash assistant metadata test',
+          )
+          once(
+              '''        assert!(should_skip_runtime_worker_mod(
+                      Path::new("missing.jar"),
+                      "CrashAssistant-fabric-26.2.jar"
+                  ));
+                  assert!(should_skip_runtime_worker_mod(
+                      Path::new("missing.jar"),
+                      "crash-assistant-26.2.jar"
+                  ));''',
+              '''        assert!(should_skip_runtime_worker_mod(
+                      BridgeFamily::Fabric,
+                      Path::new("missing.jar"),
+                      "CrashAssistant-fabric-26.2.jar"
+                  ));
+                  assert!(should_skip_runtime_worker_mod(
+                      BridgeFamily::NeoForge,
+                      Path::new("missing.jar"),
+                      "crash-assistant-26.2.jar"
+                  ));''',
+              'crash assistant filename test',
+          )
+
+          marker = '''    #[test]
+              fn crash_assistant_filename_fallback_survives_unreadable_jar() {'''
+          if marker not in text:
+              raise SystemExit('server-only test insertion marker missing')
+          test = r'''    #[test]
+              fn fabric_server_only_mods_are_not_staged_into_client_workers() {
+                  let stamp = SystemTime::now()
+                      .duration_since(UNIX_EPOCH)
+                      .unwrap()
+                      .as_nanos();
+                  let root = env::temp_dir().join(format!(
+                      "minesport-server-only-mod-{}-{stamp}",
+                      std::process::id()
+                  ));
+                  fs::create_dir_all(&root).unwrap();
+                  let jar = root.join("server-only.jar");
+                  let file = File::create(&jar).unwrap();
+                  let mut writer = zip::ZipWriter::new(file);
+                  let options = zip::write::SimpleFileOptions::default()
+                      .compression_method(zip::CompressionMethod::Stored);
+                  writer.start_file("fabric.mod.json", options).unwrap();
+                  writer
+                      .write_all(br#"{"schemaVersion":1,"id":"server_only","version":"1.0.0","environment":"server"}"#)
+                      .unwrap();
+                  writer.finish().unwrap();
+
+                  assert!(should_skip_runtime_worker_mod(
+                      BridgeFamily::Fabric,
+                      &jar,
+                      "server-only.jar"
+                  ));
+                  assert!(should_skip_runtime_worker_mod(
+                      BridgeFamily::Quilt,
+                      &jar,
+                      "server-only.jar"
+                  ));
+                  assert!(!should_skip_runtime_worker_mod(
+                      BridgeFamily::Forge,
+                      &jar,
+                      "server-only.jar"
+                  ));
+                  assert!(!should_skip_runtime_worker_mod(
+                      BridgeFamily::NeoForge,
+                      &jar,
+                      "server-only.jar"
+                  ));
+                  let _ = fs::remove_dir_all(root);
+              }
+
+          '''
+          text = text.replace(marker, test + marker, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rustfmt desktop/src/runtime_worker.rs
+          git diff --check
+      - name: Test runtime worker filter
+        shell: bash
+        run: cargo test --manifest-path desktop/Cargo.toml runtime_worker::tests --lib
+      - name: Publish tested fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git stash push -m runtime-worker-filter-tested
+          git pull --rebase origin main
+          git stash pop
+          git diff --check
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+          next=$(( ${max:-0} + 1 ))
+          git add desktop/src/runtime_worker.rs
+          git commit -m "FIX | BUG-${next} Skip irrelevant runtime-worker mods"
+          git push origin HEAD:main
