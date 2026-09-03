@@ -1,0 +1,246 @@
+name: One Shot BUG-120 Staged Engine Recovery
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/one-shot-bug-120-staged-engine-recovery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  fix-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Apply BUG-120 updater recovery patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("desktop/src/engine_update.rs")
+          text = path.read_text(encoding="utf-8")
+
+          old_load = '''    let stage_bytes = fs::read(&stage_path)
+              .with_context(|| format!("read staged engine update {}", stage_path.display()))?;
+          let stage: StagedEngineUpdate = match serde_json::from_slice(&stage_bytes) {
+              Ok(stage) => stage,
+              Err(error) => {
+                  let _ = fs::remove_file(&stage_path);
+                  return Err(error).context("parse staged engine update metadata");
+              }
+          };
+          validate_staged_update(&stage)?;
+          '''
+          new_load = '''    let stage = load_staged_update_or_discard(&stage_path)?;
+          '''
+          if text.count(old_load) != 1:
+              raise SystemExit("BUG-120 load-stage anchor is stale")
+          text = text.replace(old_load, new_load, 1)
+
+          old_verify = '''    let installer = staged_installer_path(&stage)?;
+          let metadata = fs::metadata(&installer)
+              .with_context(|| format!("inspect staged engine installer {}", installer.display()))?;
+          if metadata.len() != stage.installer_size {
+              clear_staged_update(&stage);
+              bail!(
+                  "staged engine installer size mismatch: file={} metadata={}",
+                  metadata.len(),
+                  stage.installer_size
+              );
+          }
+          let installer_hash = sha256_file(&installer)?;
+          if installer_hash != stage.installer_sha256.to_ascii_lowercase() {
+              clear_staged_update(&stage);
+              bail!("staged engine installer SHA-256 does not match its saved release digest");
+          }
+
+          verify_same_authenticode_signer(&executable, &installer)?;
+          '''
+          new_verify = '''    let installer = match verify_staged_installer(&executable, &stage) {
+              Ok(installer) => installer,
+              Err(error) => {
+                  clear_staged_update(&stage);
+                  return Err(error).context("verify staged engine installer");
+              }
+          };
+          '''
+          if text.count(old_verify) != 1:
+              raise SystemExit("BUG-120 staged-installer verification anchor is stale")
+          text = text.replace(old_verify, new_verify, 1)
+
+          old_stage_skip = '''    if staged_update_path().is_file() {
+              diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
+                  "EngineUpdateAlreadyStaged",
+                  "a verified engine update is already staged for the next launch",
+                  &[],
+              );
+              return Ok(());
+          }
+          '''
+          new_stage_skip = '''    let existing_stage_path = staged_update_path();
+          if existing_stage_path.is_file() {
+              match load_staged_update_or_discard(&existing_stage_path) {
+                  Ok(_) => {
+                      diagnostics::Logger::new("ENGINE").child("UPDATE").debug(
+                          "EngineUpdateAlreadyStaged",
+                          "a verified engine update is already staged for the next launch",
+                          &[],
+                      );
+                      return Ok(());
+                  }
+                  Err(error) => {
+                      diagnostics::Logger::new("ENGINE").child("UPDATE").warn(
+                          "EngineInvalidStagedUpdateDiscarded",
+                          "discarded invalid staged engine update metadata so repair/update discovery can continue",
+                          &[("error", format!("{error:#}"))],
+                      );
+                  }
+              }
+          }
+          '''
+          if text.count(old_stage_skip) != 1:
+              raise SystemExit("BUG-120 background-stage anchor is stale")
+          text = text.replace(old_stage_skip, new_stage_skip, 1)
+
+          helper_anchor = '''fn staged_installer_path(stage: &StagedEngineUpdate) -> Result<PathBuf> {
+              validate_staged_update(stage)?;
+              Ok(update_root().join(&stage.installer_name))
+          }
+
+          '''
+          helpers = '''fn load_staged_update_or_discard(path: &Path) -> Result<StagedEngineUpdate> {
+              let bytes = fs::read(path)
+                  .with_context(|| format!("read staged engine update {}", path.display()))?;
+              let stage: StagedEngineUpdate = match serde_json::from_slice(&bytes) {
+                  Ok(stage) => stage,
+                  Err(error) => {
+                      let _ = fs::remove_file(path);
+                      return Err(error).context("parse staged engine update metadata");
+                  }
+              };
+              if let Err(error) = validate_staged_update(&stage) {
+                  let _ = fs::remove_file(path);
+                  return Err(error).context("validate staged engine update metadata");
+              }
+              Ok(stage)
+          }
+
+          fn staged_installer_path(stage: &StagedEngineUpdate) -> Result<PathBuf> {
+              validate_staged_update(stage)?;
+              Ok(update_root().join(&stage.installer_name))
+          }
+
+          fn verify_staged_installer(
+              desktop_executable: &Path,
+              stage: &StagedEngineUpdate,
+          ) -> Result<PathBuf> {
+              let installer = staged_installer_path(stage)?;
+              let metadata = fs::metadata(&installer)
+                  .with_context(|| format!("inspect staged engine installer {}", installer.display()))?;
+              if metadata.len() != stage.installer_size {
+                  bail!(
+                      "staged engine installer size mismatch: file={} metadata={}",
+                      metadata.len(),
+                      stage.installer_size
+                  );
+              }
+              let installer_hash = sha256_file(&installer)?;
+              if installer_hash != stage.installer_sha256.to_ascii_lowercase() {
+                  bail!("staged engine installer SHA-256 does not match its saved release digest");
+              }
+              verify_same_authenticode_signer(desktop_executable, &installer)?;
+              Ok(installer)
+          }
+
+          '''
+          if text.count(helper_anchor) != 1:
+              raise SystemExit("BUG-120 helper insertion anchor is stale")
+          text = text.replace(helper_anchor, helpers, 1)
+
+          if "fn invalid_staged_metadata_is_discarded()" in text:
+              raise SystemExit("BUG-120 regression test already exists")
+          test = r'''
+
+              #[test]
+              fn invalid_staged_metadata_is_discarded() {
+                  let stamp = SystemTime::now()
+                      .duration_since(UNIX_EPOCH)
+                      .unwrap()
+                      .as_nanos();
+                  let root = env::temp_dir().join(format!(
+                      "minesport-invalid-staged-update-{}-{stamp}",
+                      std::process::id()
+                  ));
+                  fs::create_dir_all(&root).unwrap();
+                  let path = root.join("staged-engine-update.json");
+                  let stage = StagedEngineUpdate {
+                      release_tag: "v0.2.2".to_string(),
+                      installer_name: "Minesport-0.2.2-Setup-x64.exe".to_string(),
+                      installer_sha256: "a".repeat(64),
+                      installer_size: 123,
+                      manifest: EngineManifest {
+                          schema: ENGINE_MANIFEST_SCHEMA + 1,
+                          version: "0.2.2".to_string(),
+                          protocol_version: ipc::ENGINE_PROTOCOL_VERSION,
+                          sha256: "b".repeat(64),
+                          size: 456,
+                      },
+                  };
+                  fs::write(&path, serde_json::to_vec(&stage).unwrap()).unwrap();
+
+                  assert!(load_staged_update_or_discard(&path).is_err());
+                  assert!(!path.exists());
+                  let _ = fs::remove_dir_all(root);
+              }
+          '''
+          pos = text.rfind("\n}")
+          if pos < 0:
+              raise SystemExit("BUG-120 tests module terminator not found")
+          text = text[:pos] + test + text[pos:]
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Reuse verified runtime build inputs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p engine/build/libs dist/bundled-export-worker
+          gh run download 33788675134 --name minesport-engine-ci --dir engine/build/libs
+          gh run download 33788675134 --name loader-bridges-1.21.10 --dir dist/bundled-export-worker
+          test -n "$(find engine/build/libs -maxdepth 1 -type f -name 'minesport-engine-*.jar' -print -quit)"
+          test -s dist/bundled-export-worker/minesport_export_worker-fabric-1.21.10.jar
+
+      - name: Format and test Windows updater
+        shell: bash
+        run: |
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          cargo test --manifest-path desktop/Cargo.toml
+
+      - name: Commit tested BUG-120 fix
+        shell: bash
+        run: |
+          rm .github/workflows/one-shot-bug-120-staged-engine-recovery.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add desktop/src/engine_update.rs .github/workflows/one-shot-bug-120-staged-engine-recovery.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-120 Discard unrecoverable staged engine updates"
+          git pull --rebase origin main
+          git push origin HEAD:main
