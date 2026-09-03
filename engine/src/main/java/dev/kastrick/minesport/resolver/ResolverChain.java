@@ -32,7 +32,30 @@ public class ResolverChain implements AutoCloseable {
     public ResolverChain() { CURRENT.set(this); }
     public static ResolverChain current() { return CURRENT.get(); }
 
-    public void addResolver(AssetResolver resolver) { resolvers.add(resolver); }
+    public void addResolver(AssetResolver resolver) {
+        if (resolver == null) return;
+
+        // Mod JAR resources sit above the vanilla client pack in Minecraft's
+        // resource stack. Some callers historically add vanilla first, so keep
+        // the chain correct even in that construction order. User resource
+        // packs and generic/custom resolvers otherwise preserve insertion order.
+        if (isModLayerResolver(resolver)) {
+            for (int i = 0; i < resolvers.size(); i++) {
+                if (resolvers.get(i) instanceof VanillaResolver) {
+                    resolvers.add(i, resolver);
+                    return;
+                }
+            }
+        }
+        resolvers.add(resolver);
+    }
+
+    private static boolean isModLayerResolver(AssetResolver resolver) {
+        return resolver instanceof FabricResolver
+            || resolver instanceof PolymerResolver
+            || resolver instanceof QuiltResolver
+            || resolver instanceof ForgeResolver;
+    }
 
     public BlockState resolveBlockState(String blockId) {
         for (AssetResolver r : resolvers) {
