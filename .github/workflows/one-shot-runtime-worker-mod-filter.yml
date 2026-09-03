@@ -206,7 +206,7 @@ jobs:
           git diff --check
       - name: Test runtime worker filter
         shell: bash
-        run: cargo test --manifest-path desktop/Cargo.toml runtime_worker::tests --lib
+        run: cargo test --manifest-path desktop/Cargo.toml runtime_worker::tests
       - name: Publish tested fix
         shell: bash
         run: |
