@@ -58,10 +58,9 @@ public class QuiltResolver implements AssetResolver {
 
     /**
      * Scan a mods folder and load all Quilt mod jars.
-     * A jar only registers with this resolver if it has quilt.mod.json OR
-     * fabric.mod.json — plain library jars are skipped entirely (they're
-     * picked up by whichever loader-specific resolver actually needs them,
-     * or ignored if neither claims them).
+     * A jar is claimed when it contains quilt.mod.json or fabric.mod.json.
+     * Metadata extraction is best-effort and never gates access to the jar's
+     * standard assets/<namespace>/... resources.
      *
      * @param modsFolder  e.g. .minecraft/mods or an instance's mods folder
      * @param log         optional logger
@@ -103,27 +102,30 @@ public class QuiltResolver implements AssetResolver {
 
         ZipEntry quiltMeta = zip.getEntry("quilt.mod.json");
         ZipEntry fabricMeta = zip.getEntry("fabric.mod.json");
-
-        ModInfo info = null;
-        if (quiltMeta != null) {
-            info = parseQuiltMeta(zip.getInputStream(quiltMeta), jarFile);
-        } else if (fabricMeta != null) {
-            // Fabric-compat mod running under Quilt — reuse its fabric.mod.json
-            info = parseFabricCompatMeta(zip.getInputStream(fabricMeta), jarFile);
-        }
-
-        if (info == null) {
-            // Neither Quilt nor Fabric metadata present — not a mod this
-            // resolver claims. Still worth scanning for stray assets in
-            // case it's a resource-only jar, but we don't register it as a mod.
+        if (quiltMeta == null && fabricMeta == null) {
             zip.close();
             return;
         }
 
-        detectedMods.put(info.modId(), info);
-        if (log != null) {
-            String tag = info.fabricCompat() ? " (Fabric-compat)" : "";
-            log.accept("  [mod] " + info.modId() + " v" + info.version() + tag + " (" + jarFile.getName() + ")");
+        ModInfo info;
+        if (quiltMeta != null) {
+            info = parseQuiltMeta(zip.getInputStream(quiltMeta), jarFile);
+        } else {
+            // Fabric-compat mod running under Quilt — reuse its fabric.mod.json.
+            info = parseFabricCompatMeta(zip.getInputStream(fabricMeta), jarFile);
+        }
+
+        if (info != null) {
+            detectedMods.put(info.modId(), info);
+            if (log != null) {
+                String tag = info.fabricCompat() ? " (Fabric-compat)" : "";
+                log.accept("  [mod] " + info.modId() + " v" + info.version() + tag + " (" + jarFile.getName() + ")");
+            }
+        } else if (log != null) {
+            log.accept(
+                "[QuiltResolver] Loader metadata present but friendly mod information could not be parsed in "
+                    + jarFile.getName() + "; indexing assets anyway"
+            );
         }
 
         scanNamespaces(zip);
