@@ -1,5 +1,5 @@
 use crate::{diagnostics, engine_lease, ipc, runtime};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -658,6 +658,9 @@ fn validate_manifest_shape(manifest: &EngineManifest) -> Result<()> {
     if manifest.version.trim().is_empty() {
         bail!("engine manifest version is empty");
     }
+    if parse_semver(&manifest.version).is_none() {
+        bail!("engine manifest version is not valid semantic versioning");
+    }
     if manifest.protocol_version == 0 {
         bail!("engine manifest protocolVersion must be positive");
     }
@@ -891,28 +894,135 @@ fn powershell_executable() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("powershell.exe"))
 }
 
-fn compare_versions(left: &str, right: &str) -> Result<Ordering> {
-    let left = parse_semver_core(left)
-        .ok_or_else(|| anyhow!("engine version is not semantic version x.y.z: {left}"))?;
-    let right = parse_semver_core(right)
-        .ok_or_else(|| anyhow!("engine version is not semantic version x.y.z: {right}"))?;
-    Ok(left.cmp(&right))
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct ParsedSemver {
+    core: (u64, u64, u64),
+    prerelease: Vec<SemverIdentifier>,
 }
 
-fn parse_semver_core(value: &str) -> Option<(u64, u64, u64)> {
-    let core = value
-        .trim()
-        .trim_start_matches(['v', 'V'])
-        .split(['-', '+'])
-        .next()?;
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum SemverIdentifier {
+    Numeric(String),
+    Text(String),
+}
+
+fn compare_versions(left: &str, right: &str) -> Result<Ordering> {
+    let left = parse_semver(left)
+        .ok_or_else(|| anyhow!("engine version is not valid semantic versioning: {left}"))?;
+    let right = parse_semver(right)
+        .ok_or_else(|| anyhow!("engine version is not valid semantic versioning: {right}"))?;
+
+    let core = left.core.cmp(&right.core);
+    if core != Ordering::Equal {
+        return Ok(core);
+    }
+    Ok(compare_prerelease(&left.prerelease, &right.prerelease))
+}
+
+fn compare_prerelease(left: &[SemverIdentifier], right: &[SemverIdentifier]) -> Ordering {
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => return Ordering::Greater,
+        (false, true) => return Ordering::Less,
+        (false, false) => {}
+    }
+
+    for (left, right) in left.iter().zip(right) {
+        let ordering = match (left, right) {
+            (SemverIdentifier::Numeric(left), SemverIdentifier::Numeric(right)) => {
+                left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+            }
+            (SemverIdentifier::Numeric(_), SemverIdentifier::Text(_)) => Ordering::Less,
+            (SemverIdentifier::Text(_), SemverIdentifier::Numeric(_)) => Ordering::Greater,
+            (SemverIdentifier::Text(left), SemverIdentifier::Text(right)) => left.cmp(right),
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+fn parse_semver(value: &str) -> Option<ParsedSemver> {
+    let value = value.trim();
+    let value = value
+        .strip_prefix('v')
+        .or_else(|| value.strip_prefix('V'))
+        .unwrap_or(value);
+    if value.is_empty() {
+        return None;
+    }
+
+    let (version, build) = match value.split_once('+') {
+        Some((version, build)) => (version, Some(build)),
+        None => (value, None),
+    };
+    if let Some(build) = build {
+        if !valid_semver_identifiers(build, false) {
+            return None;
+        }
+    }
+
+    let (core, prerelease) = match version.split_once('-') {
+        Some((core, prerelease)) => (core, Some(prerelease)),
+        None => (version, None),
+    };
     let mut parts = core.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?.parse().ok()?;
+    let major = parse_semver_core_number(parts.next()?)?;
+    let minor = parse_semver_core_number(parts.next()?)?;
+    let patch = parse_semver_core_number(parts.next()?)?;
     if parts.next().is_some() {
         return None;
     }
-    Some((major, minor, patch))
+
+    let prerelease = match prerelease {
+        Some(prerelease) => parse_prerelease(prerelease)?,
+        None => Vec::new(),
+    };
+    Some(ParsedSemver {
+        core: (major, minor, patch),
+        prerelease,
+    })
+}
+
+fn parse_semver_core_number(value: &str) -> Option<u64> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn parse_prerelease(value: &str) -> Option<Vec<SemverIdentifier>> {
+    if !valid_semver_identifiers(value, true) {
+        return None;
+    }
+    value
+        .split('.')
+        .map(|identifier| {
+            if identifier.bytes().all(|byte| byte.is_ascii_digit()) {
+                if identifier.len() > 1 && identifier.starts_with('0') {
+                    None
+                } else {
+                    Some(SemverIdentifier::Numeric(identifier.to_string()))
+                }
+            } else {
+                Some(SemverIdentifier::Text(identifier.to_string()))
+            }
+        })
+        .collect()
+}
+
+fn valid_semver_identifiers(value: &str, _prerelease: bool) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|identifier| {
+            !identifier.is_empty()
+                && identifier
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 fn update_check_due() -> bool {
@@ -1064,6 +1174,28 @@ mod tests {
             compare_versions("0.3.0-beta.1", "0.2.99").unwrap(),
             Ordering::Greater
         );
+        assert_eq!(
+            compare_versions("0.3.0", "0.3.0-beta.1").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("0.3.0-beta.1", "0.3.0").unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_versions("0.3.0-beta.11", "0.3.0-beta.2").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("0.3.0-beta.1", "0.3.0-beta.alpha").unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_versions("0.3.0+build.9", "0.3.0+build.1").unwrap(),
+            Ordering::Equal
+        );
+        assert!(compare_versions("0.3.0-beta.01", "0.3.0-beta.1").is_err());
+        assert!(compare_versions("0.3.0-alpha..1", "0.3.0-alpha.1").is_err());
     }
 
     #[test]
