@@ -212,6 +212,8 @@ jobs:
           git diff --check
       - name: Test runtime worker filter
         shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
         run: cargo test --manifest-path desktop/Cargo.toml runtime_worker::tests
       - name: Publish tested fix
         shell: bash
