@@ -3,7 +3,7 @@ use crate::{
     bridge_family::{self, BridgeFamily},
     bridge_java, diagnostics, registry, runtime, toolchain,
 };
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -14,9 +14,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -512,7 +511,7 @@ where
             .with_context(|| format!("stage embedded Bridge {}", bridge.display()))?;
     }
 
-    let count = copy_worker_mods(mods_path, &run_mods)?;
+    let count = copy_worker_mods(family, mods_path, &run_mods)?;
     progress(bridge_compat::CompatProgress {
         percent: 36,
         stage: "Preparing worker".into(),
@@ -998,7 +997,7 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
     }
 }
 
-fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
+fn copy_worker_mods(family: BridgeFamily, source: &Path, target: &Path) -> Result<usize> {
     let mut count = 0;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -1019,7 +1018,7 @@ fn copy_worker_mods(source: &Path, target: &Path) -> Result<usize> {
         {
             continue;
         }
-        if should_skip_runtime_worker_mod(&path, &filename) {
+        if should_skip_runtime_worker_mod(family, &path, &filename) {
             continue;
         }
         let destination = target.join(entry.file_name());
@@ -1043,16 +1042,34 @@ fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn should_skip_runtime_worker_mod(jar_path: &Path, filename: &str) -> bool {
+fn should_skip_runtime_worker_mod(family: BridgeFamily, jar_path: &Path, filename: &str) -> bool {
     let lower = filename.to_ascii_lowercase();
     if lower.starts_with("crashassistant-") || lower.starts_with("crash-assistant-") {
         return true;
     }
-    runtime_worker_fabric_mod_id(jar_path)
-        .is_some_and(|id| id.eq_ignore_ascii_case("crash_assistant"))
+
+    // Fabric metadata is meaningful for Fabric and Quilt's Fabric-compatible
+    // mod path. Forge/NeoForge workers should not open every JAR looking for
+    // fabric.mod.json when their loader will never consult it.
+    if !matches!(family, BridgeFamily::Fabric | BridgeFamily::Quilt) {
+        return false;
+    }
+
+    runtime_worker_fabric_metadata(jar_path).is_some_and(|metadata| {
+        metadata.id.eq_ignore_ascii_case("crash_assistant")
+            || metadata.environment.eq_ignore_ascii_case("server")
+    })
 }
 
-fn runtime_worker_fabric_mod_id(jar_path: &Path) -> Option<String> {
+#[derive(Debug, Deserialize)]
+struct RuntimeWorkerFabricMetadata {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    environment: String,
+}
+
+fn runtime_worker_fabric_metadata(jar_path: &Path) -> Option<RuntimeWorkerFabricMetadata> {
     let file = File::open(jar_path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
     let mut entry = archive.by_name("fabric.mod.json").ok()?;
@@ -1065,19 +1082,7 @@ fn runtime_worker_fabric_mod_id(jar_path: &Path) -> Option<String> {
     if bytes.len() as u64 > FABRIC_MOD_JSON_LIMIT {
         return None;
     }
-
-    #[derive(Deserialize)]
-    struct FabricMetadata {
-        #[serde(default)]
-        id: String,
-    }
-    let metadata: FabricMetadata = serde_json::from_slice(&bytes).ok()?;
-    let id = metadata.id.trim();
-    if id.is_empty() {
-        None
-    } else {
-        Some(id.to_string())
-    }
+    serde_json::from_slice(&bytes).ok()
 }
 
 fn copy_directory(source: &Path, target: &Path) -> Result<()> {
@@ -1481,10 +1486,11 @@ mod tests {
         writer.finish().unwrap();
 
         assert_eq!(
-            runtime_worker_fabric_mod_id(&jar).as_deref(),
-            Some("crash_assistant")
+            runtime_worker_fabric_metadata(&jar).map(|metadata| metadata.id),
+            Some("crash_assistant".to_string())
         );
         assert!(should_skip_runtime_worker_mod(
+            BridgeFamily::Fabric,
             &jar,
             "totally-normal-mod.jar"
         ));
@@ -1492,12 +1498,59 @@ mod tests {
     }
 
     #[test]
+    fn fabric_server_only_mods_are_not_staged_into_client_workers() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "minesport-server-only-mod-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let jar = root.join("server-only.jar");
+        let file = File::create(&jar).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("fabric.mod.json", options).unwrap();
+        writer
+            .write_all(br#"{"schemaVersion":1,"id":"server_only","version":"1.0.0","environment":"server"}"#)
+            .unwrap();
+        writer.finish().unwrap();
+
+        assert!(should_skip_runtime_worker_mod(
+            BridgeFamily::Fabric,
+            &jar,
+            "server-only.jar"
+        ));
+        assert!(should_skip_runtime_worker_mod(
+            BridgeFamily::Quilt,
+            &jar,
+            "server-only.jar"
+        ));
+        assert!(!should_skip_runtime_worker_mod(
+            BridgeFamily::Forge,
+            &jar,
+            "server-only.jar"
+        ));
+        assert!(!should_skip_runtime_worker_mod(
+            BridgeFamily::NeoForge,
+            &jar,
+            "server-only.jar"
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn crash_assistant_filename_fallback_survives_unreadable_jar() {
         assert!(should_skip_runtime_worker_mod(
+            BridgeFamily::Fabric,
             Path::new("missing.jar"),
             "CrashAssistant-fabric-26.2.jar"
         ));
         assert!(should_skip_runtime_worker_mod(
+            BridgeFamily::NeoForge,
             Path::new("missing.jar"),
             "crash-assistant-26.2.jar"
         ));
