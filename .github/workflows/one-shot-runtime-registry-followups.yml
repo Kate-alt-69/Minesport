@@ -98,8 +98,8 @@ jobs:
               snapshot_path,
           };'''
           new = '''pub use legacy::{
-              CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint,
-              mods_fingerprint_filtered, snapshot_exists, snapshot_path,
+              CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint_filtered,
+              snapshot_exists, snapshot_path,
           };'''
           if text.count(old) != 1:
               raise SystemExit('registry stream re-export anchor changed')
@@ -361,7 +361,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git rm .github/workflows/one-shot-runtime-registry-followups.yml
           git add desktop/src/registry_stream.rs
           git diff --cached --check
           git commit -m "FIX | BUG-${BUG_SECOND} Preserve bounded runtime registry packets"
