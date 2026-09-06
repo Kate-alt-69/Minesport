@@ -25,14 +25,8 @@ jobs:
 
           path = Path('.github/workflows/one-shot-runtime-registry-followups.yml')
           text = path.read_text(encoding='utf-8')
-          old = '''          new = '''pub use legacy::{
-              CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint,
-              mods_fingerprint_filtered, snapshot_exists, snapshot_path,
-          };'''\n'''
-          new = '''          new = '''pub use legacy::{
-              CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint_filtered,
-              snapshot_exists, snapshot_path,
-          };'''\n'''
+          old = "              CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint,\n              mods_fingerprint_filtered, snapshot_exists, snapshot_path,"
+          new = "              CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint_filtered,\n              snapshot_exists, snapshot_path,"
           if text.count(old) != 1:
               raise SystemExit(f'expected one stale re-export patch, found {text.count(old)}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
