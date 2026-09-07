@@ -4,7 +4,7 @@ import runpy
 helper = Path('.github/patches/apply-atomic-export-bundle.py')
 text = helper.read_text(encoding='utf-8')
 
-old = '''text = replace_once(
+old = """text = replace_once(
     text,
     '''                    outFile,
                     mode,
@@ -14,9 +14,9 @@ old = '''text = replace_once(
                     mode,
                     optimize,
                     (doneCount, total) -> {''',
-    "IPC glTF staged target",
-)'''
-new = '''text = replace_once(
+    \"IPC glTF staged target\",
+)"""
+new = """text = replace_once(
     text,
     '''                stats = new GltfExporter(chain).export(
                     allBlocks,
@@ -32,8 +32,8 @@ new = '''text = replace_once(
                     mode,
                     optimize,
                     (doneCount, total) -> {''',
-    "IPC glTF staged target",
-)'''
+    \"IPC glTF staged target\",
+)"""
 if old not in text:
     raise SystemExit('atomic export glTF helper anchor missing')
 text = text.replace(old, new, 1)
