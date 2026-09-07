@@ -110,6 +110,24 @@ jobs:
           test -s /tmp/export-name-safety.patch
           git reset --hard HEAD
 
+      - name: Test capture-worker cache identity
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-runtime-capture-identity.py
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
+          grep -Fq 'runtime_worker_capture_fingerprint' desktop/src/runtime_worker.rs
+          grep -Fq 'minesport-runtime-worker-cache-v2' desktop/src/runtime_worker.rs
+          git add desktop/src/runtime_worker.rs
+          git rm .github/patches/apply-runtime-capture-identity.py
+          git diff --cached --binary --full-index > /tmp/runtime-capture-identity.patch
+          test -s /tmp/runtime-capture-identity.patch
+          git reset --hard HEAD
+
       - name: Publish tested fixes
         shell: bash
         env:
@@ -126,6 +144,7 @@ jobs:
           texture_bug=$(( ${max:-0} + 1 ))
           collision_bug=$(( texture_bug + 1 ))
           name_bug=$(( collision_bug + 1 ))
+          identity_bug=$(( name_bug + 1 ))
 
           git apply --index /tmp/obj-textures.patch
           git diff --cached --check
@@ -134,13 +153,20 @@ jobs:
 
           git apply --index /tmp/export-collisions.patch
           git diff --cached --check
+          rustfmt --edition 2024 --check desktop/src/app.rs
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::export_bundle_collision_detection_includes_companion_files_and_assets
           git commit -m "FIX | BUG-${collision_bug} Detect export companion collisions"
 
           git apply --index /tmp/export-name-safety.patch
           git diff --cached --check
-          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          rustfmt --edition 2024 --check desktop/src/app.rs
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::sanitizes_windows_reserved_device_export_names
           git commit -m "FIX | BUG-${name_bug} Sanitize Windows reserved export names"
+
+          git apply --index /tmp/runtime-capture-identity.patch
+          git diff --cached --check
+          rustfmt --edition 2024 --check desktop/src/runtime_worker.rs
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
+          git commit -m "FIX | BUG-${identity_bug} Include capture worker in runtime cache identity"
 
           git push origin HEAD:main
