@@ -1,0 +1,96 @@
+name: One Shot Registry Fingerprint Path
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: one-shot-registry-fingerprint-path
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | stage registry fingerprint path fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Install desktop test dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+
+      - name: Restore embedded engine artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Restore embedded loader bridges
+        uses: actions/download-artifact@v7
+        with:
+          name: loader-bridges-1.21.10
+          path: dist/bundled-export-worker
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Apply and test registry path fix
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-registry-fingerprint-path.py
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+          grep -Fq 'fingerprint_component(fingerprint)' desktop/src/registry.rs
+          grep -Fq 'long_scoped_fingerprint_paths_preserve_full_identity' desktop/src/registry.rs
+
+          git add desktop/src/registry.rs
+          git rm .github/patches/apply-registry-fingerprint-path.py \
+            .github/workflows/one-shot-registry-fingerprint-path.yml
+          git diff --cached --binary --full-index > /tmp/registry-path.patch
+          test -s /tmp/registry-path.patch
+          git reset --hard HEAD
+
+      - name: Publish tested fix
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git pull --rebase origin main
+          git apply --index /tmp/registry-path.patch
+          git diff --cached --check
+          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests::long_scoped_fingerprint_paths_preserve_full_identity
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+          next=$(( ${max:-0} + 1 ))
+          git commit -m "FIX | BUG-${next} Preserve full scoped registry cache identity"
+          git push origin HEAD:main
