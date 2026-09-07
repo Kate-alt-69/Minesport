@@ -141,8 +141,6 @@ jobs:
           registry_bug=$(( runtime_bug + 1 ))
           bridge_bug=$(( registry_bug + 1 ))
 
-          # Re-run every structural transform on the current rebased source.
-          # This is intentionally not `git apply --index` from a pre-rebase diff.
           python .github/patches/apply-atomic-export-bundle-v2.py
           git diff --check
           (cd engine && ./gradlew --no-daemon --stacktrace test)
@@ -181,6 +179,15 @@ jobs:
           git rm .github/patches/apply-bridge-build-retry.py
           git diff --cached --check
           git commit -m "FIX | BUG-${bridge_bug} Retry transient loader dependency failures"
+
+          # Tests/builds can leave tracked artifacts dirty. All intended source
+          # changes are committed above, so restore exactly to HEAD before the
+          # final safety rebase instead of letting generated dirt block it.
+          echo 'Tracked state before final publisher cleanup:'
+          git status --short
+          git restore --staged --worktree .
+          echo 'Tracked state after final publisher cleanup:'
+          git status --short
 
           # Close the last-minute push race too. A conflict fails safely; a clean
           # rebase is revalidated before anything reaches main.
