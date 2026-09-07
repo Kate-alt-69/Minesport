@@ -1,4 +1,5 @@
 name: One Shot Integrity Followups
+# One-shot gate for the two validated integrity fixes below.
 
 on:
   push:
