@@ -1,4 +1,4 @@
-name: One Shot Runtime Registry Followups
+name: One Shot Runtime Cache Readiness
 
 on:
   push:
@@ -8,12 +8,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-shot-runtime-registry-followups
+  group: one-shot-runtime-cache-readiness
   cancel-in-progress: false
 
 jobs:
   integrate:
-    if: github.event.head_commit.message == 'CHORE | stage runtime registry followups'
+    if: github.event.head_commit.message == 'CHORE | stage runtime cache readiness'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -33,55 +33,37 @@ jobs:
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
 
-      - name: Apply worker cache fingerprint fix
+      - name: Apply runtime cache readiness fix
         run: |
-          python .github/patches/apply-runtime-registry-followups.py bug125
-          rustfmt desktop/src/registry_stream.rs desktop/src/runtime_worker.rs
+          python .github/patches/apply-runtime-registry-followups.py
+          rustfmt desktop/src/registry_stream.rs desktop/src/runtime_cache.rs
           git diff --check
 
-      - name: Test filtered worker cache identity
+      - name: Test runtime cache readiness
         env:
           MINESPORT_FAST_CHECK: '1'
-        run: cargo test --manifest-path desktop/Cargo.toml runtime_worker::tests
+        run: |
+          cargo test --manifest-path desktop/Cargo.toml registry::tests
+          cargo test --manifest-path desktop/Cargo.toml runtime_cache::tests
 
-      - name: Commit tested cache fingerprint fix locally
+      - name: Publish tested fix
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
           subjects="$(git log origin/main --format=%s)"
           max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
-          first=$(( ${max:-0} + 1 ))
-          second=$(( first + 1 ))
-          echo "BUG_FIRST=$first" >> "$GITHUB_ENV"
-          echo "BUG_SECOND=$second" >> "$GITHUB_ENV"
-          git add desktop/src/registry.rs desktop/src/registry_stream.rs desktop/src/runtime_worker.rs
+          next=$(( ${max:-0} + 1 ))
+
+          git add desktop/src/registry_stream.rs desktop/src/runtime_cache.rs
           git diff --cached --check
-          git commit -m "FIX | BUG-${first} Ignore unstaged mods in cache fingerprints"
-
-      - name: Apply bounded registry packet fix
-        run: |
-          python .github/patches/apply-runtime-registry-followups.py bug126
-          rustfmt desktop/src/registry_stream.rs
-          git diff --check
-
-      - name: Test bounded streaming registry packets
-        env:
-          MINESPORT_FAST_CHECK: '1'
-        run: cargo test --manifest-path desktop/Cargo.toml registry::tests
-
-      - name: Publish both tested fixes
-        shell: bash
-        run: |
-          set -euo pipefail
-          git add desktop/src/registry_stream.rs
-          git diff --cached --check
-          git commit -m "FIX | BUG-${BUG_SECOND} Preserve bounded runtime registry packets"
+          git commit -m "FIX | BUG-${next} Reject incomplete runtime registry caches"
 
           git fetch origin main
           current_max="$(git log origin/main --format=%s | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
-          if [ "${current_max:-0}" -ge "$BUG_FIRST" ]; then
+          if [ "${current_max:-0}" -ge "$next" ]; then
             echo "BUG numbering changed while validation ran; refusing an ambiguous publish" >&2
             exit 1
           fi
