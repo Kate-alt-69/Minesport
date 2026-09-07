@@ -185,7 +185,7 @@ jobs:
           git commit -m "FIX | BUG-${texture_bug} Isolate OBJ texture assets per export"
 
           python .github/patches/apply-export-isolation-followups.py rust
-          cargo fmt --manifest-path desktop/Cargo.toml
+          rustfmt --edition 2024 desktop/src/app.rs
           git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::export_bundle_collision_detection_includes_companion_files_and_assets
           git add desktop/src/app.rs
@@ -193,7 +193,7 @@ jobs:
           git commit -m "FIX | BUG-${collision_bug} Detect export companion collisions"
 
           python .github/patches/apply-export-name-safety.py
-          cargo fmt --manifest-path desktop/Cargo.toml
+          rustfmt --edition 2024 desktop/src/app.rs
           git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::sanitizes_windows_reserved_device_export_names
           git add desktop/src/app.rs
@@ -202,7 +202,7 @@ jobs:
           git commit -m "FIX | BUG-${name_bug} Sanitize Windows reserved export names"
 
           python .github/patches/apply-runtime-capture-identity.py
-          cargo fmt --manifest-path desktop/Cargo.toml
+          rustfmt --edition 2024 desktop/src/runtime_worker.rs
           git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
           git add desktop/src/runtime_worker.rs
