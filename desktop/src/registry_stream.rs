@@ -3,11 +3,11 @@ mod legacy {
 }
 
 pub use legacy::{
-    CaptureNotice, EPHEMERAL_ADDRESS, SNAPSHOT_SCHEMA, mods_fingerprint, snapshot_exists,
-    snapshot_path,
+    mods_fingerprint_filtered, snapshot_exists, snapshot_path, CaptureNotice, EPHEMERAL_ADDRESS,
+    SNAPSHOT_SCHEMA,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -16,8 +16,8 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},

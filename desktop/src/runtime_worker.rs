@@ -156,7 +156,7 @@ where
         percent: 1,
         message: "Checking mods…".into(),
     });
-    let raw_fingerprint = registry::mods_fingerprint(mods_path)?;
+    let raw_fingerprint = runtime_worker_mods_fingerprint(family, mods_path)?;
     let fingerprint = loader_cache_fingerprint(family, &raw_fingerprint);
     if cancel.load(Ordering::Relaxed) {
         bail!("runtime cache cancelled");
@@ -997,6 +997,20 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
     }
 }
 
+fn should_stage_runtime_worker_mod(family: BridgeFamily, jar_path: &Path, filename: &str) -> bool {
+    let lower = filename.to_ascii_lowercase();
+    if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-") {
+        return false;
+    }
+    !should_skip_runtime_worker_mod(family, jar_path, filename)
+}
+
+fn runtime_worker_mods_fingerprint(family: BridgeFamily, mods_path: &Path) -> Result<String> {
+    registry::mods_fingerprint_filtered(mods_path, |path, filename| {
+        should_stage_runtime_worker_mod(family, path, filename)
+    })
+}
+
 fn copy_worker_mods(family: BridgeFamily, source: &Path, target: &Path) -> Result<usize> {
     let mut count = 0;
     for entry in fs::read_dir(source)? {
@@ -1013,12 +1027,7 @@ fn copy_worker_mods(family: BridgeFamily, source: &Path, target: &Path) -> Resul
             continue;
         }
         let filename = entry.file_name().to_string_lossy().to_string();
-        let lower = filename.to_ascii_lowercase();
-        if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-")
-        {
-            continue;
-        }
-        if should_skip_runtime_worker_mod(family, &path, &filename) {
+        if !should_stage_runtime_worker_mod(family, &path, &filename) {
             continue;
         }
         let destination = target.join(entry.file_name());
@@ -1539,6 +1548,35 @@ mod tests {
             &jar,
             "server-only.jar"
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_fingerprint_ignores_mods_the_worker_will_not_stage() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "minesport-worker-fingerprint-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let normal = root.join("normal.jar");
+        let ignored = root.join("CrashAssistant-fabric-26.2.jar");
+        fs::write(&normal, b"normal-v1").unwrap();
+        fs::write(&ignored, b"ignored-v1").unwrap();
+
+        let first = runtime_worker_mods_fingerprint(BridgeFamily::Fabric, &root).unwrap();
+        fs::write(&ignored, b"ignored-v2-with-different-size").unwrap();
+        let after_ignored_change =
+            runtime_worker_mods_fingerprint(BridgeFamily::Fabric, &root).unwrap();
+        assert_eq!(first, after_ignored_change);
+
+        fs::write(&normal, b"normal-v2-with-different-size").unwrap();
+        let after_staged_change =
+            runtime_worker_mods_fingerprint(BridgeFamily::Fabric, &root).unwrap();
+        assert_ne!(first, after_staged_change);
         let _ = fs::remove_dir_all(root);
     }
 

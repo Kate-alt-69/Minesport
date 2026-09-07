@@ -484,6 +484,13 @@ fn prune_sibling_fingerprints(cache_root: &Path, version: &str, keep: &str) -> R
 }
 
 pub fn mods_fingerprint(mods_path: &Path) -> Result<String> {
+    mods_fingerprint_filtered(mods_path, |_, name| !name.starts_with(CAPTURE_PREFIX))
+}
+
+pub fn mods_fingerprint_filtered<F>(mods_path: &Path, mut include: F) -> Result<String>
+where
+    F: FnMut(&Path, &str) -> bool,
+{
     if !mods_path.is_dir() { bail!("mods folder is unavailable: {}", mods_path.display()); }
     let mut jars = Vec::new();
     for entry in fs::read_dir(mods_path).with_context(|| format!("read mods folder {}", mods_path.display()))? {
@@ -492,7 +499,7 @@ pub fn mods_fingerprint(mods_path: &Path) -> Result<String> {
         if !entry.file_type()?.is_file() { continue; }
         if path.extension().and_then(|ext| ext.to_str()).is_none_or(|ext| !ext.eq_ignore_ascii_case("jar")) { continue; }
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if name.starts_with(CAPTURE_PREFIX) { continue; }
+        if !include(&path, &name) { continue; }
         let size = entry.metadata()?.len();
         jars.push((name, path, size));
     }
@@ -504,6 +511,7 @@ pub fn mods_fingerprint(mods_path: &Path) -> Result<String> {
     }
     Ok(hex_lower(&total.finalize()))
 }
+
 fn sha256_file(path: &Path) -> Result<Vec<u8>> {
     let mut file = File::open(path).with_context(|| format!("open mod JAR {}", path.display()))?;
     let mut hasher = Sha256::new();
