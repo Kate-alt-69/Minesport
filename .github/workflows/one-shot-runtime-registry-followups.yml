@@ -1,4 +1,4 @@
-name: One Shot Runtime Config Fingerprint
+name: One Shot Reserved Worker Filename Guard
 
 on:
   push:
@@ -8,12 +8,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-shot-runtime-config-fingerprint
+  group: one-shot-reserved-worker-filenames
   cancel-in-progress: false
 
 jobs:
   integrate:
-    if: github.event.head_commit.message == 'CHORE | stage runtime config fingerprint'
+    if: github.event.head_commit.message == 'CHORE | stage reserved worker filename guard'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -33,13 +33,13 @@ jobs:
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
 
-      - name: Apply runtime config fingerprint fix
+      - name: Apply reserved worker filename guard
         run: |
           python .github/patches/apply-runtime-registry-followups.py
           rustfmt desktop/src/runtime_worker.rs
           git diff --check
 
-      - name: Test runtime config fingerprint
+      - name: Test reserved worker filename guard
         env:
           MINESPORT_FAST_CHECK: '1'
         run: cargo test --manifest-path desktop/Cargo.toml runtime_worker::tests
@@ -57,7 +57,7 @@ jobs:
 
           git add desktop/src/runtime_worker.rs
           git diff --cached --check
-          git commit -m "FIX | BUG-${next} Include worker config in cache fingerprints"
+          git commit -m "FIX | BUG-${next} Reserve embedded Export Worker filenames"
 
           git fetch origin main
           current_max="$(git log origin/main --format=%s | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
