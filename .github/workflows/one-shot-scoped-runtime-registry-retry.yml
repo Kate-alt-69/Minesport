@@ -79,7 +79,21 @@ jobs:
           new = '            || !registry::snapshot_path_is_ready(&state.ready_path, version, &state.fingerprint)\n'
           if text.count(old) != 1:
               raise SystemExit(f'BUG-127 readiness restore anchor count={text.count(old)}')
-          cache.write_text(text.replace(old, new, 1), encoding='utf-8')
+          text = text.replace(old, new, 1)
+
+          old = '''        std::fs::create_dir_all(&root).unwrap();
+          let registry = root.join("registry.data");
+          std::fs::write(&registry, b"ready").unwrap();'''
+          new = '''        let registry = registry::write_empty_snapshot_for_test(
+              &root,
+              "1.21.10",
+              "scoped",
+          )
+          .unwrap();'''
+          if text.count(old) != 1:
+              raise SystemExit(f'BUG-127 scoped ready fixture anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          cache.write_text(text, encoding='utf-8')
 
           worker = Path('desktop/src/runtime_worker.rs')
           text = worker.read_text(encoding='utf-8')
