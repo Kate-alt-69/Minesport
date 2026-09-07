@@ -18,7 +18,7 @@ jobs:
   integrate:
     if: github.event.head_commit.message == 'CHORE | stage export isolation followups'
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v7
         with:
@@ -139,6 +139,22 @@ jobs:
           grep -Fq 'run_gradle_build "Java engine"' build.sh
           git reset --hard HEAD
 
+      - name: Validate full scoped registry path identity
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-registry-fingerprint-path.py
+          git diff --check
+          # registry.rs is intentionally legacy/densely formatted. Do not run
+          # workspace rustfmt here: it would mix hundreds of unrelated changes
+          # into this path-identity fix.
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests::long_scoped_fingerprint_paths_preserve_full_identity
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          grep -Fq 'fingerprint_component(fingerprint)' desktop/src/registry.rs
+          git reset --hard HEAD
+
       - name: Publish rebased tested fixes
         shell: bash
         env:
@@ -158,6 +174,7 @@ jobs:
           identity_bug=$(( name_bug + 1 ))
           engine_retry_bug=$(( identity_bug + 1 ))
           posix_retry_bug=$(( engine_retry_bug + 1 ))
+          path_bug=$(( posix_retry_bug + 1 ))
 
           python .github/patches/apply-export-isolation-followups.py java
           git diff --check
@@ -209,12 +226,21 @@ jobs:
           git diff --cached --check
           git commit -m "FIX | BUG-${posix_retry_bug} Retry transient POSIX Gradle dependency failures"
 
+          python .github/patches/apply-registry-fingerprint-path.py
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests::long_scoped_fingerprint_paths_preserve_full_identity
+          git add desktop/src/registry.rs
+          git rm .github/patches/apply-registry-fingerprint-path.py
+          git diff --cached --check
+          git commit -m "FIX | BUG-${path_bug} Preserve full scoped registry cache identity"
+
           # Rebase once more before push, then retest the overlap-sensitive pieces.
           git pull --rebase origin main
           (cd engine && ./gradlew --no-daemon --stacktrace test --tests dev.kastrick.minesport.export.ExportRegressionTest)
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::export_bundle_collision_detection_includes_companion_files_and_assets
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::sanitizes_windows_reserved_device_export_names
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests::long_scoped_fingerprint_paths_preserve_full_identity
           pwsh -NoProfile -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
           bash -n build.sh
           git push origin HEAD:main
