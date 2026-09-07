@@ -1,4 +1,4 @@
-name: One Shot Committed Registry Prune
+name: One Shot Bounded IPC Records
 
 on:
   push:
@@ -8,12 +8,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-shot-committed-registry-prune
+  group: one-shot-bounded-ipc-records
   cancel-in-progress: false
 
 jobs:
   integrate:
-    if: github.event.head_commit.message == 'CHORE | stage committed registry prune'
+    if: github.event.head_commit.message == 'CHORE | stage bounded IPC records'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -33,16 +33,16 @@ jobs:
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
 
-      - name: Apply committed registry prune fix
+      - name: Apply bounded IPC fix
         run: |
           python .github/patches/apply-runtime-registry-followups.py
-          rustfmt desktop/src/registry_stream.rs
+          rustfmt desktop/src/ipc.rs
           git diff --check
 
-      - name: Test committed registry pruning
+      - name: Test bounded IPC records
         env:
           MINESPORT_FAST_CHECK: '1'
-        run: cargo test --manifest-path desktop/Cargo.toml registry::tests
+        run: cargo test --manifest-path desktop/Cargo.toml ipc::tests
 
       - name: Publish tested fix
         shell: bash
@@ -55,9 +55,9 @@ jobs:
           max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
           next=$(( ${max:-0} + 1 ))
 
-          git add desktop/src/registry_stream.rs
+          git add desktop/src/ipc.rs
           git diff --cached --check
-          git commit -m "FIX | BUG-${next} Keep committed registry when stale pruning fails"
+          git commit -m "FIX | BUG-${next} Bound backend IPC record growth"
 
           git fetch origin main
           current_max="$(git log origin/main --format=%s | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
