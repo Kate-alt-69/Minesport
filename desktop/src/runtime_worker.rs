@@ -1000,7 +1000,11 @@ fn sanitize_java_environment(command: &mut Command, java_home: &Path) {
 
 fn should_stage_runtime_worker_mod(family: BridgeFamily, jar_path: &Path, filename: &str) -> bool {
     let lower = filename.to_ascii_lowercase();
-    if lower.starts_with("minesport-bridge-") || lower.starts_with("minesport-capture-bridge-") {
+    if lower.starts_with("minesport-bridge-")
+        || lower.starts_with("minesport-capture-bridge-")
+        || lower.starts_with("minesport_export_worker-")
+        || lower.starts_with("minesport-export-worker-")
+    {
         return false;
     }
     !should_skip_runtime_worker_mod(family, jar_path, filename)
@@ -1709,6 +1713,50 @@ mod tests {
         assert_ne!(changed_config, after_directory_change);
 
         let _ = fs::remove_dir_all(instance);
+    }
+
+    #[test]
+    fn user_export_worker_jar_cannot_replace_embedded_worker() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "minesport-worker-collision-{}-{stamp}",
+            std::process::id()
+        ));
+        let source = root.join("mods");
+        let target = root.join("worker-mods");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        let reserved_name = "minesport_export_worker-fabric-1.21.10.jar";
+        fs::write(source.join(reserved_name), b"user-supplied-stale-worker").unwrap();
+        fs::write(target.join(reserved_name), b"trusted-embedded-worker").unwrap();
+
+        let copied = copy_worker_mods(BridgeFamily::Fabric, &source, &target).unwrap();
+        assert_eq!(copied, 0);
+        assert_eq!(
+            fs::read(target.join(reserved_name)).unwrap(),
+            b"trusted-embedded-worker"
+        );
+
+        let first = runtime_worker_mods_fingerprint(BridgeFamily::Fabric, &source).unwrap();
+        fs::write(
+            source.join(reserved_name),
+            b"different-untrusted-worker-bytes",
+        )
+        .unwrap();
+        let second = runtime_worker_mods_fingerprint(BridgeFamily::Fabric, &source).unwrap();
+        assert_eq!(first, second);
+
+        assert!(!should_stage_runtime_worker_mod(
+            BridgeFamily::Fabric,
+            Path::new("missing.jar"),
+            "minesport-export-worker-fabric-1.21.10.jar"
+        ));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
