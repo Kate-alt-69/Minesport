@@ -8,6 +8,9 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+# ---------------------------------------------------------------------------
+# Reproduce/fix the Fabric direct-launch failure from the Windows field log.
+# ---------------------------------------------------------------------------
 runtime = Path("desktop/src/runtime_worker.rs")
 text = runtime.read_text(encoding="utf-8")
 
@@ -75,8 +78,8 @@ fn direct_runtime_profile_has_loader_bootstrap(
             .jvm_args
             .iter()
             .any(|arg| arg.starts_with("-Dfabric.dli.main=")),
-        // Quilt Loom can use the same Fabric dev-launch injector when running
-        // Fabric-compatible mods. If it does, require the target main class too.
+        // Quilt Loom can use Fabric's dev-launch injector. When it does, the
+        // target main class must survive the cached profile as well.
         BridgeFamily::Quilt if manifest.main_class.contains("devlaunchinjector") => manifest
             .jvm_args
             .iter()
@@ -89,8 +92,6 @@ fn direct_runtime_args(manifest: &DirectLaunchManifest, run_dir: &Path) -> Vec<S
 ''',
     "direct launch property helper",
 )
-
-# A cached profile is usable only when its loader bootstrap arguments are complete.
 text = replace_once(
     text,
     '''    let manifest_path = profile.join("minesport-launch.json");
@@ -103,9 +104,8 @@ text = replace_once(
         if direct_runtime_profile_has_loader_bootstrap(family, &manifest) {
             return Ok(manifest);
         }
-        // Never keep reusing a profile that can only terminate in the dev-launch
-        // injector with "missing fabric.dli.main". Regenerate it with the current
-        // resolver/schema instead.
+        // Never keep reusing a profile that can only terminate inside the
+        // dev-launch injector with "missing fabric.dli.main".
         let _ = fs::remove_file(&manifest_path);
     }
 ''',
@@ -139,10 +139,13 @@ text = replace_once(
     "validate newly resolved launch profile",
 )
 
-# Loom's dev-launch injector JVM properties are supplied through a JVM argument
-# provider. Reading JavaExec.allJvmArgs while merely configuring a helper task can
-# omit lazy provider values, so serialize both the base args and provider outputs.
-for label, marker in [("Fabric", "const BUILD_GRADLE: &str = r#\""), ("Quilt", "const QUILT_BUILD_GRADLE: &str = r#\"")]:
+# Loom stores the dev-launch injector properties in RunConfiguration JVM args,
+# surfaced lazily through JavaExec JVM argument providers. allJvmArgs alone can
+# miss provider values when we resolve a profile without executing runClient.
+for label, marker in [
+    ("Fabric", "const BUILD_GRADLE: &str = r#\""),
+    ("Quilt", "const QUILT_BUILD_GRADLE: &str = r#\""),
+]:
     start = text.index(marker)
     end = text.index('"#;', start)
     block = text[start:end]
@@ -207,6 +210,9 @@ text = replace_once(text, test_anchor, test_insert + test_anchor, "direct launch
 runtime.write_text(text, encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Contain the 0xC00000FD updater crash outside the Workbench process.
+# ---------------------------------------------------------------------------
 update = Path("desktop/src/engine_update.rs")
 text = update.read_text(encoding="utf-8")
 text = replace_once(
@@ -214,39 +220,141 @@ text = replace_once(
     '''const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 ''',
     '''const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
-// TLS, certificate verification and HTTP response decoding run on this background
-// thread on Windows. Keep ample stack headroom so update discovery cannot take
-// down the Workbench with STATUS_STACK_OVERFLOW (0xC00000FD).
+const BACKGROUND_CHECK_ARG: &str = "--engine-update-check";
+// TLS/certificate/HTTP decoding gets its own generous worker stack, but more
+// importantly that worker now lives in an isolated helper process. A fatal
+// native stack overflow can no longer terminate the Workbench.
 const ENGINE_UPDATE_THREAD_STACK: usize = 8 * 1024 * 1024;
 ''',
-    "updater thread stack constant",
+    "updater isolation constants",
 )
-text = replace_once(
-    text,
-    '''    if let Err(error) = thread::Builder::new()
-        .name("minesport-engine-update".to_string())
-        .spawn(|| {
-''',
-    '''    if let Err(error) = thread::Builder::new()
-        .name("minesport-engine-update".to_string())
+
+start = text.index('/// Network/update discovery must never hold up the Workbench.')
+fn_start = text.index('pub fn spawn_background_check()', start)
+fn_end = text.index('\nfn check_and_stage_update_if_due()', fn_start)
+replacement = '''pub fn handle_background_check_mode() -> Result<bool> {
+    if env::args().nth(1).as_deref() != Some(BACKGROUND_CHECK_ARG) {
+        return Ok(false);
+    }
+
+    let operation = diagnostics::Logger::new("ENGINE")
+        .child("UPDATE")
+        .operation("EngineBackgroundUpdateHelper");
+    let worker = thread::Builder::new()
+        .name("minesport-engine-update-network".to_string())
         .stack_size(ENGINE_UPDATE_THREAD_STACK)
-        .spawn(|| {
-''',
-    "updater thread stack allocation",
-)
+        .spawn(check_and_stage_update_if_due)
+        .context("start isolated engine update network worker")?;
+
+    match worker.join() {
+        Ok(Ok(())) => {
+            operation.success("isolated engine update helper completed", &[]);
+            Ok(true)
+        }
+        Ok(Err(error)) => {
+            operation.failure(
+                "isolated engine update helper could not complete",
+                &[("error", format!("{error:#}"))],
+            );
+            Err(error)
+        }
+        Err(_) => {
+            operation.failure("isolated engine update helper panicked", &[]);
+            bail!("isolated engine update helper panicked")
+        }
+    }
+}
+
+/// Update discovery runs in a separate hidden process. The updater touches
+/// networking, TLS, signatures and installer staging; none of those failures
+/// should be able to take the Slint Workbench down with them.
+pub fn spawn_background_check() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let logger = diagnostics::Logger::new("ENGINE").child("UPDATE");
+    let executable = match env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            logger.warn(
+                "EngineUpdateHelperUnavailable",
+                "could not resolve Minesport executable for isolated update discovery",
+                &[("error", error.to_string())],
+            );
+            return;
+        }
+    };
+
+    let mut command = Command::new(&executable);
+    command
+        .arg(BACKGROUND_CHECK_ARG)
+        .creation_flags(CREATE_NO_WINDOW);
+    match command.spawn() {
+        Ok(child) => logger.debug(
+            "EngineUpdateHelperStarted",
+            "engine update discovery started in an isolated helper process",
+            &[
+                ("helper_pid", child.id().to_string()),
+                ("executable", executable.display().to_string()),
+            ],
+        ),
+        Err(error) => logger.warn(
+            "EngineUpdateHelperUnavailable",
+            "could not start isolated engine update helper; Workbench startup will continue",
+            &[("error", error.to_string())],
+        ),
+    }
+}
+'''
+text = text[:fn_start] + replacement + text[fn_end:]
+
 engine_test_anchor = '''    #[test]
     fn semantic_engine_versions_compare_numerically() {
 '''
 engine_test = '''    #[test]
-    fn updater_thread_reserves_network_stack_headroom() {
+    fn updater_helper_is_isolated_and_has_network_stack_headroom() {
+        assert_eq!(BACKGROUND_CHECK_ARG, "--engine-update-check");
         assert!(ENGINE_UPDATE_THREAD_STACK >= 8 * 1024 * 1024);
     }
 
 '''
-text = replace_once(text, engine_test_anchor, engine_test + engine_test_anchor, "updater stack regression test")
+text = replace_once(
+    text,
+    engine_test_anchor,
+    engine_test + engine_test_anchor,
+    "updater isolation regression test",
+)
 update.write_text(text, encoding="utf-8")
 
+main = Path("desktop/src/main.rs")
+text = main.read_text(encoding="utf-8")
+text = replace_once(
+    text,
+    '''    install_panic_hook();
 
+    let engine_worker_mode = std::env::args().nth(1).as_deref() == Some("--engine-worker");
+''',
+    '''    install_panic_hook();
+
+    // The update helper is intentionally handled before normal GUI/backend
+    // startup. It has an argument, so it never spawns a crash reporter or a
+    // second update helper.
+    #[cfg(windows)]
+    if engine_update::handle_background_check_mode()? {
+        diagnostics::append("Isolated engine update helper exited cleanly");
+        return Ok(());
+    }
+
+    let engine_worker_mode = std::env::args().nth(1).as_deref() == Some("--engine-worker");
+''',
+    "engine update helper mode dispatch",
+)
+main.write_text(text, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Do not turn concurrency-cancelled superseded CI runs into false red builds.
+# ---------------------------------------------------------------------------
 build = Path(".github/workflows/build.yml")
 text = build.read_text(encoding="utf-8")
 text = replace_once(
