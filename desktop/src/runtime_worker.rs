@@ -3,7 +3,7 @@ use crate::{
     bridge_family::{self, BridgeFamily},
     bridge_java, diagnostics, registry, runtime, toolchain,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -15,8 +15,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -38,6 +39,56 @@ const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 1;
 const DIRECT_LAUNCH_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CAPTURE_FIRST_PROGRESS_TIMEOUT: Duration = Duration::from_secs(4 * 60);
 const CAPTURE_STALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RegistryScope {
+    #[default]
+    Full,
+    Namespaces(Vec<String>),
+}
+
+impl RegistryScope {
+    pub fn namespaces<I, S>(values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut namespaces = values
+            .into_iter()
+            .filter_map(|value| normalize_namespace(value.as_ref()))
+            .collect::<Vec<_>>();
+        namespaces.push("minecraft".to_string());
+        namespaces.sort();
+        namespaces.dedup();
+        Self::Namespaces(namespaces)
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            Self::Full => "full".to_string(),
+            Self::Namespaces(namespaces) => format!("namespaces:{}", namespaces.join(",")),
+        }
+    }
+
+    fn env_value(&self) -> Option<String> {
+        match self {
+            Self::Full => None,
+            Self::Namespaces(namespaces) => Some(namespaces.join(",")),
+        }
+    }
+}
+
+fn normalize_namespace(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty()
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
+        })
+    {
+        return None;
+    }
+    Some(value)
+}
 
 #[derive(Debug, Clone)]
 pub struct CacheResult {
@@ -125,6 +176,29 @@ pub fn prepare_full_registry_cancellable_for_loader<F>(
     mods_path: &Path,
     force: bool,
     cancel: Arc<AtomicBool>,
+    progress: F,
+) -> Result<CacheResult>
+where
+    F: FnMut(Progress) + Send,
+{
+    prepare_registry_cancellable_for_loader(
+        loader,
+        version,
+        mods_path,
+        RegistryScope::Full,
+        force,
+        cancel,
+        progress,
+    )
+}
+
+pub fn prepare_registry_cancellable_for_loader<F>(
+    loader: &str,
+    version: &str,
+    mods_path: &Path,
+    scope: RegistryScope,
+    force: bool,
+    cancel: Arc<AtomicBool>,
     mut progress: F,
 ) -> Result<CacheResult>
 where
@@ -158,7 +232,7 @@ where
         message: "Checking runtime inputs…".into(),
     });
     let raw_fingerprint = runtime_worker_inputs_fingerprint(family, mods_path)?;
-    let fingerprint = loader_cache_fingerprint(family, &raw_fingerprint);
+    let fingerprint = scoped_cache_fingerprint(family, &raw_fingerprint, &scope);
     if cancel.load(Ordering::Relaxed) {
         bail!("runtime cache cancelled");
     }
@@ -297,10 +371,18 @@ where
             &java_home,
             manifest,
             app_cds_archive.as_deref(),
+            &scope,
             capture_port,
         )?
     } else {
-        start_gradle_worker(family, &workspace, &log_path, &java_home, capture_port)?
+        start_gradle_worker(
+            family,
+            &workspace,
+            &log_path,
+            &java_home,
+            &scope,
+            capture_port,
+        )?
     };
     progress(Progress {
         percent: 62,
@@ -441,6 +523,21 @@ fn loader_cache_fingerprint(family: BridgeFamily, raw: &str) -> String {
     } else {
         format!("{}-{raw}", family.label().to_ascii_lowercase())
     }
+}
+
+fn scoped_cache_fingerprint(family: BridgeFamily, raw: &str, scope: &RegistryScope) -> String {
+    let base = loader_cache_fingerprint(family, raw);
+    let RegistryScope::Namespaces(namespaces) = scope else {
+        return base;
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"minesport-runtime-scope-v1\0");
+    for namespace in namespaces {
+        digest.update(namespace.as_bytes());
+        digest.update([0]);
+    }
+    let digest = digest.finalize();
+    format!("{base}-scope-{digest:x}")
 }
 
 fn capture_has_stalled(
@@ -734,6 +831,7 @@ fn start_direct_worker(
     java_home: &Path,
     manifest: &DirectLaunchManifest,
     app_cds_archive: Option<&Path>,
+    scope: &RegistryScope,
     capture_port: u16,
 ) -> Result<Child> {
     let stdout =
@@ -786,6 +884,7 @@ fn start_direct_worker(
     }
     command.env("MINESPORT_EXPORT_WORKER_PORT", capture_port.to_string());
     command.env("MINESPORT_EXPORT_WORKER_MODE", "all");
+    apply_worker_scope_env(&mut command, scope);
     command.env("MINESPORT_EXPORT_WORKER", "1");
     hide_console_window(&mut command);
     command.spawn().with_context(|| {
@@ -795,6 +894,14 @@ fn start_direct_worker(
             java_home.display()
         )
     })
+}
+
+fn apply_worker_scope_env(command: &mut Command, scope: &RegistryScope) {
+    // Never inherit a caller-provided scope into a full capture.
+    command.env_remove("MINESPORT_EXPORT_WORKER_NS");
+    if let Some(namespaces) = scope.env_value() {
+        command.env("MINESPORT_EXPORT_WORKER_NS", namespaces);
+    }
 }
 
 fn managed_runtime_jvm_arg(arg: &str) -> bool {
@@ -892,6 +999,7 @@ fn start_gradle_worker(
     workspace: &Path,
     log_path: &Path,
     java_home: &Path,
+    scope: &RegistryScope,
     capture_port: u16,
 ) -> Result<Child> {
     let stdout =
@@ -940,6 +1048,7 @@ fn start_gradle_worker(
     sanitize_java_environment(&mut command, java_home);
     command.env("MINESPORT_EXPORT_WORKER_PORT", capture_port.to_string());
     command.env("MINESPORT_EXPORT_WORKER_MODE", "all");
+    apply_worker_scope_env(&mut command, scope);
     command.env("MINESPORT_EXPORT_WORKER", "1");
     // Inherited by JavaExec/runClient children as well as the wrapper JVM. It
     // reduces JVM/GC/common-pool thread fan-out without changing game/model data.
@@ -1556,6 +1665,46 @@ mod tests {
             loader_cache_fingerprint(BridgeFamily::Quilt, raw),
             "quilt-0123456789abcdef"
         );
+    }
+
+    #[test]
+    fn scoped_registry_identity_is_stable_and_separate_from_full() {
+        let raw = "0123456789abcdef";
+        let full = scoped_cache_fingerprint(BridgeFamily::Fabric, raw, &RegistryScope::Full);
+        let a = RegistryScope::namespaces(["create", "minecraft", "create"]);
+        let b = RegistryScope::namespaces(["minecraft", "create"]);
+        let c = RegistryScope::namespaces(["minecraft", "mekanism"]);
+        assert_eq!(full, raw);
+        assert_eq!(
+            scoped_cache_fingerprint(BridgeFamily::Fabric, raw, &a),
+            scoped_cache_fingerprint(BridgeFamily::Fabric, raw, &b)
+        );
+        assert_ne!(
+            scoped_cache_fingerprint(BridgeFamily::Fabric, raw, &a),
+            scoped_cache_fingerprint(BridgeFamily::Fabric, raw, &c)
+        );
+        assert_ne!(
+            scoped_cache_fingerprint(BridgeFamily::Fabric, raw, &a),
+            full
+        );
+    }
+
+    #[test]
+    fn namespace_scope_normalizes_and_always_keeps_vanilla() {
+        let scope = RegistryScope::namespaces([" Create ", "create", "bad:namespace", "mekanism"]);
+        assert_eq!(
+            scope,
+            RegistryScope::Namespaces(vec![
+                "create".to_string(),
+                "mekanism".to_string(),
+                "minecraft".to_string(),
+            ])
+        );
+        assert_eq!(
+            scope.env_value().as_deref(),
+            Some("create,mekanism,minecraft")
+        );
+        assert_eq!(RegistryScope::Full.env_value(), None);
     }
 
     #[test]

@@ -5,6 +5,7 @@ use crate::{
     ipc::{Engine as JavaEngine, EngineEvent, Response},
     preview, runtime,
     runtime_cache::{RuntimeCacheEvent, RuntimeCacheManager},
+    runtime_worker::RegistryScope,
     selection, settings, viewer_selection, world_context, world_picker,
 };
 use anyhow::{Context, Result, anyhow};
@@ -17,7 +18,7 @@ use slint::{
     ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -159,7 +160,13 @@ pub fn run() -> Result<()> {
     refresh_asset_summaries(&ui, &state);
 
     let (engine, events) = JavaEngine::start()?;
-    pump_engine_events(ui.as_weak(), events, state.clone(), engine.clone());
+    pump_engine_events(
+        ui.as_weak(),
+        events,
+        state.clone(),
+        cache.clone(),
+        engine.clone(),
+    );
     wire_file_pickers(&ui, engine.clone(), state.clone(), cache.clone());
     wire_export(&ui, engine.clone(), state.clone(), cache.clone());
     wire_preflight(&ui, engine.clone(), state.clone());
@@ -856,6 +863,7 @@ fn wire_export(
         }
 
         if runtime_registry_supported(&loader, &version, &mods_path) {
+            let preflight = runtime_preflight_request(&request);
             let queued = if let Ok(mut guard) = state.lock() {
                 guard.pending_export = Some(request);
                 true
@@ -871,15 +879,34 @@ fn wire_export(
             ui.set_task_active(false);
             ui.set_task_progress(0.01);
             ui.set_task_title("WAITING FOR RUNTIME".into());
-            ui.set_task_detail("Export will start when the runtime registry is ready".into());
-            append_diagnostic(&ui, &format!("Export queued for runtime registry · {}", output.display()));
+            ui.set_task_detail("Scanning selected block namespaces…".into());
+            append_diagnostic(&ui, &format!("Export queued · scanning selected namespaces before runtime launch · {}", output.display()));
 
-            if !cache.is_running_for_loader(&version, &loader, &mods_path) {
-                if let Err(error) = start_runtime_cache_job(
-                    weak.clone(), cache.clone(), engine.clone(), state.clone(), version, loader, mods_path, false, true,
+            if cache.is_running_for_loader(&version, &loader, &mods_path) {
+                append_diagnostic(&ui, "A full runtime registry is already preparing; queued export will reuse it.");
+                return;
+            }
+            if let Err(error) = engine.send_value(preflight) {
+                append_diagnostic(&ui, &format!("Namespace preflight could not start; falling back to full runtime capture: {error:#}"));
+                if let Err(start_error) = start_runtime_cache_job(
+                    weak.clone(),
+                    cache.clone(),
+                    engine.clone(),
+                    state.clone(),
+                    version,
+                    loader,
+                    mods_path,
+                    RegistryScope::Full,
+                    false,
+                    true,
                 ) {
-                    append_diagnostic(&ui, &format!("Runtime registry could not start: {error:#}"));
-                    dispatch_pending_export(&weak, &engine, &state, None, Some(error.to_string()));
+                    dispatch_pending_export(
+                        &weak,
+                        &engine,
+                        &state,
+                        None,
+                        Some(start_error.to_string()),
+                    );
                 }
             }
             return;
@@ -1451,6 +1478,7 @@ fn wire_cache_actions(
             version,
             loader,
             mods,
+            RegistryScope::Full,
             true,
             true,
         ) {
@@ -1500,6 +1528,7 @@ fn start_runtime_cache_job(
     version: String,
     loader: String,
     mods_path: PathBuf,
+    scope: RegistryScope,
     force: bool,
     foreground: bool,
 ) -> Result<bool> {
@@ -1512,7 +1541,8 @@ fn start_runtime_cache_job(
     let job_mods_path = mods_path.clone();
     let window_version = version.clone();
     let window_cache = cache.clone();
-    let started = cache.start_for_loader(version.clone(), loader.clone(), mods_path.clone(), force, move |event| match event {
+    let scope_description = scope.description();
+    let started = cache.start_for_loader_scope(version.clone(), loader.clone(), mods_path.clone(), scope, force, move |event| match event {
         RuntimeCacheEvent::Progress(progress) => {
             let detail = progress.message.clone();
             let version = window_version.clone();
@@ -1562,6 +1592,7 @@ fn start_runtime_cache_job(
             let event_version = job_version.clone();
             let event_loader = job_loader.clone();
             let event_mods_path = job_mods_path.clone();
+            let scope_description = scope_description.clone();
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
                 if !runtime_cache_event_is_current(
                     &event_state,
@@ -1586,7 +1617,7 @@ fn start_runtime_cache_job(
                             ui.set_task_title("RUNTIME READY".into());
                             ui.set_task_detail(cache_result.registry_path.display().to_string().into());
                         }
-                        append_diagnostic(&ui, &format!("Full runtime registry ready: {} · fingerprint {}{}", cache_result.registry_path.display(), fingerprint, if reused { " · reused" } else { "" }));
+                        append_diagnostic(&ui, &format!("Runtime registry ready: {} · {} · fingerprint {}{}", cache_result.registry_path.display(), scope_description, fingerprint, if reused { " · reused" } else { "" }));
                     }
                     Err(error) => {
                         let cancelled = error.to_ascii_lowercase().contains("cancel");
@@ -2264,6 +2295,7 @@ fn pump_engine_events(
     weak: slint::Weak<MainWindow>,
     events: Receiver<EngineEvent>,
     state: SharedState,
+    cache: RuntimeCacheManager,
     engine: JavaEngine,
 ) {
     thread::spawn(move || {
@@ -2360,7 +2392,13 @@ fn pump_engine_events(
                         }
                     } else {
                         flush_logs(&weak, &mut pending_logs);
-                        apply_response(&weak, response, state.clone());
+                        apply_response(
+                            &weak,
+                            response,
+                            state.clone(),
+                            cache.clone(),
+                            engine.clone(),
+                        );
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => flush_logs(&weak, &mut pending_logs),
@@ -2373,7 +2411,13 @@ fn pump_engine_events(
     });
 }
 
-fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: SharedState) {
+fn apply_response(
+    weak: &slint::Weak<MainWindow>,
+    response: Response,
+    state: SharedState,
+    cache: RuntimeCacheManager,
+    engine: JavaEngine,
+) {
     if response.kind == "heightmap" {
         if !response_world_matches_current(&response, &state) {
             let requested = response.client_world_path.clone();
@@ -2486,6 +2530,23 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                     });
                 });
             }
+
+            "runtime-preflight" => {
+                let preflight_state = state.clone();
+                let preflight_cache = cache.clone();
+                let preflight_engine = engine.clone();
+                thread::spawn(move || {
+                    let namespaces = read_runtime_namespaces_from_path(&path);
+                    let _ = fs::remove_file(&path);
+                    continue_pending_export_after_namespace_scan(
+                        weak,
+                        preflight_cache,
+                        preflight_engine,
+                        preflight_state,
+                        namespaces,
+                    );
+                });
+            }
             "preview" => {
                 let preview_state = state.clone();
                 thread::spawn(move || {
@@ -2534,6 +2595,20 @@ fn apply_response(weak: &slint::Weak<MainWindow>, response: Response, state: Sha
                     );
                 });
             }
+        }
+        return;
+    }
+
+    if response.kind == "error" && response.client_purpose == "runtime-preflight" {
+        if response_world_matches_current(&response, &state) {
+            let error = anyhow!(response.message.clone());
+            continue_pending_export_after_namespace_scan(
+                weak.clone(),
+                cache,
+                engine,
+                state,
+                Err(error),
+            );
         }
         return;
     }
@@ -2649,6 +2724,134 @@ fn response_world_matches_current(response: &Response, state: &SharedState) -> b
 fn response_has_stale_world_target(response: &Response, state: &SharedState) -> bool {
     !response.client_world_path.trim().is_empty()
         && !response_world_matches_current(response, state)
+}
+
+fn runtime_preflight_request(export: &Value) -> Value {
+    let mut request = export.clone();
+    if let Some(object) = request.as_object_mut() {
+        object.insert("command".to_string(), json!("listBlocks"));
+        object.insert("clientPurpose".to_string(), json!("runtime-preflight"));
+        for key in ["outputPath", "format", "exportMode", "options"] {
+            object.remove(key);
+        }
+    }
+    request
+}
+
+fn read_runtime_namespaces_from_path(path: &Path) -> Result<RegistryScope> {
+    let file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    read_runtime_namespaces(std::io::BufReader::new(file))
+}
+
+struct RuntimeNamespaceVisitor;
+
+impl<'de> serde::de::Visitor<'de> for RuntimeNamespaceVisitor {
+    type Value = RegistryScope;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON array of block IDs for runtime namespace scoping")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut namespaces = BTreeSet::new();
+        namespaces.insert("minecraft".to_string());
+        while let Some(block) = sequence.next_element::<PreflightBlock>()? {
+            let namespace = block
+                .id
+                .split_once(':')
+                .map(|(namespace, _)| namespace)
+                .unwrap_or("minecraft")
+                .trim()
+                .to_ascii_lowercase();
+            if namespace.is_empty()
+                || !namespace.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-' | b'.')
+                })
+            {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid block namespace in {:?}",
+                    block.id
+                )));
+            }
+            namespaces.insert(namespace);
+        }
+        Ok(RegistryScope::namespaces(namespaces))
+    }
+}
+
+fn read_runtime_namespaces<R: std::io::Read>(reader: R) -> Result<RegistryScope> {
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    serde::de::Deserializer::deserialize_seq(&mut deserializer, RuntimeNamespaceVisitor)
+        .context("parse runtime namespace block list")
+}
+
+fn pending_runtime_context(state: &SharedState) -> Option<(String, String, PathBuf)> {
+    let guard = state.lock().ok()?;
+    guard.pending_export.as_ref()?;
+    Some((
+        guard.selected_version.clone()?,
+        guard.selected_loader.clone()?,
+        guard.selected_mods_path.clone()?,
+    ))
+}
+
+fn continue_pending_export_after_namespace_scan(
+    weak: slint::Weak<MainWindow>,
+    cache: RuntimeCacheManager,
+    engine: JavaEngine,
+    state: SharedState,
+    scope_result: Result<RegistryScope>,
+) {
+    let Some((version, loader, mods_path)) = pending_runtime_context(&state) else {
+        return;
+    };
+    let scope = match scope_result {
+        Ok(scope) => scope,
+        Err(error) => {
+            let detail =
+                format!("Namespace scan failed; falling back to full runtime capture: {error:#}");
+            let weak_log = weak.clone();
+            let _ = weak_log.upgrade_in_event_loop(move |ui| append_diagnostic(&ui, &detail));
+            RegistryScope::Full
+        }
+    };
+
+    if let Some(path) = cache.ready_path_for_scope(&version, &loader, &mods_path, &scope) {
+        dispatch_pending_export(&weak, &engine, &state, Some(path), None);
+        return;
+    }
+    if cache.is_running_for_scope(&version, &loader, &mods_path, &scope) {
+        return;
+    }
+
+    let weak_log = weak.clone();
+    let description = scope.description();
+    let _ = weak_log.upgrade_in_event_loop(move |ui| {
+        ui.set_task_detail(format!("Preparing runtime · {description}").into());
+        append_diagnostic(
+            &ui,
+            &format!("Runtime capture scope selected · {description}"),
+        );
+    });
+    if let Err(error) = start_runtime_cache_job(
+        weak.clone(),
+        cache,
+        engine.clone(),
+        state.clone(),
+        version,
+        loader,
+        mods_path,
+        scope,
+        false,
+        true,
+    ) {
+        dispatch_pending_export(&weak, &engine, &state, None, Some(error.to_string()));
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3296,6 +3499,60 @@ mod tests {
         );
         assert_eq!(preview.get("minX").and_then(Value::as_i64), Some(-8));
         assert_eq!(preview.get("maxZ").and_then(Value::as_i64), Some(2));
+    }
+
+    #[test]
+    fn runtime_namespace_scan_is_sorted_deduped_and_keeps_vanilla() {
+        let payload = br#"[
+            {"id":"create:shaft"},
+            {"id":"minecraft:stone"},
+            {"id":"Create:cogwheel"},
+            {"id":"mekanism:steel_casing"}
+        ]"#;
+        let scope = read_runtime_namespaces(std::io::Cursor::new(payload)).unwrap();
+        assert_eq!(
+            scope,
+            RegistryScope::Namespaces(vec![
+                "create".to_string(),
+                "mekanism".to_string(),
+                "minecraft".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn malformed_namespace_fails_closed_to_full_capture_path() {
+        let payload = br#"[{"id":"bad namespace:block"}]"#;
+        assert!(read_runtime_namespaces(std::io::Cursor::new(payload)).is_err());
+    }
+
+    #[test]
+    fn runtime_preflight_preserves_selection_but_removes_export_only_fields() {
+        let export = json!({
+            "command": "export",
+            "clientPurpose": "export",
+            "worldPath": "world",
+            "modsPath": "mods",
+            "modLoader": "fabric",
+            "outputPath": "out.gltf",
+            "format": "gltf",
+            "exportMode": "grouped",
+            "options": {"optimize":"true"},
+            "minX": -8,
+            "maxX": 8,
+            "centerX": 1,
+            "radiusX": 4,
+            "exactSelection": {"version":1,"indices":[1,2,3]}
+        });
+        let request = runtime_preflight_request(&export);
+        assert_eq!(request["command"], "listBlocks");
+        assert_eq!(request["clientPurpose"], "runtime-preflight");
+        assert_eq!(request["centerX"], 1);
+        assert_eq!(request["exactSelection"]["indices"][2], 3);
+        assert!(request.get("outputPath").is_none());
+        assert!(request.get("format").is_none());
+        assert!(request.get("exportMode").is_none());
+        assert!(request.get("options").is_none());
     }
 
     #[test]

@@ -1,14 +1,14 @@
 use crate::{
     diagnostics, registry,
-    runtime_worker::{self, CacheResult, Progress},
+    runtime_worker::{self, CacheResult, Progress, RegistryScope},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::{
-    panic::{catch_unwind, AssertUnwindSafe},
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -30,6 +30,7 @@ struct State {
     mods_path: PathBuf,
     fingerprint: String,
     ready_path: PathBuf,
+    scope: RegistryScope,
     cancel: Option<Arc<AtomicBool>>,
     listeners: Vec<Listener>,
     operation: Option<diagnostics::Operation>,
@@ -65,17 +66,39 @@ impl RuntimeCacheManager {
     where
         F: Fn(RuntimeCacheEvent) + Send + 'static,
     {
+        self.start_for_loader_scope(
+            version,
+            loader,
+            mods_path,
+            RegistryScope::Full,
+            force,
+            listener,
+        )
+    }
+
+    pub fn start_for_loader_scope<F>(
+        &self,
+        version: String,
+        loader: String,
+        mods_path: PathBuf,
+        scope: RegistryScope,
+        force: bool,
+        listener: F,
+    ) -> Result<bool>
+    where
+        F: Fn(RuntimeCacheEvent) + Send + 'static,
+    {
         let loader = normalize_loader(&loader);
         let logger = diagnostics::Logger::new("RUNTIME").child("REGISTRY");
         let mut state = self
             .state
             .lock()
             .map_err(|_| anyhow!("runtime cache state is poisoned"))?;
+        let same_instance = state.version == version
+            && state.loader.eq_ignore_ascii_case(&loader)
+            && same_path(&state.mods_path, &mods_path);
         if state.running {
-            if state.version != version
-                || !state.loader.eq_ignore_ascii_case(&loader)
-                || !same_path(&state.mods_path, &mods_path)
-            {
+            if !same_instance || !scope_satisfies(&state.scope, &scope) {
                 logger.warn(
                     "RuntimeRegistryJoinRejectedDifferentInstance",
                     "another runtime registry worker is already running for a different Minecraft instance",
@@ -86,6 +109,8 @@ impl RuntimeCacheManager {
                         ("running_version", state.version.clone()),
                         ("running_loader", state.loader.clone()),
                         ("running_mods", state.mods_path.display().to_string()),
+                        ("requested_scope", scope.description()),
+                        ("running_scope", state.scope.description()),
                     ],
                 );
                 return Err(anyhow!(
@@ -117,9 +142,7 @@ impl RuntimeCacheManager {
             return Ok(false);
         }
 
-        let same_identity = state.version == version
-            && state.loader.eq_ignore_ascii_case(&loader)
-            && same_path(&state.mods_path, &mods_path);
+        let same_identity = same_instance && scope_satisfies(&state.scope, &scope);
         if !same_identity || force {
             state.fingerprint.clear();
             state.ready_path = PathBuf::new();
@@ -130,12 +153,14 @@ impl RuntimeCacheManager {
             .field("version", &version)
             .field("loader", &loader)
             .field("mods_path", mods_path.display())
+            .field("scope", scope.description())
             .field("force", force);
         let cancel = Arc::new(AtomicBool::new(false));
         state.running = true;
         state.version = version.clone();
         state.loader = loader.clone();
         state.mods_path = mods_path.clone();
+        state.scope = scope.clone();
         state.cancel = Some(cancel.clone());
         state.listeners.clear();
         state.listeners.push(wrap_listener(listener));
@@ -144,10 +169,11 @@ impl RuntimeCacheManager {
 
         let manager = self.clone();
         thread::spawn(move || {
-            let result = runtime_worker::prepare_full_registry_cancellable_for_loader(
+            let result = runtime_worker::prepare_registry_cancellable_for_loader(
                 &loader,
                 &version,
                 &mods_path,
+                scope,
                 force,
                 cancel,
                 |progress| {
@@ -217,6 +243,16 @@ impl RuntimeCacheManager {
     }
 
     pub fn is_running_for_loader(&self, version: &str, loader: &str, mods_path: &Path) -> bool {
+        self.is_running_for_scope(version, loader, mods_path, &RegistryScope::Full)
+    }
+
+    pub fn is_running_for_scope(
+        &self,
+        version: &str,
+        loader: &str,
+        mods_path: &Path,
+        scope: &RegistryScope,
+    ) -> bool {
         let loader = normalize_loader(loader);
         self.state
             .lock()
@@ -225,6 +261,7 @@ impl RuntimeCacheManager {
                     && state.version == version
                     && state.loader.eq_ignore_ascii_case(&loader)
                     && same_path(&state.mods_path, mods_path)
+                    && scope_satisfies(&state.scope, scope)
             })
             .unwrap_or(false)
     }
@@ -244,12 +281,23 @@ impl RuntimeCacheManager {
         loader: &str,
         mods_path: &Path,
     ) -> Option<PathBuf> {
+        self.ready_path_for_scope(version, loader, mods_path, &RegistryScope::Full)
+    }
+
+    pub fn ready_path_for_scope(
+        &self,
+        version: &str,
+        loader: &str,
+        mods_path: &Path,
+        scope: &RegistryScope,
+    ) -> Option<PathBuf> {
         let loader = normalize_loader(loader);
         let state = self.state.lock().ok()?;
         if state.running
             || state.version != version
             || !state.loader.eq_ignore_ascii_case(&loader)
             || !same_path(&state.mods_path, mods_path)
+            || !scope_satisfies(&state.scope, scope)
             || state.ready_path.as_os_str().is_empty()
             || !registry::snapshot_path_is_ready(&state.ready_path, version, &state.fingerprint)
         {
@@ -368,6 +416,10 @@ fn notify_listeners(listeners: &[Listener], event: &RuntimeCacheEvent) {
     }
 }
 
+fn scope_satisfies(available: &RegistryScope, requested: &RegistryScope) -> bool {
+    matches!(available, RegistryScope::Full) || available == requested
+}
+
 fn normalize_loader(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
@@ -443,9 +495,11 @@ mod tests {
             manager.ready_path_for_loader("1.21.10", "Forge", Path::new("mods")),
             Some(registry.clone())
         );
-        assert!(manager
-            .ready_path_for_loader("1.21.10", "fabric", Path::new("mods"))
-            .is_none());
+        assert!(
+            manager
+                .ready_path_for_loader("1.21.10", "fabric", Path::new("mods"))
+                .is_none()
+        );
         assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
 
         let original_len = std::fs::metadata(&registry).unwrap().len();
@@ -455,9 +509,11 @@ mod tests {
             .unwrap()
             .set_len(original_len - 1)
             .unwrap();
-        assert!(manager
-            .ready_path_for_loader("1.21.10", "Forge", Path::new("mods"))
-            .is_none());
+        assert!(
+            manager
+                .ready_path_for_loader("1.21.10", "Forge", Path::new("mods"))
+                .is_none()
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -474,6 +530,61 @@ mod tests {
         assert!(manager.is_running_for_loader("1.21.10", "Forge", Path::new("mods")));
         assert!(!manager.is_running_for_loader("1.21.10", "fabric", Path::new("mods")));
         assert!(!manager.is_running_for("1.21.10", Path::new("mods")));
+    }
+
+    #[test]
+    fn full_scope_satisfies_every_scoped_request_but_not_the_reverse() {
+        let create = RegistryScope::namespaces(["create"]);
+        let mekanism = RegistryScope::namespaces(["mekanism"]);
+        assert!(scope_satisfies(&RegistryScope::Full, &RegistryScope::Full));
+        assert!(scope_satisfies(&RegistryScope::Full, &create));
+        assert!(scope_satisfies(&create, &create));
+        assert!(!scope_satisfies(&create, &RegistryScope::Full));
+        assert!(!scope_satisfies(&create, &mekanism));
+    }
+
+    #[test]
+    fn scoped_ready_registry_never_masquerades_as_full_or_another_scope() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "minesport-runtime-scope-ready-{}-{stamp}",
+            std::process::id()
+        ));
+        let registry = registry::write_empty_snapshot_for_test(&root, "1.21.10", "scoped").unwrap();
+        let manager = RuntimeCacheManager::default();
+        let create = RegistryScope::namespaces(["create"]);
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.version = "1.21.10".into();
+            state.loader = "fabric".into();
+            state.mods_path = PathBuf::from("mods");
+            state.scope = create.clone();
+            state.fingerprint = "scoped".into();
+            state.ready_path = registry.clone();
+        }
+        assert_eq!(
+            manager.ready_path_for_scope("1.21.10", "fabric", Path::new("mods"), &create),
+            Some(registry)
+        );
+        assert!(
+            manager
+                .ready_path_for_loader("1.21.10", "fabric", Path::new("mods"))
+                .is_none()
+        );
+        assert!(
+            manager
+                .ready_path_for_scope(
+                    "1.21.10",
+                    "fabric",
+                    Path::new("mods"),
+                    &RegistryScope::namespaces(["mekanism"]),
+                )
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
