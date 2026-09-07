@@ -196,11 +196,26 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-          git diff -- desktop/src/runtime_worker.rs > /tmp/quilt-direct-launch.patch
-          test -s /tmp/quilt-direct-launch.patch
-          git checkout -- desktop/src/runtime_worker.rs
+          gate=/tmp/minesport-quilt-direct-launch
+          rm -rf "$gate"
+          mkdir -p "$gate/engine" "$gate/bridges"
+
+          git diff -- desktop/src/runtime_worker.rs > "$gate/quilt-direct-launch.patch"
+          test -s "$gate/quilt-direct-launch.patch"
+          cp engine/build/libs/minesport-engine-0.2.1.jar "$gate/engine/"
+          cp dist/bundled-export-worker/*.jar "$gate/bridges/"
+          test -s "$gate/engine/minesport-engine-0.2.1.jar"
+          test "$(find "$gate/bridges" -maxdepth 1 -type f -name '*.jar' | wc -l)" -ge 4
+
+          git reset --hard HEAD
+          git clean -fdx
+          test -z "$(git status --porcelain)"
           git pull --rebase origin main
-          git apply --3way /tmp/quilt-direct-launch.patch
+          git apply --3way "$gate/quilt-direct-launch.patch"
+
+          mkdir -p engine/build/libs dist/bundled-export-worker
+          cp "$gate/engine/minesport-engine-0.2.1.jar" engine/build/libs/
+          cp "$gate/bridges"/*.jar dist/bundled-export-worker/
           cargo fmt --manifest-path desktop/Cargo.toml
 
           grep -Fq "id 'org.quiltmc.loom' version '1.11.1'" minesport-bridge-quilt/build.gradle
