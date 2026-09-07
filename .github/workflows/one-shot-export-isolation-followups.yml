@@ -128,6 +128,22 @@ jobs:
           test -s /tmp/runtime-capture-identity.patch
           git reset --hard HEAD
 
+      - name: Test reusable Gradle network retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-gradle-build-retry-generalization.py
+          git diff --check
+          pwsh -NoProfile -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
+          grep -Fq 'function Invoke-GradleBuildWithRetry' build.ps1
+          grep -Fq "Invoke-GradleBuildWithRetry 'Java engine' 'engine' \$Fresh" build.ps1
+          grep -Fq 'MINESPORT_GRADLE_BUILD_ATTEMPTS' build.ps1
+          git add build.ps1
+          git rm .github/patches/apply-gradle-build-retry-generalization.py
+          git diff --cached --binary --full-index > /tmp/engine-gradle-retry.patch
+          test -s /tmp/engine-gradle-retry.patch
+          git reset --hard HEAD
+
       - name: Publish tested fixes
         shell: bash
         env:
@@ -145,6 +161,7 @@ jobs:
           collision_bug=$(( texture_bug + 1 ))
           name_bug=$(( collision_bug + 1 ))
           identity_bug=$(( name_bug + 1 ))
+          engine_retry_bug=$(( identity_bug + 1 ))
 
           git apply --index /tmp/obj-textures.patch
           git diff --cached --check
@@ -168,5 +185,10 @@ jobs:
           rustfmt --edition 2024 --check desktop/src/runtime_worker.rs
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
           git commit -m "FIX | BUG-${identity_bug} Include capture worker in runtime cache identity"
+
+          git apply --index /tmp/engine-gradle-retry.patch
+          git diff --cached --check
+          pwsh -NoProfile -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
+          git commit -m "FIX | BUG-${engine_retry_bug} Retry transient Java engine dependency failures"
 
           git push origin HEAD:main
