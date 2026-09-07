@@ -16,7 +16,7 @@ jobs:
   integrate:
     if: github.event.head_commit.message == 'CHORE | stage Quilt direct launch gate'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -207,37 +207,50 @@ jobs:
           test -s "$gate/engine/minesport-engine-0.2.1.jar"
           test "$(find "$gate/bridges" -maxdepth 1 -type f -name '*.jar' | wc -l)" -ge 4
 
-          git reset --hard HEAD
-          git clean -fdx
-          test -z "$(git status --porcelain)"
-          git pull --rebase origin main
-          git apply --3way "$gate/quilt-direct-launch.patch"
+          published=0
+          for attempt in 1 2 3; do
+            echo "Quilt direct-launch publish attempt ${attempt}/3"
 
-          mkdir -p engine/build/libs dist/bundled-export-worker
-          cp "$gate/engine/minesport-engine-0.2.1.jar" engine/build/libs/
-          cp "$gate/bridges"/*.jar dist/bundled-export-worker/
-          cargo fmt --manifest-path desktop/Cargo.toml
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fdx
+            test -z "$(git status --porcelain)"
 
-          grep -Fq "id 'org.quiltmc.loom' version '1.11.1'" minesport-bridge-quilt/build.gradle
-          grep -Fq 'quilt_loader_version=0.30.1-beta.3' minesport-bridge-quilt/gradle.properties
-          grep -Fq 'fabric_version=0.138.4+1.21.10' minesport-bridge-quilt/gradle.properties
-          grep -Fq 'runtime_worker_inputs_fingerprint(family, mods_path)?' desktop/src/runtime_worker.rs
-          grep -Fq 'RegistryScope::Namespaces' desktop/src/runtime_worker.rs
-          grep -Fq 'materialize_bundled_quilt_bridge()?' desktop/src/runtime_worker.rs
-          git diff --check
+            git apply --3way "$gate/quilt-direct-launch.patch"
+            mkdir -p engine/build/libs dist/bundled-export-worker
+            cp "$gate/engine/minesport-engine-0.2.1.jar" engine/build/libs/
+            cp "$gate/bridges"/*.jar dist/bundled-export-worker/
+            cargo fmt --manifest-path desktop/Cargo.toml
 
-          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
-          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+            grep -Fq "id 'org.quiltmc.loom' version '1.11.1'" minesport-bridge-quilt/build.gradle
+            grep -Fq 'quilt_loader_version=0.30.1-beta.3' minesport-bridge-quilt/gradle.properties
+            grep -Fq 'fabric_version=0.138.4+1.21.10' minesport-bridge-quilt/gradle.properties
+            grep -Fq 'runtime_worker_inputs_fingerprint(family, mods_path)?' desktop/src/runtime_worker.rs
+            grep -Fq 'RegistryScope::Namespaces' desktop/src/runtime_worker.rs
+            grep -Fq 'materialize_bundled_quilt_bridge()?' desktop/src/runtime_worker.rs
+            git diff --check
 
-          rm -f .github/workflows/one-shot-quilt-direct-launch.yml
-          rm -f .github/patches/apply-quilt-direct-launch.py
+            xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
+            cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
 
-          subjects="$(git log origin/main --format=%s)"
-          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
-          next=$(( ${max:-0} + 1 ))
+            rm -f .github/workflows/one-shot-quilt-direct-launch.yml
+            rm -f .github/patches/apply-quilt-direct-launch.py
 
-          git add desktop/src/runtime_worker.rs \
-            .github/workflows/one-shot-quilt-direct-launch.yml \
-            .github/patches/apply-quilt-direct-launch.py
-          git commit -m "FIX | BUG-${next} Bypass Quilt Gradle launch hot path"
-          git push origin HEAD:main
+            subjects="$(git log origin/main --format=%s)"
+            max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+            next=$(( ${max:-0} + 1 ))
+
+            git add desktop/src/runtime_worker.rs \
+              .github/workflows/one-shot-quilt-direct-launch.yml \
+              .github/patches/apply-quilt-direct-launch.py
+            git commit -m "FIX | BUG-${next} Bypass Quilt Gradle launch hot path"
+
+            if git push origin HEAD:main; then
+              published=1
+              break
+            fi
+
+            echo "main moved after successful retest; rebuilding on fresh origin/main"
+          done
+
+          test "$published" -eq 1
