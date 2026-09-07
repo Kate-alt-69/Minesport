@@ -57,9 +57,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python .github/patches/apply-runtime-scope.py
           python - <<'PY'
           from pathlib import Path
+          path = Path('desktop/src/runtime_cache.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '            || !registry::snapshot_path_is_ready(&state.ready_path, version, &state.fingerprint)\n'
+          new = '            || !state.ready_path.is_file()\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'BUG-127 readiness compatibility anchor count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          python .github/patches/apply-runtime-scope.py
+
+          python - <<'PY'
+          from pathlib import Path
+
+          cache = Path('desktop/src/runtime_cache.rs')
+          text = cache.read_text(encoding='utf-8')
+          old = '            || !state.ready_path.is_file()\n'
+          new = '            || !registry::snapshot_path_is_ready(&state.ready_path, version, &state.fingerprint)\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'BUG-127 readiness restore anchor count={text.count(old)}')
+          cache.write_text(text.replace(old, new, 1), encoding='utf-8')
 
           worker = Path('desktop/src/runtime_worker.rs')
           text = worker.read_text(encoding='utf-8')
@@ -92,6 +112,7 @@ jobs:
 
           grep -Fq 'let raw_fingerprint = runtime_worker_inputs_fingerprint(family, mods_path)?;' desktop/src/runtime_worker.rs
           grep -Fq 'fn runtime_worker_mods_fingerprint' desktop/src/runtime_worker.rs
+          grep -Fq 'snapshot_path_is_ready(&state.ready_path, version, &state.fingerprint)' desktop/src/runtime_cache.rs
           grep -Fq 'MINESPORT_EXPORT_WORKER_NS' desktop/src/runtime_worker.rs
           cargo fmt --manifest-path desktop/Cargo.toml
           git diff --check
@@ -120,6 +141,7 @@ jobs:
 
           grep -Fq 'let raw_fingerprint = runtime_worker_inputs_fingerprint(family, mods_path)?;' desktop/src/runtime_worker.rs
           grep -Fq 'fn runtime_worker_mods_fingerprint' desktop/src/runtime_worker.rs
+          grep -Fq 'snapshot_path_is_ready(&state.ready_path, version, &state.fingerprint)' desktop/src/runtime_cache.rs
           grep -Fq 'MINESPORT_EXPORT_WORKER_NS' desktop/src/runtime_worker.rs
           cargo fmt --manifest-path desktop/Cargo.toml
           git diff --check
