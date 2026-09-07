@@ -2,7 +2,7 @@ name: One Shot Integrity Followups
 # One-shot gate for validated export/runtime/registry/build integrity fixes.
 # Publisher reapplies structural helpers after rebasing so concurrent main edits
 # cannot stale an index-bound patch captured earlier in the job.
-# Triggered again after BUG-133 landed so the validated followups publish with fresh IDs.
+# Final revalidation restores Gradle wrapper execute permission after safety rebase.
 
 on:
   push:
@@ -188,6 +188,10 @@ jobs:
           git status --short
 
           git pull --rebase origin main
+          # Rebase restores the repository mode from main; the wrapper is shipped
+          # non-executable there, so restore runner execution permission before
+          # final Java validation.
+          chmod +x engine/gradlew
           (cd engine && ./gradlew --no-daemon --stacktrace test)
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::staged_runtime_inputs_are_isolated_from_source_mutation
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests::failed_snapshot_replacement_restores_last_good_registry_and_receipt
