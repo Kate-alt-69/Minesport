@@ -11,51 +11,45 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 path = Path("desktop/src/runtime_worker.rs")
 text = path.read_text(encoding="utf-8")
 
-# Hashing the live source tree before staging cannot safely authorize cache reuse:
-# those files may change immediately afterwards. Snapshot first, then hash only
-# the exact isolated inputs Minecraft will load. This also removes a redundant
-# full mods/config hash on every cache lookup.
-source_identity = '''    progress(Progress {
-        percent: 1,
-        message: "Checking runtime inputs…".into(),
-    });
-    let raw_fingerprint = runtime_worker_inputs_fingerprint(family, mods_path)?;
-    let fingerprint = scoped_cache_fingerprint(family, &raw_fingerprint, &scope);
-    if cancel.load(Ordering::Relaxed) {
-        bail!("runtime cache cancelled");
-    }
-
-    let cache_root = runtime::cache_root();
-    let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);
-    if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
-        progress(Progress {
-            percent: 100,
-            message: "Runtime ready".into(),
-        });
-        return Ok(CacheResult {
-            fingerprint,
-            registry_path: existing,
-            reused: true,
-        });
-    }
-
-'''
-staged_identity_prelude = '''    progress(Progress {
-        percent: 1,
-        message: "Snapshotting runtime inputs…".into(),
-    });
-    if cancel.load(Ordering::Relaxed) {
-        bail!("runtime cache cancelled");
-    }
-
-    let cache_root = runtime::cache_root();
-'''
+# A live source-tree hash cannot safely authorize reuse because those files may
+# change immediately afterwards. Snapshot first, then hash only the exact
+# isolated inputs Minecraft will load. Use small structural edits here instead
+# of one giant source block so this one-shot patch is resilient to formatting.
 text = replace_once(
     text,
-    source_identity,
-    staged_identity_prelude,
-    "remove live-source cache identity",
+    '''    progress(Progress {
+        percent: 1,
+        message: "Checking runtime inputs…".into(),
+    });''',
+    '''    progress(Progress {
+        percent: 1,
+        message: "Snapshotting runtime inputs…".into(),
+    });''',
+    "runtime input progress label",
 )
+text = replace_once(
+    text,
+    '''    let raw_fingerprint = runtime_worker_inputs_fingerprint(family, mods_path)?;
+    let fingerprint = scoped_cache_fingerprint(family, &raw_fingerprint, &scope);
+''',
+    "",
+    "remove live-source fingerprint",
+)
+
+reuse_start_marker = (
+    '    let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);\n'
+)
+reuse_end_marker = '''    progress(Progress {
+        percent: 4,
+        message: "Preparing worker…".into(),
+    });'''
+reuse_start = text.find(reuse_start_marker)
+if reuse_start < 0:
+    raise SystemExit("remove unsafe pre-snapshot cache reuse: start anchor missing")
+reuse_end = text.find(reuse_end_marker, reuse_start)
+if reuse_end < 0:
+    raise SystemExit("remove unsafe pre-snapshot cache reuse: end anchor missing")
+text = text[:reuse_start] + text[reuse_end:]
 
 old = '''    let workspace = plan.workspace;
     let cleanup = WorkspaceCleanup(workspace.clone());
@@ -98,6 +92,8 @@ new = '''    let workspace = plan.workspace;
     });'''
 text = replace_once(text, old, new, "use staged runtime cache identity")
 
+# User mod JARs must be true snapshot copies. A hard link lets a later in-place
+# write to the selected instance mutate the already-staged worker input.
 text = replace_once(
     text,
     '''        let destination = target.join(entry.file_name());
