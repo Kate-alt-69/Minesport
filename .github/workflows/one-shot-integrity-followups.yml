@@ -157,7 +157,7 @@ jobs:
           git commit -m "FIX | BUG-${export_bug} Publish OBJ and glTF export bundles atomically"
 
           python .github/patches/apply-runtime-staged-snapshot.py
-          cargo fmt --manifest-path desktop/Cargo.toml
+          rustfmt --edition 2024 desktop/src/runtime_worker.rs
           git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::staged_runtime_inputs_are_isolated_from_source_mutation
           git add desktop/src/runtime_worker.rs
@@ -166,7 +166,7 @@ jobs:
           git commit -m "FIX | BUG-${runtime_bug} Snapshot runtime inputs before cache reuse"
 
           python .github/patches/apply-runtime-registry-transaction.py
-          cargo fmt --manifest-path desktop/Cargo.toml
+          rustfmt --edition 2024 desktop/src/registry_stream.rs
           git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests::failed_snapshot_replacement_restores_last_good_registry_and_receipt
           git add desktop/src/registry_stream.rs
