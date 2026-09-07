@@ -260,6 +260,9 @@ public class GltfExporter {
 
         try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(outputFile)))) {
             writer.println(gson.toJson(root));
+            if (writer.checkError()) {
+                throw new IOException("glTF writer reported an output failure for " + outputFile);
+            }
         }
 
         // Native glTF lighting is part of the format export itself, not a Blender

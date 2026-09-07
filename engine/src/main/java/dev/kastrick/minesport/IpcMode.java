@@ -131,6 +131,7 @@ public class IpcMode {
 
         File tempDir = null;
         File stagedOutput = null;
+        AtomicExportBundle exportBundle = null;
         ResolverChain chain = null;
         try {
             final Set<Long> exactSelection = exactSelectionRequested
@@ -502,13 +503,17 @@ public class IpcMode {
                 default -> ObjExporter.ExportMode.GROUPED_BY_TYPE;
             };
 
+            exportBundle = AtomicExportBundle.create(outFile);
+            exportBundle.removeOnPublish(FlatterMetadataExporter.sidecarFor(outFile));
+            File exportFile = exportBundle.stagedMain();
+
             log("Exporting as " + format.toUpperCase() + "...");
             ObjExporter.ExportStats stats;
             if (format.equals("gltf")) {
                 stats = new GltfExporter(chain).export(
                     allBlocks,
                     geometryBuilder,
-                    outFile,
+                    exportFile,
                     mode,
                     optimize,
                     (doneCount, total) -> {
@@ -516,13 +521,13 @@ public class IpcMode {
                         progress(percent, "Building geometry " + doneCount + "/" + total);
                     }
                 );
-                GltfPostProcessor.fixSamplers(outFile);
+                GltfPostProcessor.fixSamplers(exportFile);
                 log("glTF sampler normalization complete");
             } else {
                 stats = ObjExporter.exportWithGeometry(
                     allBlocks,
                     geometryBuilder,
-                    outFile,
+                    exportFile,
                     mode,
                     optimize,
                     (doneCount, total) -> {
@@ -534,7 +539,7 @@ public class IpcMode {
 
             if (blenderExport) {
                 File metadata = BlenderMetadataExporter.write(
-                    outFile,
+                    exportFile,
                     allBlocks,
                     mode,
                     format,
@@ -543,6 +548,9 @@ public class IpcMode {
                 log("Blender translation metadata: " + metadata.getName());
             }
 
+            progress(98, "Publishing export files");
+            exportBundle.publish();
+            exportBundle = null;
             progress(100, "Done");
             log(
                 "Export stats: " + stats.blockCount() + " blocks, "
@@ -561,6 +569,11 @@ public class IpcMode {
             if (stagedOutput != null) {
                 try {
                     Files.deleteIfExists(stagedOutput.toPath());
+                } catch (IOException ignored) {}
+            }
+            if (exportBundle != null) {
+                try {
+                    exportBundle.close();
                 } catch (IOException ignored) {}
             }
             if (tempDir != null) WorldCopier.cleanupTemp(tempDir);

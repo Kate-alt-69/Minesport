@@ -39,7 +39,9 @@ public class MtlExporter {
 
                 BufferedImage img = material.apply(resolvers.resolveTexture(texPath));
                 if (img == null) img = missingTexture();
-                ImageIO.write(img, "PNG", pngFile);
+                if (!ImageIO.write(img, "PNG", pngFile)) {
+                    throw new IOException("No PNG writer is available for " + pngFile);
+                }
 
                 w.println("newmtl " + matName);
                 if (pngFile.exists()) {
@@ -70,6 +72,9 @@ public class MtlExporter {
                 }
                 w.println();
             }
+            if (w.checkError()) {
+                throw new IOException("MTL writer reported an output failure for " + mtlFile);
+            }
         }
     }
 
@@ -91,7 +96,9 @@ public class MtlExporter {
                 alpha.setRGB(x, y, 0xff000000 | gray);
             }
         }
-        ImageIO.write(alpha, "PNG", output);
+        if (!ImageIO.write(alpha, "PNG", output)) {
+            throw new IOException("No PNG writer is available for " + output);
+        }
     }
 
     private static BufferedImage missingTexture() {

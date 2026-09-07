@@ -244,6 +244,9 @@ public class ObjExporter {
                     }
                 }
             }
+            if (writer.checkError()) {
+                throw new IOException("OBJ writer reported an output failure for " + outputFile);
+            }
             emittedVertices = vertexOffset - 1;
         }
 

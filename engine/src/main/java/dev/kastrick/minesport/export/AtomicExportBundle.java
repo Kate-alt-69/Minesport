@@ -1,14 +1,4 @@
-from pathlib import Path
-
-
-def replace_once(text: str, old: str, new: str, label: str) -> str:
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{label}: expected one anchor, found {count}")
-    return text.replace(old, new, 1)
-
-
-bundle_source = r'''package dev.kastrick.minesport.export;
+package dev.kastrick.minesport.export;
 
 import java.io.File;
 import java.io.IOException;
@@ -124,8 +114,8 @@ public final class AtomicExportBundle implements AutoCloseable {
         }
 
         published = true;
-        cleanupTree(backupRoot);
-        cleanupTree(stagingRoot);
+        cleanupTreeBestEffort(backupRoot);
+        cleanupTreeBestEffort(stagingRoot);
     }
 
     private List<Path> collectStagedFiles() throws IOException {
@@ -270,6 +260,15 @@ public final class AtomicExportBundle implements AutoCloseable {
         if (failure != null) throw failure;
     }
 
+    private static void cleanupTreeBestEffort(Path root) {
+        try {
+            cleanupTree(root);
+        } catch (IOException ignored) {
+            // Publication is already committed. Scratch cleanup must never turn
+            // a valid export into a reported failure.
+        }
+    }
+
     private void ensureOpen() throws IOException {
         if (closed) throw new IOException("Export bundle is already closed");
         if (published) throw new IOException("Export bundle is already published");
@@ -295,260 +294,3 @@ public final class AtomicExportBundle implements AutoCloseable {
         if (failure != null) throw failure;
     }
 }
-'''
-Path("engine/src/main/java/dev/kastrick/minesport/export/AtomicExportBundle.java").write_text(
-    bundle_source,
-    encoding="utf-8",
-)
-
-
-test_source = r'''package dev.kastrick.minesport.export;
-
-import org.junit.jupiter.api.Test;
-
-import java.io.IOException;
-import java.nio.file.Files;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-
-class AtomicExportBundleTest {
-    @Test
-    void completeBundleReplacesOldFilesAndRemovesStaleSidecar() throws Exception {
-        var directory = Files.createTempDirectory("minesport-export-bundle-");
-        var main = directory.resolve("scene.gltf").toFile();
-        var bin = directory.resolve("scene.bin");
-        var sidecar = directory.resolve("scene.minesport.json").toFile();
-        Files.writeString(main.toPath(), "old-main");
-        Files.writeString(bin, "old-bin");
-        Files.writeString(sidecar.toPath(), "old-sidecar");
-
-        try (var bundle = AtomicExportBundle.create(main)) {
-            Files.writeString(bundle.stagedMain().toPath(), "new-main");
-            Files.writeString(bundle.stagedMain().toPath().getParent().resolve("scene.bin"), "new-bin");
-            bundle.removeOnPublish(sidecar);
-            bundle.publish();
-        }
-
-        assertEquals("new-main", Files.readString(main.toPath()));
-        assertEquals("new-bin", Files.readString(bin));
-        assertFalse(sidecar.exists());
-        try (var entries = Files.list(directory)) {
-            assertEquals(2L, entries.count());
-        }
-        Files.deleteIfExists(main.toPath());
-        Files.deleteIfExists(bin);
-        Files.deleteIfExists(directory);
-    }
-
-    @Test
-    void failedCompanionPublicationRestoresLastGoodBundle() throws Exception {
-        var directory = Files.createTempDirectory("minesport-export-bundle-");
-        var main = directory.resolve("scene.obj").toFile();
-        var companion = directory.resolve("a.mtl");
-        var blocked = directory.resolve("z.block");
-        Files.writeString(main.toPath(), "old-main");
-        Files.writeString(companion, "old-companion");
-        Files.createDirectory(blocked);
-
-        try (var bundle = AtomicExportBundle.create(main)) {
-            Files.writeString(bundle.stagedMain().toPath(), "new-main");
-            var stage = bundle.stagedMain().toPath().getParent();
-            Files.writeString(stage.resolve("a.mtl"), "new-companion");
-            Files.writeString(stage.resolve("z.block"), "cannot-replace-directory");
-
-            assertThrows(IOException.class, bundle::publish);
-            assertEquals("old-main", Files.readString(main.toPath()));
-            assertEquals("old-companion", Files.readString(companion));
-            assertEquals(true, Files.isDirectory(blocked));
-        }
-
-        Files.deleteIfExists(main.toPath());
-        Files.deleteIfExists(companion);
-        Files.deleteIfExists(blocked);
-        Files.deleteIfExists(directory);
-    }
-}
-'''
-Path("engine/src/test/java/dev/kastrick/minesport/export/AtomicExportBundleTest.java").write_text(
-    test_source,
-    encoding="utf-8",
-)
-
-
-path = Path("engine/src/main/java/dev/kastrick/minesport/IpcMode.java")
-text = path.read_text(encoding="utf-8")
-text = replace_once(
-    text,
-    "        File stagedOutput = null;\n        ResolverChain chain = null;",
-    "        File stagedOutput = null;\n        AtomicExportBundle exportBundle = null;\n        ResolverChain chain = null;",
-    "IPC export bundle state",
-)
-text = replace_once(
-    text,
-    '''            log("Exporting as " + format.toUpperCase() + "...");
-            ObjExporter.ExportStats stats;
-            if (format.equals("gltf")) {''',
-    '''            exportBundle = AtomicExportBundle.create(outFile);
-            exportBundle.removeOnPublish(FlatterMetadataExporter.sidecarFor(outFile));
-            File exportFile = exportBundle.stagedMain();
-
-            log("Exporting as " + format.toUpperCase() + "...");
-            ObjExporter.ExportStats stats;
-            if (format.equals("gltf")) {''',
-    "IPC create export bundle",
-)
-text = replace_once(
-    text,
-    '''                    outFile,
-                    mode,
-                    optimize,
-                    (doneCount, total) -> {''',
-    '''                    exportFile,
-                    mode,
-                    optimize,
-                    (doneCount, total) -> {''',
-    "IPC glTF staged target",
-)
-text = replace_once(
-    text,
-    '''                GltfPostProcessor.fixSamplers(outFile);
-                log("glTF sampler normalization complete");''',
-    '''                GltfPostProcessor.fixSamplers(exportFile);
-                log("glTF sampler normalization complete");''',
-    "IPC glTF staged postprocess",
-)
-text = replace_once(
-    text,
-    '''                    geometryBuilder,
-                    outFile,
-                    mode,
-                    optimize,''',
-    '''                    geometryBuilder,
-                    exportFile,
-                    mode,
-                    optimize,''',
-    "IPC OBJ staged target",
-)
-text = replace_once(
-    text,
-    '''                File metadata = BlenderMetadataExporter.write(
-                    outFile,
-                    allBlocks,''',
-    '''                File metadata = BlenderMetadataExporter.write(
-                    exportFile,
-                    allBlocks,''',
-    "IPC staged Blender metadata",
-)
-text = replace_once(
-    text,
-    '''                log("Blender translation metadata: " + metadata.getName());
-            }
-
-            progress(100, "Done");''',
-    '''                log("Blender translation metadata: " + metadata.getName());
-            }
-
-            progress(98, "Publishing export files");
-            exportBundle.publish();
-            exportBundle = null;
-            progress(100, "Done");''',
-    "IPC publish export bundle",
-)
-text = replace_once(
-    text,
-    '''            if (stagedOutput != null) {
-                try {
-                    Files.deleteIfExists(stagedOutput.toPath());
-                } catch (IOException ignored) {}
-            }
-            if (tempDir != null) WorldCopier.cleanupTemp(tempDir);''',
-    '''            if (stagedOutput != null) {
-                try {
-                    Files.deleteIfExists(stagedOutput.toPath());
-                } catch (IOException ignored) {}
-            }
-            if (exportBundle != null) {
-                try {
-                    exportBundle.close();
-                } catch (IOException ignored) {}
-            }
-            if (tempDir != null) WorldCopier.cleanupTemp(tempDir);''',
-    "IPC discard failed export bundle",
-)
-path.write_text(text, encoding="utf-8")
-
-
-path = Path("engine/src/main/java/dev/kastrick/minesport/export/ObjExporter.java")
-text = path.read_text(encoding="utf-8")
-text = replace_once(
-    text,
-    '''            emittedVertices = vertexOffset - 1;
-        }''',
-    '''            if (writer.checkError()) {
-                throw new IOException("OBJ writer reported an output failure for " + outputFile);
-            }
-            emittedVertices = vertexOffset - 1;
-        }''',
-    "OBJ PrintWriter failure check",
-)
-path.write_text(text, encoding="utf-8")
-
-
-path = Path("engine/src/main/java/dev/kastrick/minesport/export/MtlExporter.java")
-text = path.read_text(encoding="utf-8")
-text = replace_once(
-    text,
-    '''                ImageIO.write(img, "PNG", pngFile);
-''',
-    '''                if (!ImageIO.write(img, "PNG", pngFile)) {
-                    throw new IOException("No PNG writer is available for " + pngFile);
-                }
-''',
-    "MTL texture write verification",
-)
-text = replace_once(
-    text,
-    '''                w.println();
-            }
-        }
-    }''',
-    '''                w.println();
-            }
-            if (w.checkError()) {
-                throw new IOException("MTL writer reported an output failure for " + mtlFile);
-            }
-        }
-    }''',
-    "MTL PrintWriter failure check",
-)
-text = replace_once(
-    text,
-    '''        ImageIO.write(alpha, "PNG", output);
-''',
-    '''        if (!ImageIO.write(alpha, "PNG", output)) {
-            throw new IOException("No PNG writer is available for " + output);
-        }
-''',
-    "MTL alpha write verification",
-)
-path.write_text(text, encoding="utf-8")
-
-
-path = Path("engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java")
-text = path.read_text(encoding="utf-8")
-text = replace_once(
-    text,
-    '''        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(outputFile)))) {
-            writer.println(gson.toJson(root));
-        }''',
-    '''        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(outputFile)))) {
-            writer.println(gson.toJson(root));
-            if (writer.checkError()) {
-                throw new IOException("glTF writer reported an output failure for " + outputFile);
-            }
-        }''',
-    "glTF PrintWriter failure check",
-)
-path.write_text(text, encoding="utf-8")
