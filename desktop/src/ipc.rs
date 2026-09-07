@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use crate::engine_lease;
 use crate::{diagnostics, runtime};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -12,15 +12,18 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
 };
 
 const ENGINE_JAVA_MAJOR: u32 = 22;
+const MAX_ENGINE_STDOUT_LINE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_ENGINE_STDERR_LINE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ENGINE_REQUEST_LINE_BYTES: usize = 8 * 1024 * 1024;
 pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
 const ENGINE_SIDECAR_MANIFEST_SCHEMA: u32 = 1;
 const EMBEDDED_ENGINE_VERSION_RAW: &str = include_str!("../../engine/VERSION");
@@ -1045,7 +1048,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         let reader = BufReader::new(java_stdout);
         let stdout = std::io::stdout();
         let mut output = stdout.lock();
-        for line in reader.lines() {
+        for line in bounded_lines(reader, MAX_ENGINE_STDOUT_LINE_BYTES) {
             let line = line?;
             let correlation = stdout_correlations
                 .lock()
@@ -1068,7 +1071,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
         let reader = BufReader::new(java_stderr);
         let stderr = std::io::stderr();
         let mut output = stderr.lock();
-        for line in reader.lines() {
+        for line in bounded_lines(reader, MAX_ENGINE_STDERR_LINE_BYTES) {
             let line = line?;
             writeln!(output, "{line}")?;
             output.flush()?;
@@ -1079,7 +1082,7 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     let stdin_correlations = correlations;
     thread::spawn(move || {
         let reader = BufReader::new(std::io::stdin());
-        for line in reader.lines() {
+        for line in bounded_lines(reader, MAX_ENGINE_REQUEST_LINE_BYTES) {
             let Ok(line) = line else {
                 break;
             };
@@ -1121,6 +1124,73 @@ pub fn run_engine_worker(jar: &Path) -> Result<()> {
     Ok(())
 }
 
+struct BoundedLines<R> {
+    reader: R,
+    max_bytes: usize,
+    done: bool,
+}
+
+fn bounded_lines<R: BufRead>(reader: R, max_bytes: usize) -> BoundedLines<R> {
+    BoundedLines {
+        reader,
+        max_bytes,
+        done: false,
+    }
+}
+
+impl<R: BufRead> Iterator for BoundedLines<R> {
+    type Item = std::io::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        loop {
+            let available = match self.reader.fill_buf() {
+                Ok(available) => available,
+                Err(error) => {
+                    self.done = true;
+                    return Some(Err(error));
+                }
+            };
+            if available.is_empty() {
+                self.done = true;
+                if bytes.is_empty() {
+                    return None;
+                }
+                break;
+            }
+
+            let newline = available.iter().position(|byte| *byte == b'\n');
+            let append_len = newline.unwrap_or(available.len());
+            if bytes.len().saturating_add(append_len) > self.max_bytes {
+                self.done = true;
+                return Some(Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("IPC line exceeded {} bytes", self.max_bytes),
+                )));
+            }
+            bytes.extend_from_slice(&available[..append_len]);
+            let consumed = newline.map_or(available.len(), |index| index + 1);
+            self.reader.consume(consumed);
+            if newline.is_some() {
+                break;
+            }
+        }
+
+        if bytes.last() == Some(&b'\r') {
+            bytes.pop();
+        }
+        Some(String::from_utf8(bytes).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("IPC line is not valid UTF-8: {error}"),
+            )
+        }))
+    }
+}
+
 fn reader_generation_is_current(generation: &AtomicU64, reader_generation: u64) -> bool {
     generation.load(Ordering::Acquire) == reader_generation
 }
@@ -1136,7 +1206,7 @@ fn spawn_stdout_reader(
         let logger = diagnostics::Logger::new("IPC").child("RX");
         let reader = BufReader::new(stdout);
         let mut last_progress: Option<(String, String, i32, String)> = None;
-        for line in reader.lines() {
+        for line in bounded_lines(reader, MAX_ENGINE_STDOUT_LINE_BYTES) {
             if !reader_generation_is_current(&generation, reader_generation) {
                 return;
             }
@@ -1259,7 +1329,7 @@ fn spawn_stderr_reader(
 ) {
     thread::spawn(move || {
         let logger = diagnostics::Logger::new("IPC").child("STDERR");
-        for line in BufReader::new(stderr).lines() {
+        for line in bounded_lines(BufReader::new(stderr), MAX_ENGINE_STDERR_LINE_BYTES) {
             if !reader_generation_is_current(&generation, reader_generation) {
                 return;
             }
@@ -1440,7 +1510,11 @@ fn parse_java_major(text: &str) -> Option<u32> {
 }
 
 fn java_executable_name() -> &'static str {
-    if cfg!(windows) { "java.exe" } else { "java" }
+    if cfg!(windows) {
+        "java.exe"
+    } else {
+        "java"
+    }
 }
 
 #[cfg(windows)]
@@ -1538,6 +1612,35 @@ mod tests {
             Some(world.clone())
         );
         let _ = fs::remove_dir_all(world);
+    }
+
+    #[test]
+    fn bounded_ipc_lines_preserve_fragmented_crlf_records() {
+        let source = std::io::Cursor::new(b"alpha\r\nbeta\ngamma".to_vec());
+        let reader = BufReader::with_capacity(3, source);
+        let records = bounded_lines(reader, 16)
+            .collect::<std::io::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(records, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn bounded_ipc_lines_reject_oversized_records() {
+        let source = std::io::Cursor::new(b"123456789\nnext\n".to_vec());
+        let reader = BufReader::with_capacity(4, source);
+        let mut records = bounded_lines(reader, 8);
+        let error = records.next().unwrap().unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("exceeded 8 bytes"));
+        assert!(records.next().is_none());
+    }
+
+    #[test]
+    fn stdout_ipc_limit_covers_heightmap_raster_budget() {
+        const HEIGHTMAP_PIXELS: usize = 16 * 1024 * 1024;
+        let raw_rgb_bytes = HEIGHTMAP_PIXELS * 3;
+        let worst_case_base64 = raw_rgb_bytes.div_ceil(3) * 4;
+        assert!(MAX_ENGINE_STDOUT_LINE_BYTES > worst_case_base64 + 1024 * 1024);
     }
 
     #[test]
