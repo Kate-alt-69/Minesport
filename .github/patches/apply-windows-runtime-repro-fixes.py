@@ -66,10 +66,82 @@ text = replace_once(
         .collect()
 }
 
+fn direct_runtime_profile_has_loader_bootstrap(
+    family: BridgeFamily,
+    manifest: &DirectLaunchManifest,
+) -> bool {
+    match family {
+        BridgeFamily::Fabric => manifest
+            .jvm_args
+            .iter()
+            .any(|arg| arg.starts_with("-Dfabric.dli.main=")),
+        // Quilt Loom can use the same Fabric dev-launch injector when running
+        // Fabric-compatible mods. If it does, require the target main class too.
+        BridgeFamily::Quilt if manifest.main_class.contains("devlaunchinjector") => manifest
+            .jvm_args
+            .iter()
+            .any(|arg| arg.starts_with("-Dfabric.dli.main=")),
+        _ => true,
+    }
+}
+
 fn direct_runtime_args(manifest: &DirectLaunchManifest, run_dir: &Path) -> Vec<String> {
 ''',
     "direct launch property helper",
 )
+
+# A cached profile is usable only when its loader bootstrap arguments are complete.
+text = replace_once(
+    text,
+    '''    let manifest_path = profile.join("minesport-launch.json");
+    if let Ok(manifest) = load_direct_launch_manifest(&manifest_path) {
+        return Ok(manifest);
+    }
+''',
+    '''    let manifest_path = profile.join("minesport-launch.json");
+    if let Ok(manifest) = load_direct_launch_manifest(&manifest_path) {
+        if direct_runtime_profile_has_loader_bootstrap(family, &manifest) {
+            return Ok(manifest);
+        }
+        // Never keep reusing a profile that can only terminate in the dev-launch
+        // injector with "missing fabric.dli.main". Regenerate it with the current
+        // resolver/schema instead.
+        let _ = fs::remove_file(&manifest_path);
+    }
+''',
+    "reject incomplete cached launch profile",
+)
+text = replace_once(
+    text,
+    '''    load_direct_launch_manifest(&manifest_path).with_context(|| {
+        format!(
+            "load resolved runtime launch profile {}",
+            manifest_path.display()
+        )
+    })
+}
+''',
+    '''    let manifest = load_direct_launch_manifest(&manifest_path).with_context(|| {
+        format!(
+            "load resolved runtime launch profile {}",
+            manifest_path.display()
+        )
+    })?;
+    if !direct_runtime_profile_has_loader_bootstrap(family, &manifest) {
+        bail!(
+            "resolved {} runtime launch profile is missing its loader bootstrap JVM arguments",
+            family.label()
+        );
+    }
+    Ok(manifest)
+}
+''',
+    "validate newly resolved launch profile",
+)
+
+# Loom's dev-launch injector JVM properties are supplied through a JVM argument
+# provider. Reading JavaExec.allJvmArgs while merely configuring a helper task can
+# omit lazy provider values, so serialize both the base args and provider outputs.
 for label, marker in [("Fabric", "const BUILD_GRADLE: &str = r#\""), ("Quilt", "const QUILT_BUILD_GRADLE: &str = r#\"")]:
     start = text.index(marker)
     end = text.index('"#;', start)
@@ -77,32 +149,35 @@ for label, marker in [("Fabric", "const BUILD_GRADLE: &str = r#\""), ("Quilt", "
     old = '''            jvmArgs: runTask.allJvmArgs.collect { it.toString() },
             args: (runTask.args ?: []).collect { it.toString() },
 '''
-    new = '''            jvmArgs: runTask.allJvmArgs.collect { it.toString() },
+    new = '''            jvmArgs: (
+                (runTask.allJvmArgs ?: []).collect { it.toString() } +
+                runTask.jvmArgumentProviders.collectMany { provider ->
+                    provider.asArguments().collect { it.toString() }
+                }
+            ).unique(),
             systemProperties: runTask.systemProperties.collectEntries { key, value ->
                 [(key.toString()): value?.toString()]
             },
             args: (runTask.args ?: []).collect { it.toString() },
 '''
     if block.count(old) != 1:
-        raise SystemExit(f"{label} Gradle systemProperties anchor count={block.count(old)}")
+        raise SystemExit(f"{label} Gradle JVM-provider anchor count={block.count(old)}")
     block = block.replace(old, new, 1)
     text = text[:start] + block + text[end:]
+
 test_anchor = '''    #[test]
     fn capture_watchdog_covers_startup_and_mid_capture_stalls() {
 '''
 test_insert = '''    #[test]
-    fn direct_launch_profiles_preserve_loom_system_properties() {
+    fn direct_launch_profiles_preserve_loom_bootstrap_arguments() {
         assert_eq!(DIRECT_LAUNCH_PROFILE_SCHEMA, 2);
+        assert!(BUILD_GRADLE.contains("runTask.jvmArgumentProviders.collectMany"));
+        assert!(QUILT_BUILD_GRADLE.contains("runTask.jvmArgumentProviders.collectMany"));
         assert!(BUILD_GRADLE.contains("systemProperties: runTask.systemProperties"));
-        assert!(QUILT_BUILD_GRADLE.contains("systemProperties: runTask.systemProperties"));
 
         let mut properties = BTreeMap::new();
-        properties.insert(
-            "fabric.dli.main".to_string(),
-            "net.minecraft.client.main.Main".to_string(),
-        );
         properties.insert("fabric.dli.env".to_string(), "client".to_string());
-        let manifest = DirectLaunchManifest {
+        let mut manifest = DirectLaunchManifest {
             schema: DIRECT_LAUNCH_PROFILE_SCHEMA,
             main_class: "net.fabricmc.devlaunchinjector.Main".to_string(),
             classpath: vec!["loader.jar".to_string()],
@@ -112,8 +187,18 @@ test_insert = '''    #[test]
             working_dir: String::new(),
             environment_overrides: BTreeMap::new(),
         };
+        assert!(!direct_runtime_profile_has_loader_bootstrap(
+            BridgeFamily::Fabric,
+            &manifest
+        ));
+        manifest
+            .jvm_args
+            .push("-Dfabric.dli.main=net.minecraft.client.main.Main".to_string());
+        assert!(direct_runtime_profile_has_loader_bootstrap(
+            BridgeFamily::Fabric,
+            &manifest
+        ));
         let args = direct_runtime_system_property_args(&manifest);
-        assert!(args.contains(&"-Dfabric.dli.main=net.minecraft.client.main.Main".to_string()));
         assert!(args.contains(&"-Dfabric.dli.env=client".to_string()));
     }
 
