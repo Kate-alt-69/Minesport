@@ -11,17 +11,21 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 path = Path("desktop/src/runtime_worker.rs")
 text = path.read_text(encoding="utf-8")
 
-text = replace_once(
-    text,
-    "    let fingerprint = scoped_cache_fingerprint(family, &raw_fingerprint, &scope);\n",
-    "    let mut fingerprint = scoped_cache_fingerprint(family, &raw_fingerprint, &scope);\n",
-    "mutable staged runtime fingerprint",
-)
+# Hashing the live source tree before staging cannot safely authorize cache reuse:
+# those files may change immediately afterwards. Snapshot first, then hash only
+# the exact isolated inputs Minecraft will load. This also removes a redundant
+# full mods/config hash on every cache lookup.
+source_identity = '''    progress(Progress {
+        percent: 1,
+        message: "Checking runtime inputs…".into(),
+    });
+    let raw_fingerprint = runtime_worker_inputs_fingerprint(family, mods_path)?;
+    let fingerprint = scoped_cache_fingerprint(family, &raw_fingerprint, &scope);
+    if cancel.load(Ordering::Relaxed) {
+        bail!("runtime cache cancelled");
+    }
 
-# A source-tree hash cannot safely authorize reuse because the source can mutate
-# between hashing and workspace preparation. Always create the isolated snapshot
-# first; reuse is decided from the exact bytes/config that Minecraft will load.
-early_reuse = '''    let cache_root = runtime::cache_root();
+    let cache_root = runtime::cache_root();
     let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);
     if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
         progress(Progress {
@@ -36,11 +40,21 @@ early_reuse = '''    let cache_root = runtime::cache_root();
     }
 
 '''
+staged_identity_prelude = '''    progress(Progress {
+        percent: 1,
+        message: "Snapshotting runtime inputs…".into(),
+    });
+    if cancel.load(Ordering::Relaxed) {
+        bail!("runtime cache cancelled");
+    }
+
+    let cache_root = runtime::cache_root();
+'''
 text = replace_once(
     text,
-    early_reuse,
-    "    let cache_root = runtime::cache_root();\n",
-    "remove unsafe pre-snapshot cache reuse",
+    source_identity,
+    staged_identity_prelude,
+    "remove live-source cache identity",
 )
 
 old = '''    let workspace = plan.workspace;
@@ -56,12 +70,11 @@ old = '''    let workspace = plan.workspace;
 new = '''    let workspace = plan.workspace;
     let cleanup = WorkspaceCleanup(workspace.clone());
 
-    // Re-key against the exact isolated snapshot before any JDK/receiver/launch
-    // work. This is the first point at which cache reuse is safe: later source
-    // mutations cannot change the worker's copied mod/config inputs.
+    // This is the first safe cache identity: later mutations of the selected
+    // instance cannot change these copied mod/config inputs.
     let staged_mods = workspace.join("run").join("mods");
     let staged_raw_fingerprint = runtime_worker_inputs_fingerprint(family, &staged_mods)?;
-    fingerprint = scoped_cache_fingerprint(family, &staged_raw_fingerprint, &scope);
+    let fingerprint = scoped_cache_fingerprint(family, &staged_raw_fingerprint, &scope);
     if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
         progress(Progress {
             percent: 100,
@@ -83,7 +96,7 @@ new = '''    let workspace = plan.workspace;
         percent: 40,
         message: "Checking JDK…".into(),
     });'''
-text = replace_once(text, old, new, "reconcile staged runtime fingerprint")
+text = replace_once(text, old, new, "use staged runtime cache identity")
 
 text = replace_once(
     text,
