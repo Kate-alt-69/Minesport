@@ -168,6 +168,30 @@ for label, marker in [
     block = block.replace(old, new, 1)
     text = text[:start] + block + text[end:]
 
+# Adding a deserialized field also changes explicit Rust test fixtures. Keep the
+# pre-existing retargeting regression compiling with an intentionally empty map.
+text = replace_once(
+    text,
+    '''    fn direct_launch_retargets_only_the_game_run_directory() {
+        let manifest = DirectLaunchManifest {
+            schema: DIRECT_LAUNCH_PROFILE_SCHEMA,
+            main_class: "example.Main".into(),
+            classpath: vec!["example.jar".into()],
+            jvm_args: vec![],
+            args: vec![
+''',
+    '''    fn direct_launch_retargets_only_the_game_run_directory() {
+        let manifest = DirectLaunchManifest {
+            schema: DIRECT_LAUNCH_PROFILE_SCHEMA,
+            main_class: "example.Main".into(),
+            classpath: vec!["example.jar".into()],
+            jvm_args: vec![],
+            system_properties: BTreeMap::new(),
+            args: vec![
+''',
+    "existing direct launch fixture system properties",
+)
+
 test_anchor = '''    #[test]
     fn capture_watchdog_covers_startup_and_mid_capture_stalls() {
 '''
