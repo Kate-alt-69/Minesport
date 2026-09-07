@@ -1,0 +1,131 @@
+name: One Shot Workbench Startup Hardening
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: one-shot-workbench-startup-hardening
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | stage Workbench startup hardening'
+    runs-on: windows-latest
+    timeout-minutes: 55
+    env:
+      MINESPORT_FAST_CHECK: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Instrument exact pre-IPC Workbench startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-workbench-startup-observability.py
+          rustfmt --edition 2024 desktop/build.rs desktop/src/app.rs desktop/src/main.rs desktop/src/diagnostics.rs
+          git diff --check
+          grep -Fq 'DesktopSlintWindowInitialize' desktop/src/app.rs
+          grep -Fq 'DesktopSettingsInitialize' desktop/src/app.rs
+          grep -Fq 'DesktopAssetSummaryInitialize' desktop/src/app.rs
+          grep -Fq -- '--ui-construction-check' desktop/src/app.rs
+          grep -Fq 'let desktop_gui_mode = std::env::args_os().len() == 1;' desktop/src/main.rs
+          grep -Fq 'MINESPORT_BUILD_REVISION' desktop/src/diagnostics.rs
+          cargo build --locked --release --manifest-path desktop/Cargo.toml --bin minesport
+
+      - name: Record baseline Windows Workbench stack and constructor result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import struct
+          exe = Path('desktop/target/release/minesport.exe')
+          data = exe.read_bytes()
+          pe = struct.unpack_from('<I', data, 0x3c)[0]
+          optional = pe + 24
+          magic = struct.unpack_from('<H', data, optional)[0]
+          if magic != 0x20B:
+              raise SystemExit(f'expected PE32+ executable, got optional header magic 0x{magic:04x}')
+          reserve = struct.unpack_from('<Q', data, optional + 72)[0]
+          commit = struct.unpack_from('<Q', data, optional + 80)[0]
+          print(f'baseline SizeOfStackReserve={reserve} SizeOfStackCommit={commit}')
+          PY
+          pwsh -NoProfile -Command '$p = Start-Process -FilePath ".\desktop\target\release\minesport.exe" -ArgumentList "--ui-construction-check" -PassThru; if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "baseline Workbench construction probe timed out" }; Write-Host "baseline Workbench probe exit=$($p.ExitCode)"; if ($p.ExitCode -ne 0 -and $p.ExitCode -ne -1073741571) { exit 1 }'
+
+      - name: Harden main-thread stack and require real Workbench construction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-workbench-stack-reserve.py
+          rustfmt --edition 2024 desktop/build.rs
+          git diff --check
+          cargo build --locked --release --manifest-path desktop/Cargo.toml --bin minesport
+          python - <<'PY'
+          from pathlib import Path
+          import struct
+          exe = Path('desktop/target/release/minesport.exe')
+          data = exe.read_bytes()
+          pe = struct.unpack_from('<I', data, 0x3c)[0]
+          optional = pe + 24
+          reserve = struct.unpack_from('<Q', data, optional + 72)[0]
+          commit = struct.unpack_from('<Q', data, optional + 80)[0]
+          print(f'hardened SizeOfStackReserve={reserve} SizeOfStackCommit={commit}')
+          if reserve < 8 * 1024 * 1024:
+              raise SystemExit(f'Workbench stack reserve is still too small: {reserve}')
+          PY
+          pwsh -NoProfile -Command '$p = Start-Process -FilePath ".\desktop\target\release\minesport.exe" -ArgumentList "--ui-construction-check" -PassThru; if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "hardened Workbench construction probe timed out" }; Write-Host "hardened Workbench probe exit=$($p.ExitCode)"; if ($p.ExitCode -ne 0) { exit 1 }'
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+      - name: Publish rebased startup hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard HEAD
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          python .github/patches/apply-workbench-startup-observability.py
+          python .github/patches/apply-workbench-stack-reserve.py
+          rustfmt --edition 2024 desktop/build.rs desktop/src/app.rs desktop/src/main.rs desktop/src/diagnostics.rs
+          git diff --check
+          cargo build --locked --release --manifest-path desktop/Cargo.toml --bin minesport
+          python - <<'PY'
+          from pathlib import Path
+          import struct
+          data = Path('desktop/target/release/minesport.exe').read_bytes()
+          pe = struct.unpack_from('<I', data, 0x3c)[0]
+          optional = pe + 24
+          reserve = struct.unpack_from('<Q', data, optional + 72)[0]
+          print(f'publisher SizeOfStackReserve={reserve}')
+          if reserve < 8 * 1024 * 1024:
+              raise SystemExit(f'publisher Workbench stack reserve is too small: {reserve}')
+          PY
+          pwsh -NoProfile -Command '$p = Start-Process -FilePath ".\desktop\target\release\minesport.exe" -ArgumentList "--ui-construction-check" -PassThru; if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "publisher Workbench construction probe timed out" }; if ($p.ExitCode -ne 0) { throw "publisher Workbench construction probe failed with $($p.ExitCode)" }'
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+          bug=$(( ${max:-0} + 1 ))
+
+          git add desktop/build.rs desktop/src/app.rs desktop/src/main.rs desktop/src/diagnostics.rs
+          git rm .github/patches/apply-workbench-startup-observability.py .github/patches/apply-workbench-stack-reserve.py
+          git diff --cached --check
+          git commit -m "FIX | BUG-${bug} Harden Windows Workbench startup boundary"
+
+          git restore --staged --worktree .
+          git pull --rebase origin main
+          cargo build --locked --release --manifest-path desktop/Cargo.toml --bin minesport
+          pwsh -NoProfile -Command '$p = Start-Process -FilePath ".\desktop\target\release\minesport.exe" -ArgumentList "--ui-construction-check" -PassThru; if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "final Workbench construction probe timed out" }; if ($p.ExitCode -ne 0) { throw "final Workbench construction probe failed with $($p.ExitCode)" }'
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          git push origin HEAD:main
