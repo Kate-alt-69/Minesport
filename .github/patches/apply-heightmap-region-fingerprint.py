@@ -155,13 +155,20 @@ regression = r'''
         let mut first_region = vec![0_u8; 16 * 1024];
         first_region[4096] = 1;
         fs::write(&region, &first_region).unwrap();
+        let original_modified = fs::metadata(&region).unwrap().modified().unwrap();
         let first = fingerprint(&world).unwrap();
 
-        // Keep the file length identical and change only the Minecraft region
-        // header. The cache identity must still change.
+        // Keep both file length and mtime identical, then change only the
+        // Minecraft region header. Metadata-only identities would miss this.
         let mut second_region = first_region;
         second_region[4096] = 2;
         fs::write(&region, &second_region).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&region)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(original_modified))
+            .unwrap();
         let second = fingerprint(&world).unwrap();
         assert_ne!(first, second);
 
