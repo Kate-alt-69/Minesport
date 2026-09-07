@@ -2,6 +2,7 @@ name: One Shot Integrity Followups
 # One-shot gate for validated export/runtime/registry/build integrity fixes.
 # Publisher reapplies structural helpers after rebasing so concurrent main edits
 # cannot stale an index-bound patch captured earlier in the job.
+# Triggered again after BUG-133 landed so the validated followups publish with fresh IDs.
 
 on:
   push:
@@ -180,17 +181,12 @@ jobs:
           git diff --cached --check
           git commit -m "FIX | BUG-${bridge_bug} Retry transient loader dependency failures"
 
-          # Tests/builds can leave tracked artifacts dirty. All intended source
-          # changes are committed above, so restore exactly to HEAD before the
-          # final safety rebase instead of letting generated dirt block it.
           echo 'Tracked state before final publisher cleanup:'
           git status --short
           git restore --staged --worktree .
           echo 'Tracked state after final publisher cleanup:'
           git status --short
 
-          # Close the last-minute push race too. A conflict fails safely; a clean
-          # rebase is revalidated before anything reaches main.
           git pull --rebase origin main
           (cd engine && ./gradlew --no-daemon --stacktrace test)
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::staged_runtime_inputs_are_isolated_from_source_mutation
