@@ -1,4 +1,6 @@
 name: One Shot Export Isolation Followups
+# Reapply structural helpers after rebasing so concurrent main changes cannot
+# stale prebuilt index patches.
 
 on:
   push:
@@ -16,7 +18,7 @@ jobs:
   integrate:
     if: github.event.head_commit.message == 'CHORE | stage export isolation followups'
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v7
         with:
@@ -58,7 +60,7 @@ jobs:
           run-id: 33797953559
           github-token: ${{ github.token }}
 
-      - name: Test per-export OBJ texture assets
+      - name: Validate per-export OBJ texture assets
         shell: bash
         run: |
           set -euo pipefail
@@ -68,13 +70,9 @@ jobs:
           (cd engine && ./gradlew --no-daemon --stacktrace clean test)
           grep -Fq 'baseName + "_textures"' engine/src/main/java/dev/kastrick/minesport/export/MtlExporter.java
           grep -Fq 'objTexturesAreIsolatedPerExportInsteadOfSharedGlobally' engine/src/test/java/dev/kastrick/minesport/export/ExportRegressionTest.java
-          git add engine/src/main/java/dev/kastrick/minesport/export/MtlExporter.java \
-            engine/src/test/java/dev/kastrick/minesport/export/ExportRegressionTest.java
-          git diff --cached --binary --full-index > /tmp/obj-textures.patch
-          test -s /tmp/obj-textures.patch
           git reset --hard HEAD
 
-      - name: Test export companion collision detection
+      - name: Validate export companion collision detection
         shell: bash
         env:
           MINESPORT_FAST_CHECK: '1'
@@ -86,12 +84,9 @@ jobs:
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::export_bundle_collision_detection_includes_companion_files_and_assets
           grep -Fq 'fn export_bundle_conflicts' desktop/src/app.rs
           grep -Fq 'stem}_textures' desktop/src/app.rs
-          git add desktop/src/app.rs
-          git diff --cached --binary --full-index > /tmp/export-collisions.patch
-          test -s /tmp/export-collisions.patch
           git reset --hard HEAD
 
-      - name: Test Windows reserved export names
+      - name: Validate Windows reserved export names
         shell: bash
         env:
           MINESPORT_FAST_CHECK: '1'
@@ -103,14 +98,9 @@ jobs:
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::sanitizes_windows_reserved_device_export_names
           cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
           grep -Fq 'fn windows_reserved_export_name' desktop/src/app.rs
-          git add desktop/src/app.rs
-          git rm .github/patches/apply-export-isolation-followups.py \
-            .github/patches/apply-export-name-safety.py
-          git diff --cached --binary --full-index > /tmp/export-name-safety.patch
-          test -s /tmp/export-name-safety.patch
           git reset --hard HEAD
 
-      - name: Test capture-worker cache identity
+      - name: Validate capture-worker cache identity
         shell: bash
         env:
           MINESPORT_FAST_CHECK: '1'
@@ -122,13 +112,9 @@ jobs:
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
           grep -Fq 'runtime_worker_capture_fingerprint' desktop/src/runtime_worker.rs
           grep -Fq 'minesport-runtime-worker-cache-v2' desktop/src/runtime_worker.rs
-          git add desktop/src/runtime_worker.rs
-          git rm .github/patches/apply-runtime-capture-identity.py
-          git diff --cached --binary --full-index > /tmp/runtime-capture-identity.patch
-          test -s /tmp/runtime-capture-identity.patch
           git reset --hard HEAD
 
-      - name: Test reusable Windows Gradle network retry
+      - name: Validate reusable Windows Gradle network retry
         shell: bash
         run: |
           set -euo pipefail
@@ -138,13 +124,9 @@ jobs:
           grep -Fq 'function Invoke-GradleBuildWithRetry' build.ps1
           grep -Fq "Invoke-GradleBuildWithRetry 'Java engine' 'engine' \$Fresh" build.ps1
           grep -Fq 'MINESPORT_GRADLE_BUILD_ATTEMPTS' build.ps1
-          git add build.ps1
-          git rm .github/patches/apply-gradle-build-retry-generalization.py
-          git diff --cached --binary --full-index > /tmp/engine-gradle-retry.patch
-          test -s /tmp/engine-gradle-retry.patch
           git reset --hard HEAD
 
-      - name: Test POSIX Gradle network retry
+      - name: Validate POSIX Gradle network retry
         shell: bash
         run: |
           set -euo pipefail
@@ -155,13 +137,9 @@ jobs:
           grep -Fq 'MINESPORT_GRADLE_BUILD_ATTEMPTS' build.sh
           grep -Fq 'run_gradle_build "$name Export Worker"' build.sh
           grep -Fq 'run_gradle_build "Java engine"' build.sh
-          git add build.sh
-          git rm .github/patches/apply-posix-gradle-retry.py
-          git diff --cached --binary --full-index > /tmp/posix-gradle-retry.patch
-          test -s /tmp/posix-gradle-retry.patch
           git reset --hard HEAD
 
-      - name: Publish tested fixes
+      - name: Publish rebased tested fixes
         shell: bash
         env:
           MINESPORT_FAST_CHECK: '1'
@@ -181,37 +159,62 @@ jobs:
           engine_retry_bug=$(( identity_bug + 1 ))
           posix_retry_bug=$(( engine_retry_bug + 1 ))
 
-          git apply --index /tmp/obj-textures.patch
-          git diff --cached --check
+          python .github/patches/apply-export-isolation-followups.py java
+          git diff --check
           (cd engine && ./gradlew --no-daemon --stacktrace test --tests dev.kastrick.minesport.export.ExportRegressionTest)
+          git add engine/src/main/java/dev/kastrick/minesport/export/MtlExporter.java \
+            engine/src/test/java/dev/kastrick/minesport/export/ExportRegressionTest.java
+          git diff --cached --check
           git commit -m "FIX | BUG-${texture_bug} Isolate OBJ texture assets per export"
 
-          git apply --index /tmp/export-collisions.patch
-          git diff --cached --check
-          rustfmt --edition 2024 --check desktop/src/app.rs
+          python .github/patches/apply-export-isolation-followups.py rust
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::export_bundle_collision_detection_includes_companion_files_and_assets
+          git add desktop/src/app.rs
+          git diff --cached --check
           git commit -m "FIX | BUG-${collision_bug} Detect export companion collisions"
 
-          git apply --index /tmp/export-name-safety.patch
-          git diff --cached --check
-          rustfmt --edition 2024 --check desktop/src/app.rs
+          python .github/patches/apply-export-name-safety.py
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::sanitizes_windows_reserved_device_export_names
+          git add desktop/src/app.rs
+          git rm .github/patches/apply-export-isolation-followups.py .github/patches/apply-export-name-safety.py
+          git diff --cached --check
           git commit -m "FIX | BUG-${name_bug} Sanitize Windows reserved export names"
 
-          git apply --index /tmp/runtime-capture-identity.patch
-          git diff --cached --check
-          rustfmt --edition 2024 --check desktop/src/runtime_worker.rs
+          python .github/patches/apply-runtime-capture-identity.py
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
+          git add desktop/src/runtime_worker.rs
+          git rm .github/patches/apply-runtime-capture-identity.py
+          git diff --cached --check
           git commit -m "FIX | BUG-${identity_bug} Include capture worker in runtime cache identity"
 
-          git apply --index /tmp/engine-gradle-retry.patch
-          git diff --cached --check
+          python .github/patches/apply-gradle-build-retry-generalization.py
+          git diff --check
           pwsh -NoProfile -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
+          git add build.ps1
+          git rm .github/patches/apply-gradle-build-retry-generalization.py
+          git diff --cached --check
           git commit -m "FIX | BUG-${engine_retry_bug} Retry transient Java engine dependency failures"
 
-          git apply --index /tmp/posix-gradle-retry.patch
-          git diff --cached --check
+          python .github/patches/apply-posix-gradle-retry.py
+          git diff --check
           bash -n build.sh
+          git add build.sh
+          git rm .github/patches/apply-posix-gradle-retry.py
+          git diff --cached --check
           git commit -m "FIX | BUG-${posix_retry_bug} Retry transient POSIX Gradle dependency failures"
 
+          # Rebase once more before push, then retest the overlap-sensitive pieces.
+          git pull --rebase origin main
+          (cd engine && ./gradlew --no-daemon --stacktrace test --tests dev.kastrick.minesport.export.ExportRegressionTest)
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::export_bundle_collision_detection_includes_companion_files_and_assets
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::sanitizes_windows_reserved_device_export_names
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
+          pwsh -NoProfile -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
+          bash -n build.sh
           git push origin HEAD:main
