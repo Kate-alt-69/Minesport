@@ -201,7 +201,20 @@ impl StreamWriter {
         if let Some(folder) = self.final_path.parent() {
             let _ = fs::remove_file(folder.join("registry.json"));
         }
-        prune_sibling_fingerprints(&self.cache_root, &self.minecraft_version, &self.fingerprint)?;
+        if let Err(error) =
+            prune_sibling_fingerprints(&self.cache_root, &self.minecraft_version, &self.fingerprint)
+        {
+            crate::diagnostics::Logger::new("RUNTIME")
+                .child("REGISTRY")
+                .warn(
+                    "RuntimeRegistryStalePruneFailed",
+                    "runtime registry was committed but stale cache pruning failed",
+                    &[
+                        ("registry_path", self.final_path.display().to_string()),
+                        ("error", format!("{error:#}")),
+                    ],
+                );
+        }
         Ok(self.final_path.clone())
     }
 }
@@ -894,6 +907,39 @@ mod tests {
         };
         assert!(error.to_string().contains("exceeded 8 bytes"));
         assert!(packet.len() <= 8);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_registry_survives_stale_prune_permission_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let cache = std::env::temp_dir().join(format!(
+            "minesport-registry-prune-{}-{stamp}",
+            std::process::id()
+        ));
+        let writer =
+            StreamWriter::begin(&cache, "1.21.10", "test-loader", &[], "prune-test", 0).unwrap();
+        let keep_path = snapshot_path(&cache, "1.21.10", "prune-test");
+        let version_root = keep_path.parent().unwrap().parent().unwrap().to_path_buf();
+        for index in 0..4 {
+            fs::create_dir_all(version_root.join(format!("stale-{index}"))).unwrap();
+        }
+
+        fs::set_permissions(&version_root, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = writer.finish();
+        fs::set_permissions(&version_root, fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "committed registry was rejected: {result:?}"
+        );
+        assert!(snapshot_exists(&cache, "1.21.10", "prune-test"));
+        let _ = fs::remove_dir_all(cache);
     }
 
     #[test]
