@@ -1,0 +1,103 @@
+name: One Shot Windows Runtime Repro Fixes
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: one-shot-windows-runtime-repro
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | stage Windows runtime repro fixes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+      - name: Install desktop test dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+      - name: Restore embedded engine artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+      - name: Restore embedded loader bridges
+        uses: actions/download-artifact@v7
+        with:
+          name: loader-bridges-1.21.10
+          path: dist/bundled-export-worker
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+      - name: Validate reproduced Windows fixes
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-windows-runtime-repro-fixes.py
+          rustfmt --edition 2024 desktop/src/runtime_worker.rs desktop/src/engine_update.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::direct_launch_profiles_preserve_loom_system_properties
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::updater_thread_reserves_network_stack_headroom
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          grep -Fq 'const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 2;' desktop/src/runtime_worker.rs
+          grep -Fq 'systemProperties: runTask.systemProperties' desktop/src/runtime_worker.rs
+          grep -Fq '.stack_size(ENGINE_UPDATE_THREAD_STACK)' desktop/src/engine_update.rs
+      - name: Publish rebased fixes
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          git reset --hard HEAD
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          python .github/patches/apply-windows-runtime-repro-fixes.py
+          rustfmt --edition 2024 desktop/src/runtime_worker.rs desktop/src/engine_update.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::direct_launch_profiles_preserve_loom_system_properties
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::updater_thread_reserves_network_stack_headroom
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+          launch_bug=$(( ${max:-0} + 1 ))
+          updater_bug=$(( launch_bug + 1 ))
+
+          git add desktop/src/runtime_worker.rs
+          git diff --cached --check
+          git commit -m "FIX | BUG-${launch_bug} Preserve Loom direct-launch system properties"
+          git add desktop/src/engine_update.rs
+          git rm .github/patches/apply-windows-runtime-repro-fixes.py
+          git diff --cached --check
+          git commit -m "FIX | BUG-${updater_bug} Reserve updater network thread stack"
+
+          git restore --staged --worktree .
+          git pull --rebase origin main
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::direct_launch_profiles_preserve_loom_system_properties
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::updater_thread_reserves_network_stack_headroom
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          git push origin HEAD:main
