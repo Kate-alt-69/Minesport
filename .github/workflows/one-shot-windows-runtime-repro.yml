@@ -50,7 +50,7 @@ jobs:
           path: dist/bundled-export-worker
           run-id: 33797953559
           github-token: ${{ github.token }}
-      - name: Validate reproduced Windows fixes
+      - name: Validate reproduced Windows and CI fixes
         shell: bash
         env:
           MINESPORT_FAST_CHECK: '1'
@@ -65,6 +65,7 @@ jobs:
           grep -Fq 'const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 2;' desktop/src/runtime_worker.rs
           grep -Fq 'systemProperties: runTask.systemProperties' desktop/src/runtime_worker.rs
           grep -Fq '.stack_size(ENGINE_UPDATE_THREAD_STACK)' desktop/src/engine_update.rs
+          grep -Fq 'if: always() && !cancelled()' .github/workflows/build.yml
       - name: Publish rebased fixes
         shell: bash
         env:
@@ -86,18 +87,25 @@ jobs:
           max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
           launch_bug=$(( ${max:-0} + 1 ))
           updater_bug=$(( launch_bug + 1 ))
+          ci_bug=$(( updater_bug + 1 ))
 
           git add desktop/src/runtime_worker.rs
           git diff --cached --check
           git commit -m "FIX | BUG-${launch_bug} Preserve Loom direct-launch system properties"
+
           git add desktop/src/engine_update.rs
-          git rm .github/patches/apply-windows-runtime-repro-fixes.py
           git diff --cached --check
           git commit -m "FIX | BUG-${updater_bug} Reserve updater network thread stack"
+
+          git add .github/workflows/build.yml
+          git rm .github/patches/apply-windows-runtime-repro-fixes.py
+          git diff --cached --check
+          git commit -m "FIX | BUG-${ci_bug} Ignore superseded CI cancellations"
 
           git restore --staged --worktree .
           git pull --rebase origin main
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::direct_launch_profiles_preserve_loom_system_properties
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::updater_thread_reserves_network_stack_headroom
           cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          grep -Fq 'if: always() && !cancelled()' .github/workflows/build.yml
           git push origin HEAD:main
