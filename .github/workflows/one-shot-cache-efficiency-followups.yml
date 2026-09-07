@@ -16,7 +16,7 @@ jobs:
   integrate:
     if: github.event.head_commit.message == 'CHORE | run cache efficiency followups'
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,6 +79,20 @@ jobs:
           grep -Fq 'REGION_HEADER_BYTES' desktop/src/heightmap_cache.rs
           git reset --hard HEAD
 
+      - name: Validate transactional engine update state
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-engine-update-state-transaction.py
+          rustfmt --edition 2024 desktop/src/engine_update.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::failed_update_file_replacement_restores_last_good_state
+          grep -Fq 'replace_file_with_rollback' desktop/src/engine_update.rs
+          grep -Fq 'write_durable_replacement' desktop/src/engine_update.rs
+          git reset --hard HEAD
+
       - name: Publish rebased tested fixes
         shell: bash
         env:
@@ -93,6 +107,7 @@ jobs:
           max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
           scope_bug=$(( ${max:-0} + 1 ))
           heightmap_bug=$(( scope_bug + 1 ))
+          update_bug=$(( heightmap_bug + 1 ))
 
           python .github/patches/apply-runtime-scope-superset.py
           rustfmt --edition 2024 desktop/src/runtime_cache.rs
@@ -112,6 +127,15 @@ jobs:
           git diff --cached --check
           git commit -m "FIX | BUG-${heightmap_bug} Include region headers in heightmap cache identity"
 
+          python .github/patches/apply-engine-update-state-transaction.py
+          rustfmt --edition 2024 desktop/src/engine_update.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::failed_update_file_replacement_restores_last_good_state
+          git add desktop/src/engine_update.rs
+          git rm .github/patches/apply-engine-update-state-transaction.py
+          git diff --cached --check
+          git commit -m "FIX | BUG-${update_bug} Preserve engine update state during replacement failures"
+
           echo 'Tracked state before final publisher cleanup:'
           git status --short
           git restore --staged --worktree .
@@ -120,4 +144,5 @@ jobs:
           git pull --rebase origin main
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_cache::tests::full_scope_satisfies_every_scoped_request_but_not_the_reverse
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml heightmap_cache::tests::region_header_bytes_participate_in_heightmap_identity
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::failed_update_file_replacement_restores_last_good_state
           git push origin HEAD:main
