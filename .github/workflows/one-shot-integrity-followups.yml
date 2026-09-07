@@ -1,6 +1,6 @@
 name: One Shot Integrity Followups
-# One-shot gate for validated export/runtime/registry integrity fixes.
-# staged: export bundle + runtime snapshot + registry transaction
+# One-shot gate for validated export/runtime/registry/build integrity fixes.
+# staged: export bundle + runtime snapshot + registry transaction + bridge retry
 
 on:
   push:
@@ -136,6 +136,24 @@ jobs:
           test -s /tmp/registry-transaction.patch
           git reset --hard HEAD
 
+      - name: Apply and validate transient bridge build retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-bridge-build-retry.py
+          git diff --check
+          pwsh -NoProfile -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
+          grep -Fq 'Test-TransientBridgeBuildFailure' build.ps1
+          grep -Fq 'Connection reset' build.ps1
+          grep -Fq 'MINESPORT_BRIDGE_BUILD_ATTEMPTS' build.ps1
+          grep -Fq 'Invoke-BridgeGradleBuild $bridge' build.ps1
+
+          git add build.ps1
+          git rm .github/patches/apply-bridge-build-retry.py
+          git diff --cached --binary --full-index > /tmp/bridge-retry.patch
+          test -s /tmp/bridge-retry.patch
+          git reset --hard HEAD
+
       - name: Publish tested fixes
         shell: bash
         env:
@@ -153,6 +171,7 @@ jobs:
           export_bug=$(( ${max:-0} + 1 ))
           runtime_bug=$(( export_bug + 1 ))
           registry_bug=$(( runtime_bug + 1 ))
+          bridge_bug=$(( registry_bug + 1 ))
 
           git apply --index /tmp/export-integrity.patch
           git diff --cached --check
@@ -161,14 +180,19 @@ jobs:
 
           git apply --index /tmp/runtime-snapshot.patch
           git diff --cached --check
-          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          rustfmt --edition 2024 --check desktop/src/runtime_worker.rs
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::staged_runtime_inputs_are_isolated_from_source_mutation
           git commit -m "FIX | BUG-${runtime_bug} Snapshot runtime inputs before cache reuse"
 
           git apply --index /tmp/registry-transaction.patch
           git diff --cached --check
-          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          rustfmt --edition 2024 --check desktop/src/registry_stream.rs
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests::failed_snapshot_replacement_restores_last_good_registry_and_receipt
           git commit -m "FIX | BUG-${registry_bug} Preserve runtime registry during replacement failures"
+
+          git apply --index /tmp/bridge-retry.patch
+          git diff --cached --check
+          pwsh -NoProfile -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
+          git commit -m "FIX | BUG-${bridge_bug} Retry transient loader dependency failures"
 
           git push origin HEAD:main
