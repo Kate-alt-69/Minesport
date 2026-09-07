@@ -128,7 +128,7 @@ jobs:
           test -s /tmp/runtime-capture-identity.patch
           git reset --hard HEAD
 
-      - name: Test reusable Gradle network retry
+      - name: Test reusable Windows Gradle network retry
         shell: bash
         run: |
           set -euo pipefail
@@ -142,6 +142,23 @@ jobs:
           git rm .github/patches/apply-gradle-build-retry-generalization.py
           git diff --cached --binary --full-index > /tmp/engine-gradle-retry.patch
           test -s /tmp/engine-gradle-retry.patch
+          git reset --hard HEAD
+
+      - name: Test POSIX Gradle network retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-posix-gradle-retry.py
+          git diff --check
+          bash -n build.sh
+          grep -Fq 'transient_gradle_failure' build.sh
+          grep -Fq 'MINESPORT_GRADLE_BUILD_ATTEMPTS' build.sh
+          grep -Fq 'run_gradle_build "$name Export Worker"' build.sh
+          grep -Fq 'run_gradle_build "Java engine"' build.sh
+          git add build.sh
+          git rm .github/patches/apply-posix-gradle-retry.py
+          git diff --cached --binary --full-index > /tmp/posix-gradle-retry.patch
+          test -s /tmp/posix-gradle-retry.patch
           git reset --hard HEAD
 
       - name: Publish tested fixes
@@ -162,6 +179,7 @@ jobs:
           name_bug=$(( collision_bug + 1 ))
           identity_bug=$(( name_bug + 1 ))
           engine_retry_bug=$(( identity_bug + 1 ))
+          posix_retry_bug=$(( engine_retry_bug + 1 ))
 
           git apply --index /tmp/obj-textures.patch
           git diff --cached --check
@@ -190,5 +208,10 @@ jobs:
           git diff --cached --check
           pwsh -NoProfile -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "build.ps1"), [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
           git commit -m "FIX | BUG-${engine_retry_bug} Retry transient Java engine dependency failures"
+
+          git apply --index /tmp/posix-gradle-retry.patch
+          git diff --cached --check
+          bash -n build.sh
+          git commit -m "FIX | BUG-${posix_retry_bug} Retry transient POSIX Gradle dependency failures"
 
           git push origin HEAD:main
