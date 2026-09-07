@@ -112,6 +112,11 @@ jobs:
           git diff --cached --check
           git commit -m "FIX | BUG-${heightmap_bug} Include region headers in heightmap cache identity"
 
+          echo 'Tracked state before final publisher cleanup:'
+          git status --short
+          git restore --staged --worktree .
+          echo 'Tracked state after final publisher cleanup:'
+          git status --short
           git pull --rebase origin main
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_cache::tests::full_scope_satisfies_every_scoped_request_but_not_the_reverse
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml heightmap_cache::tests::region_header_bytes_participate_in_heightmap_identity
