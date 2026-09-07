@@ -17,7 +17,6 @@ text = replace_once(
     'const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 2;',
     "direct launch schema bump",
 )
-
 text = replace_once(
     text,
     '''    #[serde(default)]
@@ -34,7 +33,6 @@ text = replace_once(
 ''',
     "direct launch system properties field",
 )
-
 text = replace_once(
     text,
     '''    for arg in &manifest.jvm_args {
@@ -56,7 +54,6 @@ text = replace_once(
 ''',
     "direct launch system property arguments",
 )
-
 text = replace_once(
     text,
     '''fn direct_runtime_args(manifest: &DirectLaunchManifest, run_dir: &Path) -> Vec<String> {
@@ -73,7 +70,6 @@ fn direct_runtime_args(manifest: &DirectLaunchManifest, run_dir: &Path) -> Vec<S
 ''',
     "direct launch property helper",
 )
-
 for label, marker in [("Fabric", "const BUILD_GRADLE: &str = r#\""), ("Quilt", "const QUILT_BUILD_GRADLE: &str = r#\"")]:
     start = text.index(marker)
     end = text.index('"#;', start)
@@ -91,8 +87,6 @@ for label, marker in [("Fabric", "const BUILD_GRADLE: &str = r#\""), ("Quilt", "
         raise SystemExit(f"{label} Gradle systemProperties anchor count={block.count(old)}")
     block = block.replace(old, new, 1)
     text = text[:start] + block + text[end:]
-
-# Add regression tests before the existing capture watchdog test.
 test_anchor = '''    #[test]
     fn capture_watchdog_covers_startup_and_mid_capture_stalls() {
 '''
@@ -166,3 +160,22 @@ engine_test = '''    #[test]
 '''
 text = replace_once(text, engine_test_anchor, engine_test + engine_test_anchor, "updater stack regression test")
 update.write_text(text, encoding="utf-8")
+
+
+build = Path(".github/workflows/build.yml")
+text = build.read_text(encoding="utf-8")
+text = replace_once(
+    text,
+    '''  compile-clean:
+    name: Compile cleanly
+    if: always()
+''',
+    '''  compile-clean:
+    name: Compile cleanly
+    # Superseded push runs are intentionally cancelled by workflow concurrency.
+    # Do not convert that neutral cancellation into a false red compile failure.
+    if: always() && !cancelled()
+''',
+    "compile verdict cancellation guard",
+)
+build.write_text(text, encoding="utf-8")
