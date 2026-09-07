@@ -81,18 +81,22 @@ jobs:
               raise SystemExit(f'BUG-127 readiness restore anchor count={text.count(old)}')
           text = text.replace(old, new, 1)
 
-          old = '''        std::fs::create_dir_all(&root).unwrap();
-          let registry = root.join("registry.data");
-          std::fs::write(&registry, b"ready").unwrap();'''
-          new = '''        let registry = registry::write_empty_snapshot_for_test(
+          test_anchor = 'fn scoped_ready_registry_never_masquerades_as_full_or_another_scope()'
+          test_start = text.find(test_anchor)
+          if test_start < 0:
+              raise SystemExit('BUG-127 scoped ready test anchor missing')
+          fixture_start = text.find('std::fs::create_dir_all(&root).unwrap();', test_start)
+          fixture_end = text.find('let manager = RuntimeCacheManager::default();', fixture_start)
+          if fixture_start < 0 or fixture_end < 0:
+              raise SystemExit('BUG-127 scoped ready fixture boundaries missing')
+          replacement = '''let registry = registry::write_empty_snapshot_for_test(
               &root,
               "1.21.10",
               "scoped",
           )
-          .unwrap();'''
-          if text.count(old) != 1:
-              raise SystemExit(f'BUG-127 scoped ready fixture anchor count={text.count(old)}')
-          text = text.replace(old, new, 1)
+          .unwrap();
+          '''
+          text = text[:fixture_start] + replacement + text[fixture_end:]
           cache.write_text(text, encoding='utf-8')
 
           worker = Path('desktop/src/runtime_worker.rs')
