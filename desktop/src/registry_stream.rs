@@ -203,6 +203,56 @@ impl Drop for StreamWriter {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum PacketRead {
+    Pending,
+    Complete,
+    Eof,
+}
+
+fn read_registry_packet<R: BufRead>(
+    reader: &mut R,
+    packet: &mut Vec<u8>,
+    max_bytes: usize,
+) -> Result<PacketRead> {
+    let available = match reader.fill_buf() {
+        Ok(available) => available,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            return Ok(PacketRead::Pending);
+        }
+        Err(error) => return Err(error).context("read runtime registry packet"),
+    };
+    if available.is_empty() {
+        if packet.is_empty() {
+            return Ok(PacketRead::Eof);
+        }
+        bail!("runtime worker disconnected before completing a registry packet");
+    }
+
+    let newline = available.iter().position(|byte| *byte == b'\n');
+    let append_len = newline.unwrap_or(available.len());
+    if packet.len().saturating_add(append_len) > max_bytes {
+        bail!("runtime registry packet exceeded {} bytes", max_bytes);
+    }
+    packet.extend_from_slice(&available[..append_len]);
+    let consumed = newline.map_or(available.len(), |index| index + 1);
+    reader.consume(consumed);
+
+    if newline.is_some() {
+        if packet.last() == Some(&b'\r') {
+            packet.pop();
+        }
+        Ok(PacketRead::Complete)
+    } else {
+        Ok(PacketRead::Pending)
+    }
+}
+
 pub fn capture_once<F>(
     address: &str,
     cache_root: &Path,
@@ -286,30 +336,10 @@ where
         if cancel.load(Ordering::Relaxed) {
             bail!("runtime cache cancelled during registry capture");
         }
-        line.clear();
-        let bytes = match reader.read_until(b'\n', &mut line) {
-            Ok(bytes) => bytes,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return Err(error).context("read runtime registry packet"),
-        };
-        if bytes == 0 {
-            break;
-        }
-        if line.len() > MAX_MESSAGE_BYTES {
-            bail!(
-                "runtime registry packet exceeded {} bytes",
-                MAX_MESSAGE_BYTES
-            );
-        }
-        while matches!(line.last(), Some(b'\n' | b'\r')) {
-            line.pop();
+        match read_registry_packet(&mut reader, &mut line, MAX_MESSAGE_BYTES)? {
+            PacketRead::Pending => continue,
+            PacketRead::Eof => break,
+            PacketRead::Complete => {}
         }
         if line.is_empty() {
             continue;
@@ -317,6 +347,7 @@ where
 
         let message: WireMessage =
             serde_json::from_slice(&line).context("parse runtime registry packet")?;
+        line.clear();
         match message.kind.as_str() {
             "hello" => {
                 if hello_seen {
@@ -662,6 +693,39 @@ fn unix_timestamp_string() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fragmented_registry_packet_is_preserved_until_newline() {
+        let source = std::io::Cursor::new(b"{\"type\":\"done\"}\n".to_vec());
+        let mut reader = BufReader::with_capacity(4, source);
+        let mut packet = Vec::new();
+        let mut pending = 0;
+        loop {
+            match read_registry_packet(&mut reader, &mut packet, 128).unwrap() {
+                PacketRead::Pending => pending += 1,
+                PacketRead::Complete => break,
+                PacketRead::Eof => panic!("packet ended before newline"),
+            }
+        }
+        assert!(pending > 0);
+        assert_eq!(packet, b"{\"type\":\"done\"}");
+    }
+
+    #[test]
+    fn oversized_registry_packet_is_rejected_before_buffer_growth() {
+        let source = std::io::Cursor::new(b"123456789\n".to_vec());
+        let mut reader = BufReader::with_capacity(4, source);
+        let mut packet = Vec::new();
+        let error = loop {
+            match read_registry_packet(&mut reader, &mut packet, 8) {
+                Ok(PacketRead::Pending) => continue,
+                Ok(other) => panic!("unexpected packet result: {other:?}"),
+                Err(error) => break error,
+            }
+        };
+        assert!(error.to_string().contains("exceeded 8 bytes"));
+        assert!(packet.len() <= 8);
+    }
 
     #[test]
     fn streamed_header_matches_schema_four_contract() {
