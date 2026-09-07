@@ -1,5 +1,5 @@
 name: One Shot Integrity Followups
-# One-shot gate for the two validated integrity fixes below.
+# One-shot gate for validated export/runtime/registry integrity fixes.
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
   integrate:
     if: github.event.head_commit.message == 'CHORE | stage integrity followups'
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -42,6 +42,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
             libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+
+      - name: Restore embedded engine artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+          run-id: 33797953559
+          github-token: ${{ github.token }}
 
       - name: Restore embedded loader bridges
         uses: actions/download-artifact@v7
@@ -90,16 +98,41 @@ jobs:
           cargo fmt --manifest-path desktop/Cargo.toml
           git diff --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests
-          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
 
           grep -Fq 'let staged_raw_fingerprint = runtime_worker_inputs_fingerprint' desktop/src/runtime_worker.rs
           grep -Fq 'copy_file_snapshot(&path, &destination)' desktop/src/runtime_worker.rs
           grep -Fq 'staged_runtime_inputs_are_isolated_from_source_mutation' desktop/src/runtime_worker.rs
+          if grep -Fq 'let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);' desktop/src/runtime_worker.rs; then
+            echo 'unsafe pre-snapshot cache reuse still present' >&2
+            exit 1
+          fi
 
           git add desktop/src/runtime_worker.rs
           git rm .github/patches/apply-runtime-staged-snapshot.py
           git diff --cached --binary --full-index > /tmp/runtime-snapshot.patch
           test -s /tmp/runtime-snapshot.patch
+          git reset --hard HEAD
+
+      - name: Apply and test transactional registry replacement
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-runtime-registry-transaction.py
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+          grep -Fq 'stage_ready_receipt(' desktop/src/registry_stream.rs
+          grep -Fq 'install_registry_snapshot(' desktop/src/registry_stream.rs
+          grep -Fq 'failed_snapshot_replacement_restores_last_good_registry_and_receipt' desktop/src/registry_stream.rs
+
+          git add desktop/src/registry_stream.rs
+          git rm .github/patches/apply-runtime-registry-transaction.py
+          git diff --cached --binary --full-index > /tmp/registry-transaction.patch
+          test -s /tmp/registry-transaction.patch
           git reset --hard HEAD
 
       - name: Publish tested fixes
@@ -117,6 +150,7 @@ jobs:
           max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
           export_bug=$(( ${max:-0} + 1 ))
           runtime_bug=$(( export_bug + 1 ))
+          registry_bug=$(( runtime_bug + 1 ))
 
           git apply --index /tmp/export-integrity.patch
           git diff --cached --check
@@ -127,6 +161,12 @@ jobs:
           git diff --cached --check
           cargo fmt --manifest-path desktop/Cargo.toml -- --check
           xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::staged_runtime_inputs_are_isolated_from_source_mutation
-          git commit -m "FIX | BUG-${runtime_bug} Snapshot staged runtime worker inputs"
+          git commit -m "FIX | BUG-${runtime_bug} Snapshot runtime inputs before cache reuse"
+
+          git apply --index /tmp/registry-transaction.patch
+          git diff --cached --check
+          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml registry::tests::failed_snapshot_replacement_restores_last_good_registry_and_receipt
+          git commit -m "FIX | BUG-${registry_bug} Preserve runtime registry during replacement failures"
 
           git push origin HEAD:main
