@@ -1,0 +1,146 @@
+name: One Shot Export Isolation Followups
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: one-shot-export-isolation-followups
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | stage export isolation followups'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Install desktop test dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+
+      - name: Restore embedded engine artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Restore embedded loader bridges
+        uses: actions/download-artifact@v7
+        with:
+          name: loader-bridges-1.21.10
+          path: dist/bundled-export-worker
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Test per-export OBJ texture assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-export-isolation-followups.py java
+          git diff --check
+          chmod +x engine/gradlew
+          (cd engine && ./gradlew --no-daemon --stacktrace clean test)
+          grep -Fq 'baseName + "_textures"' engine/src/main/java/dev/kastrick/minesport/export/MtlExporter.java
+          grep -Fq 'objTexturesAreIsolatedPerExportInsteadOfSharedGlobally' engine/src/test/java/dev/kastrick/minesport/export/ExportRegressionTest.java
+          git add engine/src/main/java/dev/kastrick/minesport/export/MtlExporter.java \
+            engine/src/test/java/dev/kastrick/minesport/export/ExportRegressionTest.java
+          git diff --cached --binary --full-index > /tmp/obj-textures.patch
+          test -s /tmp/obj-textures.patch
+          git reset --hard HEAD
+
+      - name: Test export companion collision detection
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-export-isolation-followups.py rust
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::export_bundle_collision_detection_includes_companion_files_and_assets
+          grep -Fq 'fn export_bundle_conflicts' desktop/src/app.rs
+          grep -Fq 'stem}_textures' desktop/src/app.rs
+          git add desktop/src/app.rs
+          git diff --cached --binary --full-index > /tmp/export-collisions.patch
+          test -s /tmp/export-collisions.patch
+          git reset --hard HEAD
+
+      - name: Test Windows reserved export names
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-export-name-safety.py
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::sanitizes_windows_reserved_device_export_names
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          grep -Fq 'fn windows_reserved_export_name' desktop/src/app.rs
+          git add desktop/src/app.rs
+          git rm .github/patches/apply-export-isolation-followups.py \
+            .github/patches/apply-export-name-safety.py
+          git diff --cached --binary --full-index > /tmp/export-name-safety.patch
+          test -s /tmp/export-name-safety.patch
+          git reset --hard HEAD
+
+      - name: Publish tested fixes
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          chmod +x engine/gradlew
+
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+          texture_bug=$(( ${max:-0} + 1 ))
+          collision_bug=$(( texture_bug + 1 ))
+          name_bug=$(( collision_bug + 1 ))
+
+          git apply --index /tmp/obj-textures.patch
+          git diff --cached --check
+          (cd engine && ./gradlew --no-daemon --stacktrace test --tests dev.kastrick.minesport.export.ExportRegressionTest)
+          git commit -m "FIX | BUG-${texture_bug} Isolate OBJ texture assets per export"
+
+          git apply --index /tmp/export-collisions.patch
+          git diff --cached --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::export_bundle_collision_detection_includes_companion_files_and_assets
+          git commit -m "FIX | BUG-${collision_bug} Detect export companion collisions"
+
+          git apply --index /tmp/export-name-safety.patch
+          git diff --cached --check
+          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml tests::sanitizes_windows_reserved_device_export_names
+          git commit -m "FIX | BUG-${name_bug} Sanitize Windows reserved export names"
+
+          git push origin HEAD:main
