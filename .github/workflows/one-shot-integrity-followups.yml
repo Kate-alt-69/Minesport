@@ -146,6 +146,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
           git pull --rebase origin main
+          chmod +x engine/gradlew
 
           subjects="$(git log origin/main --format=%s)"
           max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
