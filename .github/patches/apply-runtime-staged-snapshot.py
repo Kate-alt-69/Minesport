@@ -18,6 +18,31 @@ text = replace_once(
     "mutable staged runtime fingerprint",
 )
 
+# A source-tree hash cannot safely authorize reuse because the source can mutate
+# between hashing and workspace preparation. Always create the isolated snapshot
+# first; reuse is decided from the exact bytes/config that Minecraft will load.
+early_reuse = '''    let cache_root = runtime::cache_root();
+    let existing = registry::snapshot_path(&cache_root, &version, &fingerprint);
+    if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
+        progress(Progress {
+            percent: 100,
+            message: "Runtime ready".into(),
+        });
+        return Ok(CacheResult {
+            fingerprint,
+            registry_path: existing,
+            reused: true,
+        });
+    }
+
+'''
+text = replace_once(
+    text,
+    early_reuse,
+    "    let cache_root = runtime::cache_root();\n",
+    "remove unsafe pre-snapshot cache reuse",
+)
+
 old = '''    let workspace = plan.workspace;
     let cleanup = WorkspaceCleanup(workspace.clone());
     if cancel.load(Ordering::Relaxed) {
@@ -31,28 +56,24 @@ old = '''    let workspace = plan.workspace;
 new = '''    let workspace = plan.workspace;
     let cleanup = WorkspaceCleanup(workspace.clone());
 
-    // The preflight fingerprint is useful for an early cache hit, but files can
-    // change while the isolated workspace is being prepared. Re-key against the
-    // exact staged snapshot before any JDK/launch work so the cache identity
-    // always describes what Minecraft will actually load.
+    // Re-key against the exact isolated snapshot before any JDK/receiver/launch
+    // work. This is the first point at which cache reuse is safe: later source
+    // mutations cannot change the worker's copied mod/config inputs.
     let staged_mods = workspace.join("run").join("mods");
     let staged_raw_fingerprint = runtime_worker_inputs_fingerprint(family, &staged_mods)?;
-    let staged_fingerprint = scoped_cache_fingerprint(family, &staged_raw_fingerprint, &scope);
-    if staged_fingerprint != fingerprint {
-        fingerprint = staged_fingerprint;
-        if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
-            progress(Progress {
-                percent: 100,
-                message: "Runtime ready".into(),
-            });
-            let registry_path = registry::snapshot_path(&cache_root, &version, &fingerprint);
-            drop(cleanup);
-            return Ok(CacheResult {
-                fingerprint,
-                registry_path,
-                reused: true,
-            });
-        }
+    fingerprint = scoped_cache_fingerprint(family, &staged_raw_fingerprint, &scope);
+    if !force && registry::snapshot_exists(&cache_root, &version, &fingerprint) {
+        progress(Progress {
+            percent: 100,
+            message: "Runtime ready".into(),
+        });
+        let registry_path = registry::snapshot_path(&cache_root, &version, &fingerprint);
+        drop(cleanup);
+        return Ok(CacheResult {
+            fingerprint,
+            registry_path,
+            reused: true,
+        });
     }
     if cancel.load(Ordering::Relaxed) {
         bail!("runtime cache cancelled");
