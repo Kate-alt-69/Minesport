@@ -1,0 +1,140 @@
+name: One Shot Scoped Runtime Registry Retry
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: one-shot-scoped-runtime-registry-retry
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | stage scoped runtime registry retry'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Install desktop test dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig1-dev libxkbcommon-dev libwayland-dev libudev-dev \
+            libgl1-mesa-dev libx11-dev libxcb1-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxinerama-dev xvfb
+
+      - name: Restore embedded engine artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Restore embedded 1.21.10 loader bridges
+        uses: actions/download-artifact@v7
+        with:
+          name: loader-bridges-1.21.10
+          path: dist/bundled-export-worker
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Apply namespace-scoped runtime registry patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-runtime-scope.py
+          python - <<'PY'
+          from pathlib import Path
+
+          worker = Path('desktop/src/runtime_worker.rs')
+          text = worker.read_text(encoding='utf-8')
+          duplicate = 'use sha2::{Digest, Sha256};\n'
+          if text.count(duplicate) != 2:
+              raise SystemExit(f'sha2 import count={text.count(duplicate)}, expected 2 after compatibility patch')
+          text = text.replace(duplicate, '', 1)
+          worker.write_text(text, encoding='utf-8')
+
+          app = Path('desktop/src/app.rs')
+          text = app.read_text(encoding='utf-8')
+          old = '    let scope_for_log = scope.clone();\n    let started = cache.start_for_loader_scope('
+          new = '    let scope_description = scope.description();\n    let started = cache.start_for_loader_scope('
+          if text.count(old) != 1:
+              raise SystemExit(f'ownership declaration anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '            let event_mods_path = job_mods_path.clone();\n            let _ = ui_weak.upgrade_in_event_loop(move |ui| {'
+          new = '            let event_mods_path = job_mods_path.clone();\n            let scope_description = scope_description.clone();\n            let _ = ui_weak.upgrade_in_event_loop(move |ui| {'
+          if text.count(old) != 1:
+              raise SystemExit(f'completion clone anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = 'scope_for_log.description()'
+          if text.count(old) != 1:
+              raise SystemExit(f'completion description anchor count={text.count(old)}')
+          text = text.replace(old, 'scope_description', 1)
+          app.write_text(text, encoding='utf-8')
+          PY
+
+          grep -Fq 'let raw_fingerprint = runtime_worker_inputs_fingerprint(family, mods_path)?;' desktop/src/runtime_worker.rs
+          grep -Fq 'fn runtime_worker_mods_fingerprint' desktop/src/runtime_worker.rs
+          grep -Fq 'MINESPORT_EXPORT_WORKER_NS' desktop/src/runtime_worker.rs
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+
+      - name: Test scoped runtime registry
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+      - name: Publish tested fix
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git stash push -m scoped-runtime-registry-tested
+          git pull --rebase origin main
+          git stash pop
+
+          grep -Fq 'let raw_fingerprint = runtime_worker_inputs_fingerprint(family, mods_path)?;' desktop/src/runtime_worker.rs
+          grep -Fq 'fn runtime_worker_mods_fingerprint' desktop/src/runtime_worker.rs
+          grep -Fq 'MINESPORT_EXPORT_WORKER_NS' desktop/src/runtime_worker.rs
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml --all-targets
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+          rm -f .github/workflows/one-shot-scoped-runtime-registry-retry.yml
+          rm -f .github/patches/apply-runtime-scope.py
+
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+          next=$(( ${max:-0} + 1 ))
+
+          git add desktop/src/runtime_worker.rs desktop/src/runtime_cache.rs desktop/src/app.rs \
+            .github/workflows/one-shot-scoped-runtime-registry-retry.yml \
+            .github/patches/apply-runtime-scope.py
+          git commit -m "FIX | BUG-${next} Scope runtime registry to selected namespaces"
+          git push origin HEAD:main
