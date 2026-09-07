@@ -59,8 +59,8 @@ jobs:
           grep -Fq '.creation_flags(CREATE_NO_WINDOW)' desktop/src/engine_update.rs
           grep -Fq '.stack_size(ENGINE_UPDATE_THREAD_STACK)' desktop/src/engine_update.rs
           grep -Fq 'if: always() && !cancelled()' .github/workflows/build.yml
-          grep -Fq "- '.github/patches/**'" .github/workflows/build.yml
-          grep -Fq "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
+          grep -Fq -- "- '.github/patches/**'" .github/workflows/build.yml
+          grep -Fq -- "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
       - name: Publish rebased fixes
         shell: bash
         env:
@@ -104,5 +104,5 @@ jobs:
           cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::updater_helper_is_isolated_and_has_network_stack_headroom
           cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
           grep -Fq 'if: always() && !cancelled()' .github/workflows/build.yml
-          grep -Fq "- '.github/patches/**'" .github/workflows/build.yml
+          grep -Fq -- "- '.github/patches/**'" .github/workflows/build.yml
           git push origin HEAD:main
