@@ -1,14 +1,14 @@
 use crate::{
-    diagnostics,
+    diagnostics, registry,
     runtime_worker::{self, CacheResult, Progress},
 };
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use std::{
-    panic::{AssertUnwindSafe, catch_unwind},
+    panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -251,7 +251,7 @@ impl RuntimeCacheManager {
             || !state.loader.eq_ignore_ascii_case(&loader)
             || !same_path(&state.mods_path, mods_path)
             || state.ready_path.as_os_str().is_empty()
-            || !state.ready_path.is_file()
+            || !registry::snapshot_path_is_ready(&state.ready_path, version, &state.fingerprint)
         {
             return None;
         }
@@ -427,8 +427,9 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let registry = root.join("registry.data");
-        std::fs::write(&registry, b"ready").unwrap();
+        let registry =
+            crate::registry::write_empty_snapshot_for_test(&root, "1.21.10", "exact-fingerprint")
+                .unwrap();
         let manager = RuntimeCacheManager::default();
         {
             let mut state = manager.state.lock().unwrap();
@@ -440,14 +441,23 @@ mod tests {
         }
         assert_eq!(
             manager.ready_path_for_loader("1.21.10", "Forge", Path::new("mods")),
-            Some(registry)
+            Some(registry.clone())
         );
-        assert!(
-            manager
-                .ready_path_for_loader("1.21.10", "fabric", Path::new("mods"))
-                .is_none()
-        );
+        assert!(manager
+            .ready_path_for_loader("1.21.10", "fabric", Path::new("mods"))
+            .is_none());
         assert!(manager.ready_path("1.21.10", Path::new("mods")).is_none());
+
+        let original_len = std::fs::metadata(&registry).unwrap().len();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&registry)
+            .unwrap()
+            .set_len(original_len - 1)
+            .unwrap();
+        assert!(manager
+            .ready_path_for_loader("1.21.10", "Forge", Path::new("mods"))
+            .is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 
