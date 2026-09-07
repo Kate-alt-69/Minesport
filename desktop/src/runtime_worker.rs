@@ -29,11 +29,19 @@ const GRADLE_WRAPPER_JAR: &[u8] =
     include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.jar");
 const GRADLE_WRAPPER_PROPERTIES: &[u8] =
     include_bytes!("../../minesport-bridge-fabric/gradle/wrapper/gradle-wrapper.properties");
+const QUILT_GRADLEW_SH: &[u8] = include_bytes!("../../minesport-bridge-quilt/gradlew");
+const QUILT_GRADLEW_BAT: &[u8] = include_bytes!("../../minesport-bridge-quilt/gradlew.bat");
+const QUILT_GRADLE_WRAPPER_JAR: &[u8] =
+    include_bytes!("../../minesport-bridge-quilt/gradle/wrapper/gradle-wrapper.jar");
+const QUILT_GRADLE_WRAPPER_PROPERTIES: &[u8] =
+    include_bytes!("../../minesport-bridge-quilt/gradle/wrapper/gradle-wrapper.properties");
 
 const MC_1_21_10: &str = "1.21.10";
 const LOADER_1_21_10: &str = "0.18.5";
 const FABRIC_API_1_21_10: &str = "0.138.4+1.21.10";
 const LOOM_1_21_10: &str = "1.11.7";
+const QUILT_LOADER_1_21_10: &str = "0.30.1-beta.3";
+const QUILT_LOOM_1_21_10: &str = "1.11.1";
 const FABRIC_MOD_JSON_LIMIT: u64 = 1 << 20;
 const DIRECT_LAUNCH_PROFILE_SCHEMA: u32 = 1;
 const DIRECT_LAUNCH_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -285,12 +293,13 @@ where
         bail!("runtime cache cancelled");
     }
 
-    let direct_launch = if family == BridgeFamily::Fabric && version == MC_1_21_10 {
+    let direct_launch = if direct_launch_supported(family, &version) {
         progress(Progress {
             percent: 54,
             message: "Preparing Minecraft launch…".into(),
         });
         Some(ensure_direct_launch_profile(
+            family,
             &version,
             &java_home,
             cancel.as_ref(),
@@ -361,7 +370,7 @@ where
     });
     let log_path = workspace.join("runtime-worker.log");
     let app_cds_archive = direct_launch.as_ref().and_then(|manifest| {
-        prepare_direct_launch_app_cds_archive(&version, &fingerprint, manifest)
+        prepare_direct_launch_app_cds_archive(family, &version, &fingerprint, manifest)
     });
     let mut child = if let Some(manifest) = direct_launch.as_ref() {
         start_direct_worker(
@@ -559,6 +568,10 @@ fn capture_progress_percent(blocks: usize, total_blocks: usize) -> i32 {
     (62.0 + fraction * 32.0).round() as i32
 }
 
+fn direct_launch_supported(family: BridgeFamily, version: &str) -> bool {
+    version == MC_1_21_10 && matches!(family, BridgeFamily::Fabric | BridgeFamily::Quilt)
+}
+
 fn create_workspace<F>(
     family: BridgeFamily,
     version: &str,
@@ -582,9 +595,9 @@ where
             std::process::id()
         ));
 
-    let fast_bundled_fabric = family == BridgeFamily::Fabric && version == MC_1_21_10;
-    let java = if fast_bundled_fabric {
-        create_fast_bundled_workspace(&workspace, version)?;
+    let fast_bundled = direct_launch_supported(family, version);
+    let java = if fast_bundled {
+        create_fast_bundled_workspace(family, &workspace, version)?;
         21
     } else {
         let prepared = bridge_family::prepare_source(family, version, &workspace, &mut progress)?;
@@ -602,11 +615,26 @@ where
     let run_mods = run_dir.join("mods");
     fs::create_dir_all(&run_mods)?;
 
-    if fast_bundled_fabric {
-        let bridge = runtime::materialize_bundled_bridge()?;
-        let target = run_mods.join("minesport_export_worker-fabric-1.21.10.jar");
-        link_or_copy(&bridge, &target)
-            .with_context(|| format!("stage embedded Bridge {}", bridge.display()))?;
+    if fast_bundled {
+        let (bridge, target_name) = match family {
+            BridgeFamily::Fabric => (
+                runtime::materialize_bundled_fabric_bridge()?,
+                "minesport_export_worker-fabric-1.21.10.jar",
+            ),
+            BridgeFamily::Quilt => (
+                runtime::materialize_bundled_quilt_bridge()?,
+                "minesport_export_worker-quilt-1.21.10.jar",
+            ),
+            _ => bail!("{} has no bundled direct-launch worker", family.label()),
+        };
+        let target = run_mods.join(target_name);
+        link_or_copy(&bridge, &target).with_context(|| {
+            format!(
+                "stage embedded {} Bridge {}",
+                family.label(),
+                bridge.display()
+            )
+        })?;
     }
 
     let count = copy_worker_mods(family, mods_path, &run_mods)?;
@@ -625,25 +653,45 @@ where
     Ok(WorkspacePlan { workspace, java })
 }
 
-fn create_fast_bundled_workspace(workspace: &Path, version: &str) -> Result<()> {
+fn create_fast_bundled_workspace(
+    family: BridgeFamily,
+    workspace: &Path,
+    version: &str,
+) -> Result<()> {
+    let (gradlew_sh, gradlew_bat, wrapper_jar, wrapper_properties, settings, build_gradle) =
+        match family {
+            BridgeFamily::Fabric => (
+                GRADLEW_SH,
+                GRADLEW_BAT,
+                GRADLE_WRAPPER_JAR,
+                GRADLE_WRAPPER_PROPERTIES,
+                SETTINGS_GRADLE,
+                BUILD_GRADLE,
+            ),
+            BridgeFamily::Quilt => (
+                QUILT_GRADLEW_SH,
+                QUILT_GRADLEW_BAT,
+                QUILT_GRADLE_WRAPPER_JAR,
+                QUILT_GRADLE_WRAPPER_PROPERTIES,
+                QUILT_SETTINGS_GRADLE,
+                QUILT_BUILD_GRADLE,
+            ),
+            _ => bail!("{} has no bundled direct-launch workspace", family.label()),
+        };
+
     let wrapper_dir = workspace.join("gradle").join("wrapper");
     fs::create_dir_all(&wrapper_dir)?;
-    write_file(&workspace.join("gradlew"), GRADLEW_SH)?;
-    write_file(&workspace.join("gradlew.bat"), GRADLEW_BAT)?;
-    write_file(&wrapper_dir.join("gradle-wrapper.jar"), GRADLE_WRAPPER_JAR)?;
+    write_file(&workspace.join("gradlew"), gradlew_sh)?;
+    write_file(&workspace.join("gradlew.bat"), gradlew_bat)?;
+    write_file(&wrapper_dir.join("gradle-wrapper.jar"), wrapper_jar)?;
     write_file(
         &wrapper_dir.join("gradle-wrapper.properties"),
-        GRADLE_WRAPPER_PROPERTIES,
+        wrapper_properties,
     )?;
-    write_file(
-        &workspace.join("settings.gradle"),
-        SETTINGS_GRADLE.as_bytes(),
-    )?;
-    write_file(&workspace.join("build.gradle"), BUILD_GRADLE.as_bytes())?;
-    write_file(
-        &workspace.join("gradle.properties"),
-        gradle_properties(version).as_bytes(),
-    )?;
+    write_file(&workspace.join("settings.gradle"), settings.as_bytes())?;
+    write_file(&workspace.join("build.gradle"), build_gradle.as_bytes())?;
+    let properties = gradle_properties(family, version)?;
+    write_file(&workspace.join("gradle.properties"), properties.as_bytes())?;
 
     #[cfg(unix)]
     {
@@ -653,21 +701,34 @@ fn create_fast_bundled_workspace(workspace: &Path, version: &str) -> Result<()> 
     Ok(())
 }
 
-fn direct_launch_profile_dir(version: &str) -> PathBuf {
-    runtime::cache_root()
-        .join("bridge-build")
-        .join("launch-profiles")
-        .join(format!(
+fn direct_launch_profile_dir(family: BridgeFamily, version: &str) -> Result<PathBuf> {
+    let identity = match family {
+        BridgeFamily::Fabric => format!(
             "fabric-{}-loader-{}-api-{}-loom-{}-v{}",
             safe(version),
             safe(LOADER_1_21_10),
             safe(FABRIC_API_1_21_10),
             safe(LOOM_1_21_10),
             DIRECT_LAUNCH_PROFILE_SCHEMA
-        ))
+        ),
+        BridgeFamily::Quilt => format!(
+            "quilt-{}-loader-{}-api-{}-loom-{}-v{}",
+            safe(version),
+            safe(QUILT_LOADER_1_21_10),
+            safe(FABRIC_API_1_21_10),
+            safe(QUILT_LOOM_1_21_10),
+            DIRECT_LAUNCH_PROFILE_SCHEMA
+        ),
+        _ => bail!("{} does not support cached direct launch", family.label()),
+    };
+    Ok(runtime::cache_root()
+        .join("bridge-build")
+        .join("launch-profiles")
+        .join(identity))
 }
 
 fn ensure_direct_launch_profile<F>(
+    family: BridgeFamily,
     version: &str,
     java_home: &Path,
     cancel: &AtomicBool,
@@ -676,7 +737,7 @@ fn ensure_direct_launch_profile<F>(
 where
     F: FnMut(Duration),
 {
-    let profile = direct_launch_profile_dir(version);
+    let profile = direct_launch_profile_dir(family, version)?;
     let manifest_path = profile.join("minesport-launch.json");
     if let Ok(manifest) = load_direct_launch_manifest(&manifest_path) {
         return Ok(manifest);
@@ -685,7 +746,7 @@ where
         bail!("runtime cache cancelled while preparing Minecraft launch");
     }
 
-    create_fast_bundled_workspace(&profile, version)?;
+    create_fast_bundled_workspace(family, &profile, version)?;
     let log_path = profile.join("resolve-runtime.log");
     let stdout =
         File::create(&log_path).with_context(|| format!("create {}", log_path.display()))?;
@@ -736,7 +797,8 @@ where
 
     let mut child = command.spawn().with_context(|| {
         format!(
-            "start cached Fabric runtime launch-profile resolver with {}",
+            "start cached {} runtime launch-profile resolver with {}",
+            family.label(),
             java_home.display()
         )
     })?;
@@ -753,7 +815,9 @@ where
             Ok(None) => {}
             Err(error) => {
                 stop_child(&mut child);
-                return Err(error).context("poll Fabric runtime launch-profile resolver");
+                return Err(error).with_context(|| {
+                    format!("poll {} runtime launch-profile resolver", family.label())
+                });
             }
         }
 
@@ -975,13 +1039,18 @@ fn app_cds_classpath_entry_compatible(path: &Path) -> bool {
         .is_some_and(|mut entries| entries.next().is_none())
 }
 
-fn direct_launch_app_cds_archive_path(version: &str, fingerprint: &str) -> PathBuf {
-    direct_launch_profile_dir(version)
+fn direct_launch_app_cds_archive_path(
+    family: BridgeFamily,
+    version: &str,
+    fingerprint: &str,
+) -> Result<PathBuf> {
+    Ok(direct_launch_profile_dir(family, version)?
         .join("cds")
-        .join(format!("{}.jsa", safe(fingerprint)))
+        .join(format!("{}.jsa", safe(fingerprint))))
 }
 
 fn prepare_direct_launch_app_cds_archive(
+    family: BridgeFamily,
     version: &str,
     fingerprint: &str,
     manifest: &DirectLaunchManifest,
@@ -989,7 +1058,7 @@ fn prepare_direct_launch_app_cds_archive(
     if !direct_launch_app_cds_eligible(manifest) {
         return None;
     }
-    let archive = direct_launch_app_cds_archive_path(version, fingerprint);
+    let archive = direct_launch_app_cds_archive_path(family, version, fingerprint).ok()?;
     fs::create_dir_all(archive.parent()?).ok()?;
     Some(archive)
 }
@@ -1521,10 +1590,77 @@ tasks.register('minesportResolveRuntime') {
 }
 "#;
 
-fn gradle_properties(version: &str) -> String {
-    format!(
-        "minecraft_version={version}\nloader_version={LOADER_1_21_10}\nfabric_version={FABRIC_API_1_21_10}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=1\norg.gradle.vfs.watch=false\n"
-    )
+const QUILT_SETTINGS_GRADLE: &str = r#"pluginManagement {
+    repositories {
+        maven { url 'https://maven.quiltmc.org/repository/release' }
+        maven { url 'https://maven.fabricmc.net/' }
+        gradlePluginPortal()
+    }
+}
+rootProject.name = 'minesport-runtime-worker-quilt'
+"#;
+
+const QUILT_BUILD_GRADLE: &str = r#"import groovy.json.JsonOutput
+
+plugins {
+    id 'org.quiltmc.loom' version '1.11.1'
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+repositories {
+    maven { url 'https://maven.quiltmc.org/repository/release' }
+    maven { url 'https://maven.fabricmc.net/' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "org.quiltmc:quilt-loader:${project.quilt_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+tasks.register('minesportResolveRuntime') {
+    dependsOn {
+        def runTask = tasks.named('runClient').get()
+        runTask.taskDependencies.getDependencies(runTask)
+    }
+    doLast {
+        def runTask = tasks.named('runClient').get()
+        def inherited = System.getenv()
+        def environmentOverrides = runTask.environment
+            .findAll { key, value -> inherited[key] != value?.toString() }
+            .collectEntries { key, value -> [(key.toString()): value?.toString()] }
+        def payload = [
+            schema: 1,
+            mainClass: runTask.mainClass.get(),
+            classpath: runTask.classpath.files.collect { it.absolutePath },
+            jvmArgs: runTask.allJvmArgs.collect { it.toString() },
+            args: (runTask.args ?: []).collect { it.toString() },
+            workingDir: runTask.workingDir.absolutePath,
+            environmentOverrides: environmentOverrides,
+        ]
+        file('minesport-launch.json').text = JsonOutput.toJson(payload)
+    }
+}
+"#;
+
+fn gradle_properties(family: BridgeFamily, version: &str) -> Result<String> {
+    let properties = match family {
+        BridgeFamily::Fabric => format!(
+            "minecraft_version={version}\nloader_version={LOADER_1_21_10}\nfabric_version={FABRIC_API_1_21_10}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=1\norg.gradle.vfs.watch=false\n"
+        ),
+        BridgeFamily::Quilt => format!(
+            "minecraft_version={version}\nquilt_loader_version={QUILT_LOADER_1_21_10}\nfabric_version={FABRIC_API_1_21_10}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=1\norg.gradle.vfs.watch=false\n"
+        ),
+        _ => bail!("{} has no direct-launch Gradle properties", family.label()),
+    };
+    Ok(properties)
 }
 
 #[cfg(windows)]
@@ -1548,21 +1684,49 @@ mod tests {
         assert_eq!(LOADER_1_21_10, "0.18.5");
         assert_eq!(FABRIC_API_1_21_10, "0.138.4+1.21.10");
         assert_eq!(LOOM_1_21_10, "1.11.7");
+        assert_eq!(QUILT_LOADER_1_21_10, "0.30.1-beta.3");
+        assert_eq!(QUILT_LOOM_1_21_10, "1.11.1");
     }
 
     #[test]
     fn workspace_uses_embedded_gradle_wrapper() {
         assert!(!GRADLEW_BAT.is_empty());
         assert!(!GRADLE_WRAPPER_JAR.is_empty());
+        assert!(!QUILT_GRADLEW_BAT.is_empty());
+        assert!(!QUILT_GRADLE_WRAPPER_JAR.is_empty());
     }
 
     #[test]
     fn runtime_gradle_properties_do_not_reserve_a_huge_build_heap() {
-        let properties = gradle_properties(MC_1_21_10);
+        let properties = gradle_properties(BridgeFamily::Fabric, MC_1_21_10).unwrap();
         assert!(!properties.contains("org.gradle.jvmargs=-Xmx1536m"));
         assert!(properties.contains("org.gradle.daemon=false"));
         assert!(properties.contains("org.gradle.workers.max=1"));
         assert!(properties.contains("org.gradle.vfs.watch=false"));
+
+        let quilt = gradle_properties(BridgeFamily::Quilt, MC_1_21_10).unwrap();
+        assert!(quilt.contains("quilt_loader_version=0.30.1-beta.3"));
+        assert!(quilt.contains("fabric_version=0.138.4+1.21.10"));
+    }
+
+    #[test]
+    fn direct_launch_is_limited_to_matching_bundled_workers() {
+        assert!(direct_launch_supported(BridgeFamily::Fabric, MC_1_21_10));
+        assert!(direct_launch_supported(BridgeFamily::Quilt, MC_1_21_10));
+        assert!(!direct_launch_supported(BridgeFamily::Forge, MC_1_21_10));
+        assert!(!direct_launch_supported(BridgeFamily::NeoForge, MC_1_21_10));
+        assert!(!direct_launch_supported(BridgeFamily::Quilt, "1.21.9"));
+    }
+
+    #[test]
+    fn quilt_and_fabric_direct_profiles_cannot_alias() {
+        let fabric = direct_launch_profile_dir(BridgeFamily::Fabric, MC_1_21_10).unwrap();
+        let quilt = direct_launch_profile_dir(BridgeFamily::Quilt, MC_1_21_10).unwrap();
+        assert_ne!(fabric, quilt);
+        assert!(fabric.to_string_lossy().contains("fabric-1.21.10"));
+        assert!(quilt.to_string_lossy().contains("quilt-1.21.10"));
+        assert!(QUILT_BUILD_GRADLE.contains("org.quiltmc.loom"));
+        assert!(QUILT_BUILD_GRADLE.contains("minesportResolveRuntime"));
     }
 
     #[test]
