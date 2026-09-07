@@ -1,5 +1,6 @@
 name: One Shot Integrity Followups
 # One-shot gate for validated export/runtime/registry integrity fixes.
+# staged: export bundle + runtime snapshot + registry transaction
 
 on:
   push:
