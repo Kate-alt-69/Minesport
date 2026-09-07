@@ -1,0 +1,131 @@
+name: One Shot Integrity Followups
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: one-shot-integrity-followups
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | stage integrity followups'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Install desktop test dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+
+      - name: Restore embedded loader bridges
+        uses: actions/download-artifact@v7
+        with:
+          name: loader-bridges-1.21.10
+          path: dist/bundled-export-worker
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Apply and test atomic export bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-atomic-export-bundle-v2.py
+          git diff --check
+          chmod +x engine/gradlew
+          (cd engine && ./gradlew --no-daemon --stacktrace clean build)
+
+          test -f engine/src/main/java/dev/kastrick/minesport/export/AtomicExportBundle.java
+          test -f engine/src/test/java/dev/kastrick/minesport/export/AtomicExportBundleTest.java
+          grep -Fq 'exportBundle.publish();' engine/src/main/java/dev/kastrick/minesport/IpcMode.java
+          grep -Fq 'writer.checkError()' engine/src/main/java/dev/kastrick/minesport/export/ObjExporter.java
+          grep -Fq 'writer.checkError()' engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java
+          grep -Fq 'w.checkError()' engine/src/main/java/dev/kastrick/minesport/export/MtlExporter.java
+          grep -Fq 'cleanupTreeBestEffort' engine/src/main/java/dev/kastrick/minesport/export/AtomicExportBundle.java
+
+          git add \
+            engine/src/main/java/dev/kastrick/minesport/IpcMode.java \
+            engine/src/main/java/dev/kastrick/minesport/export/AtomicExportBundle.java \
+            engine/src/main/java/dev/kastrick/minesport/export/ObjExporter.java \
+            engine/src/main/java/dev/kastrick/minesport/export/MtlExporter.java \
+            engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java \
+            engine/src/test/java/dev/kastrick/minesport/export/AtomicExportBundleTest.java
+          git rm .github/patches/apply-atomic-export-bundle.py .github/patches/apply-atomic-export-bundle-v2.py
+          git diff --cached --binary --full-index > /tmp/export-integrity.patch
+          test -s /tmp/export-integrity.patch
+          git reset --hard HEAD
+
+      - name: Apply and test staged runtime snapshot
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-runtime-staged-snapshot.py
+          cargo fmt --manifest-path desktop/Cargo.toml
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+
+          grep -Fq 'let staged_raw_fingerprint = runtime_worker_inputs_fingerprint' desktop/src/runtime_worker.rs
+          grep -Fq 'copy_file_snapshot(&path, &destination)' desktop/src/runtime_worker.rs
+          grep -Fq 'staged_runtime_inputs_are_isolated_from_source_mutation' desktop/src/runtime_worker.rs
+
+          git add desktop/src/runtime_worker.rs
+          git rm .github/patches/apply-runtime-staged-snapshot.py
+          git diff --cached --binary --full-index > /tmp/runtime-snapshot.patch
+          test -s /tmp/runtime-snapshot.patch
+          git reset --hard HEAD
+
+      - name: Publish tested fixes
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git pull --rebase origin main
+
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+          export_bug=$(( ${max:-0} + 1 ))
+          runtime_bug=$(( export_bug + 1 ))
+
+          git apply --index /tmp/export-integrity.patch
+          git diff --cached --check
+          (cd engine && ./gradlew --no-daemon --stacktrace test)
+          git commit -m "FIX | BUG-${export_bug} Publish OBJ and glTF export bundles atomically"
+
+          git apply --index /tmp/runtime-snapshot.patch
+          git diff --cached --check
+          cargo fmt --manifest-path desktop/Cargo.toml -- --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::staged_runtime_inputs_are_isolated_from_source_mutation
+          git commit -m "FIX | BUG-${runtime_bug} Snapshot staged runtime worker inputs"
+
+          git push origin HEAD:main
