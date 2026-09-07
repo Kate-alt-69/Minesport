@@ -1,0 +1,1 @@
+One-shot integrity publication trigger after publisher scope hardening.
