@@ -82,6 +82,12 @@ struct AppState {
 
 type SharedState = Arc<Mutex<AppState>>;
 
+struct WorkbenchShell {
+    ui: MainWindow,
+    state: SharedState,
+    cache: RuntimeCacheManager,
+}
+
 struct DocPage {
     title: &'static str,
     body: &'static str,
@@ -140,14 +146,26 @@ const DOC_PAGES: &[DocPage] = &[
     },
 ];
 
-pub fn run() -> Result<()> {
-    if handle_cli()? {
-        return Ok(());
-    }
+fn prepare_workbench_shell() -> Result<WorkbenchShell> {
+    let startup = diagnostics::Logger::new("DESKTOP").child("STARTUP");
 
-    let ui = MainWindow::new().context("create Minesport Slint window")?;
-    ui.set_doc_total(DOC_PAGES.len() as i32);
+    let window_operation = startup.operation("DesktopSlintWindowInitialize");
+    let ui = match MainWindow::new().context("create Minesport Slint window") {
+        Ok(ui) => {
+            ui.set_doc_total(DOC_PAGES.len() as i32);
+            window_operation.success("Slint Workbench window constructed", &[]);
+            ui
+        }
+        Err(error) => {
+            window_operation.failure(
+                "Slint Workbench window construction failed",
+                &[("error", format!("{error:#}"))],
+            );
+            return Err(error);
+        }
+    };
 
+    let settings_operation = startup.operation("DesktopSettingsInitialize");
     let saved = settings::load();
     apply_saved_settings(&ui, &saved);
     let state: SharedState = Arc::new(Mutex::new(AppState {
@@ -157,7 +175,27 @@ pub fn run() -> Result<()> {
         ..AppState::default()
     }));
     let cache = RuntimeCacheManager::default();
+    settings_operation.success(
+        "Workbench settings and shared state initialized",
+        &[
+            ("resource_packs", saved.resource_packs.len().to_string()),
+            ("data_packs", saved.data_packs.len().to_string()),
+        ],
+    );
+
+    let assets_operation = startup.operation("DesktopAssetSummaryInitialize");
     refresh_asset_summaries(&ui, &state);
+    assets_operation.success("Workbench asset summaries initialized", &[]);
+
+    Ok(WorkbenchShell { ui, state, cache })
+}
+
+pub fn run() -> Result<()> {
+    if handle_cli()? {
+        return Ok(());
+    }
+
+    let WorkbenchShell { ui, state, cache } = prepare_workbench_shell()?;
 
     let (engine, events) = JavaEngine::start()?;
     pump_engine_events(
@@ -268,6 +306,11 @@ fn handle_cli() -> Result<bool> {
         "--engine-worker" => {
             let jar = runtime::materialize_engine()?;
             crate::ipc::run_engine_worker(&jar)?;
+            Ok(true)
+        }
+        "--ui-construction-check" => {
+            let _shell = prepare_workbench_shell()?;
+            println!("Minesport Workbench construction check passed.");
             Ok(true)
         }
         "--install-blender-translator" => {

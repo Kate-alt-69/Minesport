@@ -5,6 +5,7 @@ use std::{
     env, fs,
     io::ErrorKind,
     path::{Component, Path, PathBuf},
+    process::Command,
     thread,
     time::Duration,
 };
@@ -632,6 +633,77 @@ fn write_placeholder_runtime_assets(out: &Path, label: &[u8]) {
     }
 }
 
+fn normalize_build_revision(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    if value.is_empty()
+        || value.len() > 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn git_metadata_path(root: &Path, name: &str) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-path", name])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8(output.stdout).ok()?;
+    let value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(value);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
+}
+
+fn configure_build_revision(root: &Path) {
+    println!("cargo:rerun-if-env-changed=MINESPORT_BUILD_REVISION");
+
+    // Cargo already reruns this script for its declared runtime/UI inputs. Track
+    // Git HEAD as well so a new source commit cannot keep a stale embedded
+    // revision merely because the build script itself did not change.
+    if let Some(head) = git_metadata_path(root, "HEAD") {
+        println!("cargo:rerun-if-changed={}", head.display());
+        if let Ok(head_text) = fs::read_to_string(&head) {
+            if let Some(reference) = head_text.trim().strip_prefix("ref: ") {
+                if let Some(reference_path) = git_metadata_path(root, reference) {
+                    println!("cargo:rerun-if-changed={}", reference_path.display());
+                }
+            }
+        }
+    }
+
+    let revision = env::var("MINESPORT_BUILD_REVISION")
+        .ok()
+        .and_then(|value| normalize_build_revision(&value))
+        .or_else(|| {
+            let output = Command::new("git")
+                .args(["rev-parse", "--short=12", "HEAD"])
+                .current_dir(root)
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            let raw = String::from_utf8(output.stdout).ok()?;
+            normalize_build_revision(&raw)
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=MINESPORT_BUILD_REVISION={revision}");
+}
+
 fn main() {
     let manifest = manifest_dir();
     let root = repo_root();
@@ -644,6 +716,14 @@ fn main() {
         .join("blender")
         .join("minesport_translator");
 
+    configure_build_revision(&root);
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // The generated Slint Workbench constructor is deep enough that the
+        // default MSVC 1 MiB main-thread reserve leaves very little headroom on
+        // real Windows systems. Reserve 8 MiB of virtual address space; pages
+        // are still committed on demand, so this is not an 8 MiB RAM tax.
+        println!("cargo:rustc-link-arg-bin=minesport=/STACK:8388608");
+    }
     println!("cargo:rerun-if-changed={}", ui.display());
     println!("cargo:rerun-if-env-changed=MINESPORT_ENGINE_JAR");
     println!("cargo:rerun-if-env-changed=MINESPORT_EXPORT_WORKER_JAR");

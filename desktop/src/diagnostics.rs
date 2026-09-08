@@ -320,6 +320,9 @@ pub fn initialize() -> Result<PathBuf> {
     let _ = OPERATIONS_FILE.set(Mutex::new(operations_file));
     let _ = display_log();
 
+    let executable = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|error| format!("<unavailable: {error}>"));
     Logger::new("DESKTOP").info(
         "DesktopSessionStart",
         format!(
@@ -328,6 +331,11 @@ pub fn initialize() -> Result<PathBuf> {
         ),
         &[
             ("pid", std::process::id().to_string()),
+            (
+                "build_revision",
+                env!("MINESPORT_BUILD_REVISION").to_string(),
+            ),
+            ("executable", executable),
             ("operations_log", operations.display().to_string()),
         ],
     );

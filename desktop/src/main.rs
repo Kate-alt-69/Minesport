@@ -87,6 +87,7 @@ fn main() -> anyhow::Result<()> {
     diagnostics::append(&format!("Persistent diagnostics log: {}", log.display()));
     install_panic_hook();
 
+    let desktop_gui_mode = std::env::args_os().len() == 1;
     let engine_worker_mode = std::env::args().nth(1).as_deref() == Some("--engine-worker");
 
     // The self-worker owns cached Java/toolchain files for its complete
@@ -119,7 +120,7 @@ fn main() -> anyhow::Result<()> {
     // staged in background and applied by a later GUI launch before it starts
     // any engine process.
     #[cfg(windows)]
-    if !engine_worker_mode {
+    if desktop_gui_mode {
         if let Err(error) = engine_update::apply_staged_update() {
             diagnostics::Logger::new("ENGINE").child("UPDATE").warn(
                 "EngineStagedUpdateUnavailable",
