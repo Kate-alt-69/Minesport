@@ -1,0 +1,56 @@
+name: One Shot CI Staging Ignore
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-ci-staging-ignore
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | stage CI staging-ignore optimization'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate staging-only CI filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-ci-staging-ignore.py
+          git diff --check
+          grep -Fq "- '.github/patches/**'" .github/workflows/build.yml
+          grep -Fq "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
+
+      - name: Publish CI optimization
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard HEAD
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+
+          python .github/patches/apply-ci-staging-ignore.py
+          git diff --check
+          grep -Fq "- '.github/patches/**'" .github/workflows/build.yml
+          grep -Fq "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
+
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1 || true)"
+          bug=$(( ${max:-0} + 1 ))
+
+          git add .github/workflows/build.yml
+          git rm .github/patches/apply-ci-staging-ignore.py .github/workflows/one-shot-ci-staging-ignore.yml
+          git diff --cached --check
+          git commit -m "FIX | BUG-${bug} Ignore one-shot staging in compile CI"
+          git pull --rebase origin main
+          git push origin HEAD:main
