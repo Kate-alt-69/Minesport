@@ -39,14 +39,13 @@ jobs:
           path: dist/bundled-export-worker
           run-id: 33797953559
           github-token: ${{ github.token }}
-      - name: Validate reproduced Windows and CI fixes
+      - name: Validate reproduced Windows runtime fixes
         shell: bash
         env:
           MINESPORT_FAST_CHECK: '1'
         run: |
           set -euo pipefail
           python .github/patches/apply-windows-runtime-repro-fixes.py
-          python .github/patches/apply-ci-staging-ignore.py
           rustfmt --edition 2024 desktop/src/runtime_worker.rs desktop/src/engine_update.rs desktop/src/main.rs
           git diff --check
           cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::direct_launch_profiles_preserve_loom_bootstrap_arguments
@@ -58,9 +57,6 @@ jobs:
           grep -Fq 'handle_background_check_mode' desktop/src/main.rs
           grep -Fq '.creation_flags(CREATE_NO_WINDOW)' desktop/src/engine_update.rs
           grep -Fq '.stack_size(ENGINE_UPDATE_THREAD_STACK)' desktop/src/engine_update.rs
-          grep -Fq 'if: always() && !cancelled()' .github/workflows/build.yml
-          grep -Fq -- "- '.github/patches/**'" .github/workflows/build.yml
-          grep -Fq -- "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
       - name: Publish rebased fixes
         shell: bash
         env:
@@ -72,7 +68,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git pull --rebase origin main
           python .github/patches/apply-windows-runtime-repro-fixes.py
-          python .github/patches/apply-ci-staging-ignore.py
           rustfmt --edition 2024 desktop/src/runtime_worker.rs desktop/src/engine_update.rs desktop/src/main.rs
           git diff --check
           cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::direct_launch_profiles_preserve_loom_bootstrap_arguments
@@ -80,29 +75,22 @@ jobs:
           cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
 
           subjects="$(git log origin/main --format=%s)"
-          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1 || true)"
           launch_bug=$(( ${max:-0} + 1 ))
           updater_bug=$(( launch_bug + 1 ))
-          ci_bug=$(( updater_bug + 1 ))
 
           git add desktop/src/runtime_worker.rs
           git diff --cached --check
           git commit -m "FIX | BUG-${launch_bug} Preserve Loom direct-launch bootstrap arguments"
 
           git add desktop/src/engine_update.rs desktop/src/main.rs
+          git rm .github/patches/apply-windows-runtime-repro-fixes.py
           git diff --cached --check
           git commit -m "FIX | BUG-${updater_bug} Isolate engine update discovery from Workbench"
-
-          git add .github/workflows/build.yml
-          git rm .github/patches/apply-windows-runtime-repro-fixes.py .github/patches/apply-ci-staging-ignore.py
-          git diff --cached --check
-          git commit -m "FIX | BUG-${ci_bug} Ignore staging-only and superseded CI churn"
 
           git restore --staged --worktree .
           git pull --rebase origin main
           cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::direct_launch_profiles_preserve_loom_bootstrap_arguments
           cargo test --locked --manifest-path desktop/Cargo.toml engine_update::tests::updater_helper_is_isolated_and_has_network_stack_headroom
           cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
-          grep -Fq 'if: always() && !cancelled()' .github/workflows/build.yml
-          grep -Fq -- "- '.github/patches/**'" .github/workflows/build.yml
           git push origin HEAD:main
