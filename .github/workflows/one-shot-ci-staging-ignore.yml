@@ -27,8 +27,8 @@ jobs:
           set -euo pipefail
           python .github/patches/apply-ci-staging-ignore.py
           git diff --check
-          grep -Fq "- '.github/patches/**'" .github/workflows/build.yml
-          grep -Fq "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
+          grep -Fq -- "- '.github/patches/**'" .github/workflows/build.yml
+          grep -Fq -- "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
 
       - name: Publish CI optimization
         shell: bash
@@ -41,8 +41,8 @@ jobs:
 
           python .github/patches/apply-ci-staging-ignore.py
           git diff --check
-          grep -Fq "- '.github/patches/**'" .github/workflows/build.yml
-          grep -Fq "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
+          grep -Fq -- "- '.github/patches/**'" .github/workflows/build.yml
+          grep -Fq -- "- '.github/workflows/one-shot-*.yml'" .github/workflows/build.yml
 
           subjects="$(git log origin/main --format=%s)"
           max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1 || true)"
