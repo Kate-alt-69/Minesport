@@ -1,0 +1,146 @@
+name: One Shot Runtime Reliability Followups
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: one-shot-runtime-reliability-followups
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'CHORE | run runtime reliability followups'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: rustfmt
+
+      - name: Install desktop test dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev xvfb
+
+      - name: Restore embedded engine artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: minesport-engine-ci
+          path: engine/build/libs
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Restore embedded loader bridges
+        uses: actions/download-artifact@v7
+        with:
+          name: loader-bridges-1.21.10
+          path: dist/bundled-export-worker
+          run-id: 33797953559
+          github-token: ${{ github.token }}
+
+      - name: Validate transactional embedded runtime assets
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-runtime-asset-transaction.py
+          rustfmt --edition 2024 desktop/src/runtime.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime::tests::failed_runtime_asset_install_restores_last_good_file
+          grep -Fq 'install_runtime_asset' desktop/src/runtime.rs
+          grep -Fq 'sync_all' desktop/src/runtime.rs
+          git reset --hard HEAD
+
+      - name: Validate capture-worker cache identity
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-runtime-capture-identity.py
+          rustfmt --edition 2024 desktop/src/runtime_worker.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
+          grep -Fq 'minesport-runtime-worker-cache-v2' desktop/src/runtime_worker.rs
+          grep -Fq 'runtime_worker_capture_fingerprint' desktop/src/runtime_worker.rs
+          git reset --hard HEAD
+
+      - name: Validate trusted export-worker collision protection
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          python .github/patches/apply-runtime-registry-followups.py
+          rustfmt --edition 2024 desktop/src/runtime_worker.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::user_export_worker_jar_cannot_replace_embedded_worker
+          grep -Fq 'minesport_export_worker-' desktop/src/runtime_worker.rs
+          grep -Fq 'minesport-export-worker-' desktop/src/runtime_worker.rs
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          git reset --hard HEAD
+
+      - name: Publish rebased tested fixes
+        shell: bash
+        env:
+          MINESPORT_FAST_CHECK: '1'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+
+          subjects="$(git log origin/main --format=%s)"
+          max="$(printf '%s\n' "$subjects" | grep -oE 'BUG-[0-9]+' | cut -d- -f2 | sort -n | tail -1 || true)"
+          asset_bug=$(( ${max:-0} + 1 ))
+          capture_bug=$(( asset_bug + 1 ))
+          worker_bug=$(( capture_bug + 1 ))
+
+          python .github/patches/apply-runtime-asset-transaction.py
+          rustfmt --edition 2024 desktop/src/runtime.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime::tests::failed_runtime_asset_install_restores_last_good_file
+          git add desktop/src/runtime.rs
+          git rm .github/patches/apply-runtime-asset-transaction.py
+          git diff --cached --check
+          git commit -m "FIX | BUG-${asset_bug} Preserve embedded runtime assets during replacement failures"
+
+          python .github/patches/apply-runtime-capture-identity.py
+          rustfmt --edition 2024 desktop/src/runtime_worker.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
+          git add desktop/src/runtime_worker.rs
+          git rm .github/patches/apply-runtime-capture-identity.py
+          git diff --cached --check
+          git commit -m "FIX | BUG-${capture_bug} Invalidate runtime caches when capture worker changes"
+
+          python .github/patches/apply-runtime-registry-followups.py
+          rustfmt --edition 2024 desktop/src/runtime_worker.rs
+          git diff --check
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::user_export_worker_jar_cannot_replace_embedded_worker
+          git add desktop/src/runtime_worker.rs
+          git rm .github/patches/apply-runtime-registry-followups.py
+          git diff --cached --check
+          git commit -m "FIX | BUG-${worker_bug} Protect trusted export worker from mod filename collisions"
+
+          git restore --staged --worktree .
+          git pull --rebase origin main
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime::tests::failed_runtime_asset_install_restores_last_good_file
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::capture_worker_changes_invalidate_runtime_cache_identity
+          xvfb-run -a cargo test --locked --manifest-path desktop/Cargo.toml runtime_worker::tests::user_export_worker_jar_cannot_replace_embedded_worker
+          cargo check --locked --release --manifest-path desktop/Cargo.toml --all-targets
+          git push origin HEAD:main
