@@ -1,6 +1,11 @@
-import { Button, CheckBox, ComboBox, LineEdit, ProgressIndicator, ScrollView, SpinBox } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, Palette, ProgressIndicator, ScrollView, SpinBox } from "std-widgets.slint";
 import { AssetEditor } from "asset-editor.slint";
 import { MinesportLoader } from "minesport-loader.slint";
+
+// Fixed-height actions do not absorb spare vertical space in short panels.
+component ActionButton inherits Button {
+    height: 36px;
+}
 
 // Labeled standard buttons keep navigation discoverable, keyboard-focusable,
 // and exposed to accessibility APIs without custom mouse-only hit targets.
@@ -306,6 +311,7 @@ export component MainWindow inherits Window {
     min-height: 640px;
     background: #0d0f10;
     forward-focus: app-focus;
+    init => { Palette.color-scheme = ColorScheme.dark; }
 
     in-out property <int> active-activity: 0;
     in-out property <int> settings-page: 0;
@@ -516,7 +522,7 @@ export component MainWindow inherits Window {
                         min-width: 0px;
                         max-width: 540px;
                     }
-                    Button { text: "Help"; clicked => { root.open-docs(); } }
+                    ActionButton { text: "Help"; clicked => { root.open-docs(); } }
                 }
             }
 
@@ -527,11 +533,11 @@ export component MainWindow inherits Window {
                     padding: 10px;
                     spacing: 10px;
                     cross-axis-alignment: center;
-                    Button { text: "1 · Open world"; enabled: !root.foreground-busy; clicked => { root.active-activity = 0; root.pick-world(); } }
+                    ActionButton { text: "1 · Open world"; enabled: !root.foreground-busy; clicked => { root.active-activity = 0; root.pick-world(); } }
                     Text { text: "→"; color: #91b491; }
-                    Button { text: "2 · Select area"; checkable: true; checked: root.active-activity == 0 && root.world-selected; enabled: root.world-selected; clicked => { root.active-activity = 0; } }
+                    ActionButton { text: "2 · Select area"; checkable: true; checked: root.active-activity == 0 && root.world-selected; enabled: root.world-selected; clicked => { root.active-activity = 0; } }
                     Text { text: "→"; color: #91b491; }
-                    Button { text: "3 · Export"; checkable: true; checked: root.active-activity == 1; enabled: root.world-selected; clicked => { root.active-activity = 1; } }
+                    ActionButton { text: "3 · Export"; checkable: true; checked: root.active-activity == 1; enabled: root.world-selected; clicked => { root.active-activity = 1; } }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                 }
             }
@@ -585,18 +591,19 @@ export component MainWindow inherits Window {
                                     vertical-alignment: center;
                                 }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                                Button { text: "Help"; clicked => { root.open-docs(); } }
+                                ActionButton { text: "Help"; clicked => { root.open-docs(); } }
                             }
                         }
 
                         if root.active-activity == 0: ScrollView {
                             VerticalLayout {
+                                alignment: start;
                                 padding: 14px;
                                 spacing: 10px;
                                 Text { text: root.world-name; color: #eef0ee; font-size: 16px; font-weight: 700; overflow: elide; }
                                 if root.world-selected: Text { text: root.world-path; color: #aab2ad; font-size: 12px; wrap: word-wrap; }
                                 if root.world-selected: Text { text: root.minecraft-version + "  ·  " + root.loader-type; color: #91b491; font-size: 12px; }
-                                Button { text: root.world-selected ? "Change world…" : "Open Minecraft world…"; primary: !root.world-selected; enabled: !root.foreground-busy; clicked => { root.pick-world(); } }
+                                ActionButton { text: root.world-selected ? "Change world…" : "Open Minecraft world…"; primary: !root.world-selected; enabled: !root.foreground-busy; clicked => { root.pick-world(); } }
                                 if !root.world-selected: HintText { text: "Choose a saved world from your launcher, or browse to a world folder. Then select just the area you need."; }
                                 if root.world-selected: VerticalLayout {
                                 spacing: 10px;
@@ -604,8 +611,8 @@ export component MainWindow inherits Window {
                                 ComboBox { model: ["Box selection", "Bubble selection"]; current-index <=> root.selection-mode; }
                                 HorizontalLayout {
                                     spacing: 8px;
-                                    Button { text: "Select area"; checkable: true; checked: !root.map-pan-mode; clicked => { root.map-pan-mode = false; } }
-                                    Button { text: "Pan map"; checkable: true; checked: root.map-pan-mode; clicked => { root.map-pan-mode = true; } }
+                                    ActionButton { text: "Select area"; checkable: true; checked: !root.map-pan-mode; clicked => { root.map-pan-mode = false; } }
+                                    ActionButton { text: "Pan map"; checkable: true; checked: root.map-pan-mode; clicked => { root.map-pan-mode = true; } }
                                 }
                                 HintText { text: root.map-pan-mode ? "Drag with the left mouse button to move the map. Switch to Select area when you're ready." : root.selection-mode == 0 ? "Drag on the 2D map to select an area. Use 3D preview to inspect it." : "Click the map to place the bubble. Enter coordinates to adjust its height and radius."; }
                                 Text { text: root.selection-mode == 0 ? "Size: " + (abs(root.max-x - root.min-x) + 1) + " × " + (abs(root.max-y - root.min-y) + 1) + " × " + (abs(root.max-z - root.min-z) + 1) + " blocks" : "Radius: " + root.radius-x + " × " + root.radius-y + " × " + root.radius-z + " blocks"; color: #e3e7e4; font-size: 14px; font-weight: 700; wrap: word-wrap; }
@@ -627,14 +634,14 @@ export component MainWindow inherits Window {
                                     HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Y"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 4096; value <=> root.radius-y; } }
                                     HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Z"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 30000000; value <=> root.radius-z; } }
                                 }
-                                if root.selection-mode == 0: Button { text: "Use world bounds"; enabled: root.map-available; clicked => { root.min-x = root.map-min-x; root.max-x = root.map-max-x - 1; root.min-z = root.map-min-z; root.max-z = root.map-max-z - 1; } }
+                                if root.selection-mode == 0: ActionButton { text: "Use world bounds"; enabled: root.map-available; clicked => { root.min-x = root.map-min-x; root.max-x = root.map-max-x - 1; root.min-z = root.map-min-z; root.max-z = root.map-max-z - 1; } }
                                 HintText { text: "Only the selected area is exported. You can adjust it again before exporting."; }
-                                Button { text: "Next · Export setup"; primary: true; clicked => { root.active-activity = 1; } }
+                                ActionButton { text: "Next · Export setup"; primary: true; clicked => { root.active-activity = 1; } }
                                 if root.export-format-index < 2: VerticalLayout {
                                     spacing: 8px;
                                     SectionTitle { label: "MODEL PREPARATION"; }
                                     Text { text: root.runtime-cache-status; color: root.runtime-cache-busy ? #dfc27d : #9bb9a0; font-size: 12px; wrap: word-wrap; }
-                                    if root.runtime-cache-busy: Button { text: "Cancel preparation"; clicked => { root.cancel-runtime-cache(); } }
+                                    if root.runtime-cache-busy: ActionButton { text: "Cancel preparation"; clicked => { root.cancel-runtime-cache(); } }
                                 }
                                 }
                             }
@@ -642,6 +649,7 @@ export component MainWindow inherits Window {
 
                         if root.active-activity == 1: ScrollView {
                             VerticalLayout {
+                                alignment: start;
                                 padding: 14px;
                                 spacing: 10px;
                                 SectionTitle { label: "START WITH A PRESET"; }
@@ -671,14 +679,14 @@ export component MainWindow inherits Window {
                                 }
                                 SectionTitle { label: "OUTPUT"; }
                                 Text { text: root.output-path == "" ? "~/Minesport_Exports" : root.output-path; color: #a7b0aa; font-size: 12px; wrap: word-wrap; }
-                                Button { text: "Choose output folder…"; clicked => { root.pick-output(); } }
+                                ActionButton { text: "Choose output folder…"; clicked => { root.pick-output(); } }
                                 if root.export-format-index < 2 && root.export-details-visible: VerticalLayout {
                                     spacing: 10px;
                                     SectionTitle { label: "OPTIMIZATION"; }
                                     Text { text: "Optimization: face culling " + (root.face-culling ? "ON" : "OFF") + " · FLATTER " + (root.flatter-enabled ? "ON" : "OFF") + " · hidden culling " + (root.hidden-culling ? "ON" : "OFF"); color: #b6beb9; font-size: 12px; wrap: word-wrap; }
-                                    Button { text: "Apply safe optimization"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.export-preset-index = 0; root.settings-changed(); } }
+                                    ActionButton { text: "Apply safe optimization"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.export-preset-index = 0; root.settings-changed(); } }
                                 }
-                                Button { text: root.task-completing ? "Finishing export…" : root.foreground-busy ? "Working…" : "Export selected area"; primary: true; enabled: root.can-export; clicked => { root.export-requested(); } }
+                                ActionButton { text: root.task-completing ? "Finishing export…" : root.foreground-busy ? "Working…" : "Export selected area"; primary: true; enabled: root.can-export; clicked => { root.export-requested(); } }
                                 if !root.can-export: HintText { text: !root.world-selected ? "Open a world first, then select an area to export." : !root.engine-ready ? "Waiting for the export engine. Open Activity if startup needs attention." : root.runtime-cache-busy ? "Preparing model data. Export becomes available when preparation finishes." : "Another task is running. You can continue adjusting your export settings."; }
                                 HintText { text: root.export-format-index == 2 ? "Saves block states as a Minecraft schematic. No 3D model preparation is needed." : "Minesport prepares any missing model data automatically. Your original save is never edited."; }
                                 if root.task-title == "EXPORT COMPLETE": VerticalLayout {
@@ -690,13 +698,14 @@ export component MainWindow inherits Window {
                                     spacing: 8px;
                                     Text { text: "Something needs attention"; color: #efcc8a; font-size: 14px; font-weight: 700; }
                                     Text { text: root.task-detail; color: #e3c7ad; font-size: 13px; wrap: word-wrap; }
-                                    Button { text: "View details in Activity"; clicked => { root.active-activity = 3; } }
+                                    ActionButton { text: "View details in Activity"; clicked => { root.active-activity = 3; } }
                                 }
                             }
                         }
 
                         if root.active-activity == 2: ScrollView {
                             VerticalLayout {
+                                alignment: start;
                                 padding: 14px;
                                 spacing: 10px;
                                 SectionTitle { label: "WORLD INSPECTOR · BLENDER"; }
@@ -711,7 +720,7 @@ export component MainWindow inherits Window {
                                         Text { width: 18px; text: root.blender-translator-current ? "✓" : "✕"; color: root.blender-translator-current ? #8fc69b : #d39191; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                         Text { horizontal-stretch: 1; text: root.blender-translator-status; color: #b6beb9; font-size: 12px; vertical-alignment: center; overflow: elide; }
                                     }
-                                    Button { text: "Install / repair Minesport translator"; enabled: !root.foreground-busy; clicked => { root.install-blender-translator(); } }
+                                    ActionButton { text: "Install / repair Minesport translator"; enabled: !root.foreground-busy; clicked => { root.install-blender-translator(); } }
                                     HintText { text: "Animate export prepares dynamic state descriptors plus animated textures. Animate static preserves interactable world state while keeping continuously animated textures."; }
                                     HintText { text: "For OBJ, use Minesport's Blender translator import path. Blender's stock Wavefront importer bypasses Minesport metadata."; }
                                 }
@@ -720,6 +729,7 @@ export component MainWindow inherits Window {
 
                         if root.active-activity == 3: ScrollView {
                             VerticalLayout {
+                                alignment: start;
                                 padding: 14px;
                                 spacing: 10px;
                                 SectionTitle { label: "TASKS & DIAGNOSTICS"; }
@@ -732,7 +742,7 @@ export component MainWindow inherits Window {
                                 if root.task-active: ProgressIndicator { progress: root.task-progress; }
                                 SectionTitle { label: "RUNTIME REGISTRY"; }
                                 Text { text: root.runtime-cache-status; color: #acb5af; font-size: 12px; wrap: word-wrap; }
-                                if root.runtime-cache-busy: Button { text: "Cancel runtime worker"; clicked => { root.cancel-runtime-cache(); } }
+                                if root.runtime-cache-busy: ActionButton { text: "Cancel runtime worker"; clicked => { root.cancel-runtime-cache(); } }
                                 SectionTitle { label: "DIAGNOSTICS"; }
                                 Surface {
                                     height: 320px;
@@ -759,10 +769,10 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 Text { text: root.viewport-mode == 0 ? (root.map-pan-mode ? "Drag to pan · Scroll to zoom" : "Drag to select · Scroll to zoom") : "Select two corners to choose an area"; color: #b3bdb7; font-size: 12px; vertical-alignment: center; overflow: elide; min-width: 0px; horizontal-stretch: 1; }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                                Button { text: "Controls"; checkable: true; checked: root.controls-visible; clicked => { root.controls-visible = !root.controls-visible; } }
-                                Button { text: "2D map"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
-                                Button { text: "3D preview"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-selected && !root.foreground-busy; clicked => { root.viewport-mode = 1; root.open-3d(); } }
-                                Button {
+                                ActionButton { text: "Controls"; checkable: true; checked: root.controls-visible; clicked => { root.controls-visible = !root.controls-visible; } }
+                                ActionButton { text: "2D map"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
+                                ActionButton { text: "3D preview"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-selected && !root.foreground-busy; clicked => { root.viewport-mode = 1; root.open-3d(); } }
+                                ActionButton {
                                     text: "Fit";
                                     enabled: root.viewport-mode == 0 ? root.map-available : root.preview-available && !root.preview-loading;
                                     clicked => {
@@ -821,7 +831,7 @@ export component MainWindow inherits Window {
                                         Text { text: "WORLD → CREATE"; color: #a4d9b2; font-size: 12px; font-weight: 700; }
                                         Text { text: !root.world-selected ? "Bring your world\nto your next project." : "Let's load your map."; color: #eef4f0; font-size: 24px; font-weight: 700; wrap: word-wrap; }
                                         HintText { text: !root.world-selected ? "Open a Minecraft save, select an area, and export it to Blender, other 3D tools, or Litematica." : "Reload the map to select an area. Check Activity if loading failed."; }
-                                        Button {
+                                        ActionButton {
                                             text: !root.world-selected ? "Open a world…" : "Reload map";
                                             primary: true;
                                             enabled: !root.foreground-busy;
@@ -919,7 +929,7 @@ export component MainWindow inherits Window {
                                     x: 0px; y: 0px; width: parent.width; height: parent.height;
                                     Text { x: 0px; y: parent.height / 2 - 56px; width: parent.width; height: 28px; text: "3D PREVIEW"; color: #b8c0bb; font-size: 20px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                                     Text { x: 0px; y: parent.height / 2 - 20px; width: parent.width; height: 24px; text: "Inspect your selected area before exporting."; color: #b3bdb7; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
-                                    Button { x: (parent.width - 160px) / 2; y: parent.height / 2 + 18px; width: 160px; text: "Generate preview"; enabled: root.world-selected && !root.foreground-busy; clicked => { root.open-3d(); } }
+                                    ActionButton { x: (parent.width - 160px) / 2; y: parent.height / 2 + 18px; width: 160px; text: "Generate preview"; enabled: root.world-selected && !root.foreground-busy; clicked => { root.open-3d(); } }
                                 }
                                 if root.preview-available: Rectangle {
                                     x: 12px; y: 12px; width: 180px; height: 34px; border-radius: 5px; background: #101414e8; border-width: 1px; border-color: #323735;
@@ -964,13 +974,14 @@ export component MainWindow inherits Window {
                                 y: 12px;
                                 width: min(380px, parent.width - 24px);
                                 height: root.viewport-mode == 0 ? 204px : 288px;
+                                TouchArea { mouse-cursor: default; }
                                 VerticalLayout {
                                     padding: 16px;
                                     spacing: 10px;
                                     HorizontalLayout {
                                         Text { text: root.viewport-mode == 0 ? "Map controls" : "3D controls"; color: #eef4f0; font-size: 15px; font-weight: 700; vertical-alignment: center; }
                                         Rectangle { horizontal-stretch: 1; background: transparent; }
-                                        Button { text: "Close"; clicked => { root.controls-visible = false; } }
+                                        ActionButton { text: "Close"; clicked => { root.controls-visible = false; } }
                                     }
                                     HintText { text: root.viewport-mode == 0 ? "Left mouse · Select an area, or drag in Pan map mode\nMiddle mouse · Drag to pan anytime\nScroll · Zoom\nF6 · Fit the map" : "Left click · First corner; click again to confirm\nRight click · Second corner\nMiddle mouse · Drag to look around\nShift + middle mouse · Pan\nScroll · Move closer or farther\nE + scroll · Resize selection\nC · Clear selection\nF / F6 · Fit the preview"; }
                                     Text { text: "Esc closes this guide."; color: #b3bdb7; font-size: 12px; }
@@ -990,9 +1001,9 @@ export component MainWindow inherits Window {
                                             padding-left: 14px; padding-right: 10px;
                                             Text { text: "DOCUMENTATION  ·  Page " + root.doc-page + " of " + root.doc-total + "  ·  " + root.doc-title; color: #eef0ee; font-size: 13px; font-weight: 700; vertical-alignment: center; overflow: elide; }
                                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                                            Button { text: "GitHub"; clicked => { root.docs-open-github(); } }
-                                            if root.doc-video-available: Button { text: "Video"; clicked => { root.docs-open-video(); } }
-                                            Button { text: "Close"; clicked => { root.docs-visible = false; } }
+                                            ActionButton { text: "GitHub"; clicked => { root.docs-open-github(); } }
+                                            if root.doc-video-available: ActionButton { text: "Video"; clicked => { root.docs-open-video(); } }
+                                            ActionButton { text: "Close"; clicked => { root.docs-visible = false; } }
                                         }
                                     }
                                     ScrollView { Text { x: 22px; y: 20px; width: parent.width - 44px; text: root.doc-content; color: #cbd2cd; font-size: 13px; wrap: word-wrap; } }
@@ -1000,13 +1011,13 @@ export component MainWindow inherits Window {
                                         height: 54px; background: #181b19; border-width: 1px; border-color: #303532;
                                         HorizontalLayout {
                                             padding: 8px; spacing: 7px;
-                                            Button { text: "First"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(0); } }
-                                            Button { text: "Previous"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(-1); } }
+                                            ActionButton { text: "First"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(0); } }
+                                            ActionButton { text: "Previous"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(-1); } }
                                             Rectangle { horizontal-stretch: 1; background: transparent; }
                                             Text { text: "Page " + root.doc-page + " of " + root.doc-total; color: #adb5b0; font-size: 12px; vertical-alignment: center; }
                                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                                            Button { text: "Next"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(1); } }
-                                            Button { text: "Last"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(2); } }
+                                            ActionButton { text: "Next"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(1); } }
+                                            ActionButton { text: "Last"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(2); } }
                                         }
                                     }
                                 }
@@ -1044,7 +1055,7 @@ export component MainWindow inherits Window {
                         overflow: elide;
                         horizontal-stretch: 1;
                     }
-                    Button { text: "View activity"; clicked => { root.active-activity = 3; } }
+                    ActionButton { text: "View activity"; clicked => { root.active-activity = 3; } }
                 }
             }
         }
@@ -1091,17 +1102,18 @@ export component MainWindow inherits Window {
                             Text { text: "SETTINGS"; color: #f0f3f0; font-size: 16px; font-weight: 700; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             Text { text: "Changes save immediately"; color: #a5aea8; font-size: 12px; vertical-alignment: center; }
-                            Button { text: "Close"; clicked => { root.settings-visible = false; } }
+                            ActionButton { text: "Close"; clicked => { root.settings-visible = false; } }
                         }
                     }
                     ScrollView {
                         VerticalLayout {
+                            alignment: start;
                             padding: 18px;
                             spacing: 11px;
                             SectionTitle { label: "GENERAL"; }
                             CheckBox { text: "Blender integration"; checked <=> root.blender-export; toggled => { root.export-preset-index = 0; root.settings-changed(); } }
                             HintText { text: "Prepare exported models for the Minesport Blender translator. This setting is ignored for Litematica."; }
-                            Button { text: "Open documentation"; clicked => { root.open-docs(); root.settings-visible = false; } }
+                            ActionButton { text: "Open documentation"; clicked => { root.open-docs(); root.settings-visible = false; } }
                             CheckBox { text: "Show advanced settings"; checked <=> root.advanced-settings-visible; }
                             if root.advanced-settings-visible: VerticalLayout {
                             spacing: 11px;
@@ -1122,7 +1134,7 @@ export component MainWindow inherits Window {
                             if root.export-format-index < 2: VerticalLayout {
                                 spacing: 8px;
                                 Text { text: root.runtime-cache-status; color: #aab2ad; font-size: 12px; wrap: word-wrap; }
-                                Button { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.rebuild-runtime-cache(); } }
+                                ActionButton { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.rebuild-runtime-cache(); } }
                             }
                             if root.export-format-index < 2: VerticalLayout {
                                 spacing: 11px;
@@ -1154,10 +1166,10 @@ export component MainWindow inherits Window {
                                 }
                             }
                             SectionTitle { label: "ADVANCED EXPORT TOOLS"; }
-                            Button { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.run-preflight(); } }
+                            ActionButton { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.run-preflight(); } }
                             Text { text: root.preflight-summary; color: #a7b0aa; font-size: 12px; wrap: word-wrap; }
-                            Button { text: "Reload 2D map"; enabled: root.world-path != "No world selected" && !root.map-loading && !root.foreground-busy; clicked => { root.reload-map(); } }
-                            Button { text: "Remove all Minesport cache"; enabled: !root.foreground-busy; clicked => { root.remove-cache(); } }
+                            ActionButton { text: "Reload 2D map"; enabled: root.world-path != "No world selected" && !root.map-loading && !root.foreground-busy; clicked => { root.reload-map(); } }
+                            ActionButton { text: "Remove all Minesport cache"; enabled: !root.foreground-busy; clicked => { root.remove-cache(); } }
                             HintText { text: "Deletes only regenerable runtime/cache/toolchain data. Worlds, exports, settings and real mods are never touched."; }
                             }
                         }
@@ -1194,8 +1206,8 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         spacing: 8px;
                         Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Button { text: "Not now"; clicked => { root.blender-prompt-later(); } }
-                        Button { text: "Install"; primary: true; enabled: !root.foreground-busy; clicked => { root.blender-prompt-install(); } }
+                        ActionButton { text: "Not now"; clicked => { root.blender-prompt-later(); } }
+                        ActionButton { text: "Install"; primary: true; enabled: !root.foreground-busy; clicked => { root.blender-prompt-install(); } }
                     }
                 }
             }

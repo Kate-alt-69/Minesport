@@ -20,13 +20,13 @@ export component AssetEditor inherits Rectangle {
         Text {
             text: root.title;
             color: #c8d2da;
-            font-size: 10px;
+            font-size: 13px;
             font-weight: 700;
         }
         if root.items.length == 0: Text {
-            text: "No paths configured.";
-            color: #728393;
-            font-size: 10px;
+            text: "No packs added yet.";
+            color: #b3bdb7;
+            font-size: 12px;
         }
         if root.items.length > 0: ComboBox {
             model: root.items;
@@ -35,30 +35,30 @@ export component AssetEditor inherits Rectangle {
         if root.items.length > 0: HorizontalLayout {
             spacing: 4px;
             Button {
-                text: "↑";
+                text: "Move up";
                 enabled: root.selected-index > 0;
                 clicked => { root.move-selected(-1); }
             }
             Button {
-                text: "↓";
+                text: "Move down";
                 enabled: root.selected-index >= 0 && root.selected-index < root.items.length - 1;
                 clicked => { root.move-selected(1); }
             }
             Button {
-                text: "REMOVE";
+                text: "Remove";
                 enabled: root.selected-index >= 0 && root.selected-index < root.items.length;
                 clicked => { root.remove-selected(); }
             }
         }
         HorizontalLayout {
             spacing: 4px;
-            if root.allow-folder: Button { text: "ADD FOLDER…"; clicked => { root.add-folder(); } }
-            if root.allow-file: Button { text: "ADD ZIP…"; clicked => { root.add-file(); } }
+            if root.allow-folder: Button { text: "Add folder…"; clicked => { root.add-folder(); } }
+            if root.allow-file: Button { text: "Add ZIP…"; clicked => { root.add-file(); } }
         }
         Text {
             text: root.help;
-            color: #718291;
-            font-size: 9px;
+            color: #b3bdb7;
+            font-size: 12px;
             wrap: word-wrap;
         }
     }

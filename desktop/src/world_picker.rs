@@ -10,7 +10,7 @@ use std::{
 };
 
 slint::slint! {
-    import { Button, LineEdit, ListView } from "std-widgets.slint";
+    import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
 
     export struct PickerRow {
         icon-kind: int,
@@ -25,6 +25,7 @@ slint::slint! {
         min-width: 640px;
         min-height: 460px;
         background: #111a17;
+        init => { Palette.color-scheme = ColorScheme.dark; }
 
         in property <[PickerRow]> rows;
         in-out property <string> breadcrumb: "Launcher";
