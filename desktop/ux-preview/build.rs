@@ -16,7 +16,7 @@ fn main() {
     let workbench_path = desktop.join("ui/workbench-v3.slint").to_string_lossy().replace('\\', "/");
     let picker_path = picker.to_string_lossy().replace('\\', "/");
     fs::write(&preview, format!(
-        "import {{ MainWindow }} from \"{workbench_path}\";\nimport {{ LauncherWorldPicker, PickerRow }} from \"{picker_path}\";\nexport {{ MainWindow, LauncherWorldPicker, PickerRow }};\n"
+        "import {{ MainWindow }} from \"{workbench_path}\";\nimport {{ LauncherWorldPicker, PickerRow }} from \"{picker_path}\";\nexport {{ MainWindow, LauncherWorldPicker, PickerRow }}\n"
     )).unwrap();
     slint_build::compile_with_config(preview, slint_build::CompilerConfiguration::new().with_style("fluent".into()))
         .expect("Minesport UX must compile independently of Java/Bridge artifacts");

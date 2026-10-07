@@ -40,6 +40,7 @@ component Surface inherits Rectangle {
 component WorldMapView inherits Rectangle {
     in property <image> source;
     in property <bool> available;
+    in property <bool> pan-mode: false;
     in-out property <int> map-min-x;
     in-out property <int> map-min-z;
     in-out property <int> map-max-x;
@@ -59,6 +60,7 @@ component WorldMapView inherits Rectangle {
     private property <length> offset-x: 0px;
     private property <length> offset-y: 0px;
     private property <bool> panning: false;
+    private property <bool> pan-with-left: false;
     private property <bool> dragging: false;
     private property <length> pan-start-x: 0px;
     private property <length> pan-start-y: 0px;
@@ -155,7 +157,10 @@ component WorldMapView inherits Rectangle {
     }
 
     changed source => { root.fit(); }
-    changed available => { if (root.available) { root.fit(); } }
+    changed available => {
+        if (root.available) { root.fit(); }
+        else { root.panning = false; root.dragging = false; root.pan-dirty = false; }
+    }
 
     pan-frame := Timer {
         interval: 16ms;
@@ -181,10 +186,11 @@ component WorldMapView inherits Rectangle {
 
     map-touch := TouchArea {
         enabled: root.available;
-        mouse-cursor: root.panning ? grabbing : crosshair;
+        mouse-cursor: root.panning ? grabbing : root.pan-mode ? grab : crosshair;
         pointer-event(event) => {
-            if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.down) {
+            if ((event.button == PointerEventButton.middle || (root.pan-mode && event.button == PointerEventButton.left)) && event.kind == PointerEventKind.down) {
                 root.panning = true;
+                root.pan-with-left = event.button == PointerEventButton.left;
                 root.pan-start-x = self.mouse-x;
                 root.pan-start-y = self.mouse-y;
                 root.pan-latest-x = self.mouse-x;
@@ -202,7 +208,7 @@ component WorldMapView inherits Rectangle {
                     root.pan-dirty = true;
                     return;
                 }
-                if (event.button == PointerEventButton.middle && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
+                if (event.kind == PointerEventKind.cancel || (event.kind == PointerEventKind.up && (root.pan-with-left ? event.button == PointerEventButton.left : event.button == PointerEventButton.middle))) {
                     root.pan-latest-x = self.mouse-x;
                     root.pan-latest-y = self.mouse-y;
                     root.pan-dirty = true;
@@ -310,6 +316,7 @@ export component MainWindow inherits Window {
     private property <bool> export-details-visible: false;
     private property <bool> advanced-settings-visible: false;
     private property <bool> controls-visible: false;
+    private property <bool> map-pan-mode: false;
     private property <bool> world-selected: root.world-path != "No world selected";
     private property <bool> can-export: root.engine-ready && !root.foreground-busy && root.world-selected;
     // Floating point multiplication avoids overflow for large world bounds.
@@ -450,7 +457,8 @@ export component MainWindow inherits Window {
             if (root.blender-prompt-visible || root.settings-visible) {
                 return reject;
             }
-            if (root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
+            // Do not consume C/E/F while a text field or coordinate editor owns focus.
+            if (app-focus.has-focus && root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
                 if (event.text == "c" || event.text == "C") {
                     root.preview-clear();
                     return accept;
@@ -595,7 +603,12 @@ export component MainWindow inherits Window {
                                 spacing: 10px;
                                 SectionTitle { label: "SELECTION"; }
                                 ComboBox { model: ["Box selection", "Bubble selection"]; current-index <=> root.selection-mode; }
-                                HintText { text: root.selection-mode == 0 ? "Drag on the 2D map to select an area. Use 3D preview to inspect it." : "Click the map to place the bubble. Enter coordinates to adjust its height and radius."; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Button { text: "Select area"; checkable: true; checked: !root.map-pan-mode; clicked => { root.map-pan-mode = false; } }
+                                    Button { text: "Pan map"; checkable: true; checked: root.map-pan-mode; clicked => { root.map-pan-mode = true; } }
+                                }
+                                HintText { text: root.map-pan-mode ? "Drag with the left mouse button to move the map. Switch to Select area when you're ready." : root.selection-mode == 0 ? "Drag on the 2D map to select an area. Use 3D preview to inspect it." : "Click the map to place the bubble. Enter coordinates to adjust its height and radius."; }
                                 Text { text: root.selection-mode == 0 ? "Size: " + (abs(root.max-x - root.min-x) + 1) + " × " + (abs(root.max-y - root.min-y) + 1) + " × " + (abs(root.max-z - root.min-z) + 1) + " blocks" : "Radius: " + root.radius-x + " × " + root.radius-y + " × " + root.radius-z + " blocks"; color: #e3e7e4; font-size: 14px; font-weight: 700; wrap: word-wrap; }
                                 if root.selection-volume > 16000000: HintText { color: #efcc8a; text: "Large selection. Start with a smaller area for a quicker export, especially on older computers."; }
                                 CheckBox { text: "Enter coordinates"; checked <=> root.coordinates-visible; }
@@ -615,7 +628,7 @@ export component MainWindow inherits Window {
                                     HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Y"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 4096; value <=> root.radius-y; } }
                                     HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Z"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 30000000; value <=> root.radius-z; } }
                                 }
-                                Button { text: "Use world bounds"; enabled: root.map-available; clicked => { root.min-x = root.map-min-x; root.max-x = root.map-max-x - 1; root.min-z = root.map-min-z; root.max-z = root.map-max-z - 1; } }
+                                if root.selection-mode == 0: Button { text: "Use world bounds"; enabled: root.map-available; clicked => { root.min-x = root.map-min-x; root.max-x = root.map-max-x - 1; root.min-z = root.map-min-z; root.max-z = root.map-max-z - 1; } }
                                 HintText { text: "Only the selected area is exported. You can adjust it again before exporting."; }
                                 Button { text: "Next · Export setup"; primary: true; clicked => { root.active-activity = 1; } }
                                 if root.export-format-index < 2: VerticalLayout {
@@ -774,6 +787,7 @@ export component MainWindow inherits Window {
                                 visible: root.viewport-mode == 0;
                                 source: root.map-image;
                                 available: root.map-available && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible;
+                                pan-mode: root.map-pan-mode;
                                 map-min-x <=> root.map-min-x;
                                 map-min-z <=> root.map-min-z;
                                 map-max-x <=> root.map-max-x;
@@ -849,6 +863,7 @@ export component MainWindow inherits Window {
                                     enabled: root.preview-available && !root.preview-loading && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible;
                                     mouse-cursor: self.middle-held ? grabbing : crosshair;
                                     pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.down) { app-focus.focus(); }
                                         if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                                             root.preview-pick-button = 1;
                                             root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px);
@@ -958,7 +973,7 @@ export component MainWindow inherits Window {
                                         Rectangle { horizontal-stretch: 1; background: transparent; }
                                         Button { text: "Close"; clicked => { root.controls-visible = false; } }
                                     }
-                                    HintText { text: root.viewport-mode == 0 ? "Left mouse · Drag to select; click to place a bubble\nMiddle mouse · Drag to pan\nScroll · Zoom\nF6 · Fit the map" : "Left click · First corner; click again to confirm\nRight click · Second corner\nMiddle mouse · Drag to look around\nShift + middle mouse · Pan\nScroll · Move closer or farther\nE + scroll · Resize selection\nC · Clear selection\nF / F6 · Fit the preview"; }
+                                    HintText { text: root.viewport-mode == 0 ? "Left mouse · Select an area, or drag in Pan map mode\nMiddle mouse · Drag to pan anytime\nScroll · Zoom\nF6 · Fit the map" : "Left click · First corner; click again to confirm\nRight click · Second corner\nMiddle mouse · Drag to look around\nShift + middle mouse · Pan\nScroll · Move closer or farther\nE + scroll · Resize selection\nC · Clear selection\nF / F6 · Fit the preview"; }
                                     Text { text: "Esc closes this guide."; color: #b3bdb7; font-size: 12px; }
                                 }
                             }

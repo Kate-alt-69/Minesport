@@ -28,6 +28,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/ux-preview -> target
+          cache-on-failure: true
       - name: Install display dependencies
         run: |
           sudo apt-get update
