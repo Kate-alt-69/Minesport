@@ -35,7 +35,7 @@ jobs:
       - name: Install display dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev xvfb
+          sudo apt-get install -y --no-install-recommends pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb
       - name: Compile UI and capture UX states
         env:
           SLINT_BACKEND: winit-software

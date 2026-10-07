@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let weak = ui.as_weak();
     let picker = LauncherWorldPicker::new()?;
     let picker_for_timer = picker.clone_strong();
+    let snapshot_output = output.clone();
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(350), move || {
         let ui = weak.upgrade().unwrap();
         let name = match stage {
@@ -31,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let window = if stage >= 7 { picker_for_timer.window() } else { ui.window() };
         let pixels = window.take_snapshot().expect("UI screenshot must render");
-        image::save_buffer(output.join(format!("{name}.png")), pixels.as_bytes(), pixels.width(), pixels.height(), image::ColorType::Rgba8)
+        image::save_buffer(snapshot_output.join(format!("{name}.png")), pixels.as_bytes(), pixels.width(), pixels.height(), image::ColorType::Rgba8)
             .expect("UI screenshot must save");
         match stage {
             0 => {
@@ -68,12 +69,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             4 => ui.set_settings_visible(true),
             5 => {
-                ui.set_settings_visible(false);
+                ui.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                    text: slint::platform::Key::Escape.into(),
+                });
+                assert!(!ui.get_settings_visible(), "Escape must close settings");
                 ui.set_active_activity(0);
                 ui.window().set_size(slint::PhysicalSize::new(960, 640));
             }
             6 => {
-                ui.hide().unwrap();
                 picker_for_timer.set_breadcrumb("Prism Launcher › Instance › World".into());
                 picker_for_timer.set_rows(ModelRc::from(Rc::new(VecModel::from(vec![
                     PickerRow { icon_kind: 2, title: "Pine Valley".into(), subtitle: "Fabric · Minecraft 1.21.10 · Saved today".into() },
@@ -83,6 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 picker_for_timer.set_can_use(true);
                 picker_for_timer.set_can_back(true);
                 picker_for_timer.show().unwrap();
+                ui.hide().unwrap();
             }
             7 => {
                 picker_for_timer.set_rows(ModelRc::default());
@@ -94,5 +98,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         stage += 1;
     });
     slint::run_event_loop()?;
+    assert_eq!(std::fs::read_dir(output)?.filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "png"))
+        .count(), 9, "Every UX state must produce a screenshot");
     Ok(())
 }
