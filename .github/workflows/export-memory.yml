@@ -1,0 +1,77 @@
+name: Export memory regression
+
+on:
+  pull_request:
+    paths:
+      - 'engine/**'
+      - '.github/workflows/export-memory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-memory-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gltf-memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '22'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Engine regressions including constrained-heap export
+        working-directory: engine
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean build
+      - name: Compare isolated exporter memory with the audited baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p memory-results/baseline-src/dev/kastrick/minesport/export
+          git show c825c539f3efe820ac877cde6064c43af9f3291e:engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java > memory-results/baseline-src/dev/kastrick/minesport/export/GltfExporter.java
+          gson_jar="$(python3 -c 'from pathlib import Path; print(next((Path.home() / ".gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.11.0").rglob("gson-2.11.0.jar")))')"
+          test_cp="engine/build/classes/java/test:engine/build/classes/java/main:$gson_jar"
+          javac -cp "$test_cp" -d memory-results/baseline-classes memory-results/baseline-src/dev/kastrick/minesport/export/GltfExporter.java
+          /usr/bin/time -v -o memory-results/optimized-time.txt java -Xmx48m -Dminesport.flatter=false -cp "$test_cp" 'dev.kastrick.minesport.export.GltfStreamingTest$MemoryProbe' memory-results/optimized.gltf > memory-results/optimized.log 2>&1
+          /usr/bin/time -v -o memory-results/baseline-time.txt java -Xmx768m -Dminesport.flatter=false -cp "memory-results/baseline-classes:$test_cp" 'dev.kastrick.minesport.export.GltfStreamingTest$MemoryProbe' memory-results/baseline.gltf > memory-results/baseline.log 2>&1
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = []
+          for label in ('baseline', 'optimized'):
+              root = json.loads(Path(f'memory-results/{label}.gltf').read_text())
+              size = Path(f'memory-results/{label}.bin').stat().st_size
+              assert size == 76_000_000 == root['buffers'][0]['byteLength']
+              assert len(root['meshes']) == 1
+              primitives = root['meshes'][0]['primitives']
+              count = sum(root['accessors'][p['indices']]['count'] for p in primitives)
+              assert count == 3_000_000
+              timings = Path(f'memory-results/{label}-time.txt').read_text()
+              metrics = [line.strip() for line in timings.splitlines() if any(key in line for key in ('Maximum resident', 'Elapsed (', 'User time', 'System time'))]
+              report.extend([f'### {label}', Path(f'memory-results/{label}.log').read_text(), *metrics, ''])
+          report.insert(0, 'Synthetic exporter-only fixture; excludes world decoding, desktop and Minecraft. Heap limits differ; peak RSS is measured per JVM. This does not establish the 1 GB application target.\n')
+          text = '\n'.join(report)
+          Path('memory-results/comparison.md').write_text(text)
+          print(text)
+          PY
+          cat memory-results/comparison.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: export-memory-results
+          path: |
+            memory-results/*.md
+            memory-results/*.txt
+            memory-results/*.log
+            engine/build/test-results/test/*.xml
+          if-no-files-found: warn
