@@ -7,8 +7,6 @@ import dev.kastrick.minesport.resolver.ResolverChain;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.*;
 import java.util.Base64;
 
@@ -16,7 +14,10 @@ import java.util.Base64;
 public class GltfExporter {
     private final ResolverChain resolvers;
     private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
-    private final ByteArrayOutputStream bin = new ByteArrayOutputStream();
+    // Welding and vertex buffers are bounded independently of object size.
+    // Splitting a material into primitives preserves mesh/node identity and UVs.
+    private static final int MAX_QUADS_PER_PRIMITIVE = 4096;
+    private GltfBinaryWriter bin;
 
     private final List<JsonObject> accessors = new ArrayList<>();
     private final List<JsonObject> bufferViews = new ArrayList<>();
@@ -42,11 +43,29 @@ public class GltfExporter {
         ObjExporter.ProgressCallback progress
     ) throws IOException {
         if (outputFile.getParentFile() != null) outputFile.getParentFile().mkdirs();
+        String outputName = outputFile.getName();
+        File binFile = new File(outputFile.getParent(), outputName.replaceFirst("(?i)\\.gltf$", ".bin"));
+        try (GltfBinaryWriter output = new GltfBinaryWriter(binFile)) {
+            bin = output;
+            return exportWithBinary(blocks, builder, outputFile, binFile, mode, optimize, progress);
+        } finally {
+            bin = null;
+        }
+    }
+
+    private ObjExporter.ExportStats exportWithBinary(
+        List<BlockData> blocks,
+        GeometryBuilder builder,
+        File outputFile,
+        File binFile,
+        ObjExporter.ExportMode mode,
+        boolean optimize,
+        ObjExporter.ProgressCallback progress
+    ) throws IOException {
         FlatterMetadataExporter.resetForExport(outputFile);
 
         String outputName = outputFile.getName();
         String objectName = safeObjectName(outputName.replaceFirst("(?i)\\.gltf$", ""));
-        File binFile = new File(outputFile.getParent(), outputName.replaceFirst("(?i)\\.gltf$", ".bin"));
 
         float[] center = BlockGrouper.boundingBoxCenter(blocks);
         Map<BlockData,String> groupedIds = mode == ObjExporter.ExportMode.GROUPED_BY_TYPE
@@ -213,10 +232,8 @@ public class GltfExporter {
         rootExtras.add("minesport", minesportExtras);
         rootNode.add("extras", rootExtras);
 
-        byte[] binData = bin.toByteArray();
-        try (FileOutputStream fos = new FileOutputStream(binFile)) {
-            fos.write(binData);
-        }
+        // Complete buffered binary writes before publishing its JSON description.
+        bin.flush();
 
         JsonObject root = new JsonObject();
         JsonObject asset = new JsonObject();
@@ -254,7 +271,7 @@ public class GltfExporter {
         JsonArray buffers = new JsonArray();
         JsonObject buffer = new JsonObject();
         buffer.addProperty("uri", binFile.getName());
-        buffer.addProperty("byteLength", binData.length);
+        buffer.addProperty("byteLength", bin.size());
         buffers.add(buffer);
         root.add("buffers", buffers);
 
@@ -298,15 +315,21 @@ public class GltfExporter {
         JsonArray primitives = new JsonArray();
         int vertices = 0;
         for (var textureEntry : byTexture.entrySet()) {
-            PrimitiveResult primitive = buildPrimitive(
-                textureEntry.getValue(),
-                textureEntry.getKey(),
-                center,
-                optimize
-            );
-            if (primitive == null) continue;
-            primitives.add(primitive.primitive());
-            vertices += primitive.vertexCount();
+            List<Quad> materialQuads = textureEntry.getValue();
+            for (int start = 0; start < materialQuads.size();) {
+                int end = start + Math.min(MAX_QUADS_PER_PRIMITIVE, materialQuads.size() - start);
+                PrimitiveResult primitive = buildPrimitive(
+                    materialQuads.subList(start, end),
+                    textureEntry.getKey(),
+                    center,
+                    optimize
+                );
+                if (primitive != null) {
+                    primitives.add(primitive.primitive());
+                    vertices += primitive.vertexCount();
+                }
+                start = end;
+            }
         }
 
         if (primitives.size() == 0) return null;
@@ -342,11 +365,11 @@ public class GltfExporter {
                 float u = quadUvs[i][0];
                 float v = quadUvs[i][1];
 
-                String key = String.format(
+                String key = weld ? String.format(
                     Locale.ROOT,
                     "%.6f|%.6f|%.6f|%.4f|%.4f|%.4f|%.6f|%.6f",
                     x, y, z, normal[0], normal[1], normal[2], u, v
-                );
+                ) : null;
 
                 Integer existing = weld ? vertexMap.get(key) : null;
                 if (existing != null) {
@@ -515,24 +538,21 @@ public class GltfExporter {
         return false;
     }
 
-    private int writeVec3(List<float[]> values, boolean position) {
-        pad4();
-        int offset = bin.size();
-        ByteBuffer buffer = ByteBuffer.allocate(values.size() * 12).order(ByteOrder.LITTLE_ENDIAN);
+    private int writeVec3(List<float[]> values, boolean position) throws IOException {
+        bin.pad4();
+        long offset = bin.size();
         float[] min = {Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE};
         float[] max = {-Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE};
 
         for (float[] value : values) {
             for (int i = 0; i < 3; i++) {
-                buffer.putFloat(value[i]);
+                bin.writeFloat(value[i]);
                 min[i] = Math.min(min[i], value[i]);
                 max[i] = Math.max(max[i], value[i]);
             }
         }
 
-        byte[] bytes = buffer.array();
-        writeBytes(bytes);
-        int view = addView(offset, bytes.length, 34962);
+        int view = addView(offset, values.size() * 12L, 34962);
 
         JsonObject accessor = new JsonObject();
         accessor.addProperty("bufferView", view);
@@ -553,18 +573,15 @@ public class GltfExporter {
         return accessors.size() - 1;
     }
 
-    private int writeVec2(List<float[]> values) {
-        pad4();
-        int offset = bin.size();
-        ByteBuffer buffer = ByteBuffer.allocate(values.size() * 8).order(ByteOrder.LITTLE_ENDIAN);
+    private int writeVec2(List<float[]> values) throws IOException {
+        bin.pad4();
+        long offset = bin.size();
         for (float[] value : values) {
-            buffer.putFloat(value[0]);
-            buffer.putFloat(value[1]);
+            bin.writeFloat(value[0]);
+            bin.writeFloat(value[1]);
         }
 
-        byte[] bytes = buffer.array();
-        writeBytes(bytes);
-        int view = addView(offset, bytes.length, 34962);
+        int view = addView(offset, values.size() * 8L, 34962);
 
         JsonObject accessor = new JsonObject();
         accessor.addProperty("bufferView", view);
@@ -575,15 +592,12 @@ public class GltfExporter {
         return accessors.size() - 1;
     }
 
-    private int writeIndices(List<Integer> values) {
-        pad4();
-        int offset = bin.size();
-        ByteBuffer buffer = ByteBuffer.allocate(values.size() * 4).order(ByteOrder.LITTLE_ENDIAN);
-        for (int value : values) buffer.putInt(value);
+    private int writeIndices(List<Integer> values) throws IOException {
+        bin.pad4();
+        long offset = bin.size();
+        for (int value : values) bin.writeInt(value);
 
-        byte[] bytes = buffer.array();
-        writeBytes(bytes);
-        int view = addView(offset, bytes.length, 34963);
+        int view = addView(offset, values.size() * 4L, 34963);
 
         JsonObject accessor = new JsonObject();
         accessor.addProperty("bufferView", view);
@@ -594,7 +608,7 @@ public class GltfExporter {
         return accessors.size() - 1;
     }
 
-    private int addView(int offset, int length, int target) {
+    private int addView(long offset, long length, int target) {
         JsonObject view = new JsonObject();
         view.addProperty("buffer", 0);
         view.addProperty("byteOffset", offset);
@@ -604,17 +618,10 @@ public class GltfExporter {
         return bufferViews.size() - 1;
     }
 
-    private void writeBytes(byte[] bytes) {
-        bin.writeBytes(bytes);
-    }
-
-    private void pad4() {
-        while ((bin.size() & 3) != 0) bin.write(0);
-    }
-
     private static JsonArray toArray(List<JsonObject> list) {
         JsonArray array = new JsonArray();
         for (JsonObject object : list) array.add(object);
         return array;
     }
 }
+
