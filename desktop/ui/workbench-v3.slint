@@ -1,63 +1,22 @@
-import { Button, CheckBox, ComboBox, LineEdit, ProgressIndicator, ScrollView, SpinBox } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, Palette, ProgressIndicator, ScrollView, SpinBox } from "std-widgets.slint";
 import { AssetEditor } from "asset-editor.slint";
 import { MinesportLoader } from "minesport-loader.slint";
 
-// Rust/Slint recreation of the final Fyne V3 workbench. Keep this file focused
-// on parity with archive/go-fyne-ui/ui/workbench_v3.go + workbench_v2.go.
-component RailButton inherits Rectangle {
-    in property <string> glyph;
+// Fixed-height actions do not absorb spare vertical space in short panels.
+component ActionButton inherits Button {
+    height: 36px;
+}
+
+// Labeled standard buttons keep navigation discoverable, keyboard-focusable,
+// and exposed to accessibility APIs without custom mouse-only hit targets.
+component RailButton inherits Button {
     in property <string> tip;
     in property <bool> active;
-    callback clicked();
-    width: 48px;
-    height: 48px;
-    background: active ? #1b2b22 : hit.has-hover ? #1b2020 : transparent;
-    border-width: active ? 2px : 0px;
-    border-color: #4e8a3a;
-
-    if root.tip == "World": Image {
-        x: 12px; y: 12px; width: 24px; height: 24px;
-        source: @image-url("../assets/fyne-theme-icons/folder-open.svg");
-        image-fit: contain;
-        colorize: root.active ? #f2f5f1 : #939d98;
-    }
-    if root.tip == "Export": Image {
-        x: 12px; y: 12px; width: 24px; height: 24px;
-        source: @image-url("../assets/fyne-theme-icons/download.svg");
-        image-fit: contain;
-        colorize: root.active ? #f2f5f1 : #939d98;
-    }
-    if root.tip == "Blender": Image {
-        x: 12px; y: 12px; width: 24px; height: 24px;
-        source: @image-url("../assets/fyne-theme-icons/media-video.svg");
-        image-fit: contain;
-        colorize: root.active ? #f2f5f1 : #939d98;
-    }
-    if root.tip == "Tasks": Image {
-        x: 12px; y: 12px; width: 24px; height: 24px;
-        source: @image-url("../assets/fyne-theme-icons/history.svg");
-        image-fit: contain;
-        colorize: root.active ? #f2f5f1 : #939d98;
-    }
-    if root.tip == "Settings": Image {
-        x: 12px; y: 12px; width: 24px; height: 24px;
-        source: @image-url("../assets/fyne-theme-icons/settings.svg");
-        image-fit: contain;
-        colorize: root.active ? #f2f5f1 : #939d98;
-    }
-    if root.tip != "World" && root.tip != "Export" && root.tip != "Blender" && root.tip != "Tasks" && root.tip != "Settings": Text {
-        text: root.glyph;
-        color: root.active ? #f2f5f1 : #939d98;
-        font-size: 18px;
-        font-weight: root.active ? 700 : 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-    hit := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-        Tooltip { text: @markdown("\{root.tip}"); }
-    }
+    width: 88px;
+    height: 44px;
+    text: root.tip;
+    checkable: true;
+    checked: root.active;
 }
 
 component SectionTitle inherits Text {
@@ -71,9 +30,8 @@ component SectionTitle inherits Text {
 }
 
 component HintText inherits Text {
-    color: #9aa39e;
-    font-size: 12px;
-    font-italic: true;
+    color: #b3bdb7;
+    font-size: 13px;
     wrap: word-wrap;
 }
 
@@ -87,6 +45,7 @@ component Surface inherits Rectangle {
 component WorldMapView inherits Rectangle {
     in property <image> source;
     in property <bool> available;
+    in property <bool> pan-mode: false;
     in-out property <int> map-min-x;
     in-out property <int> map-min-z;
     in-out property <int> map-max-x;
@@ -106,6 +65,7 @@ component WorldMapView inherits Rectangle {
     private property <length> offset-x: 0px;
     private property <length> offset-y: 0px;
     private property <bool> panning: false;
+    private property <bool> pan-with-left: false;
     private property <bool> dragging: false;
     private property <length> pan-start-x: 0px;
     private property <length> pan-start-y: 0px;
@@ -202,7 +162,10 @@ component WorldMapView inherits Rectangle {
     }
 
     changed source => { root.fit(); }
-    changed available => { if (root.available) { root.fit(); } }
+    changed available => {
+        if (root.available) { root.fit(); }
+        else { root.panning = false; root.dragging = false; root.pan-dirty = false; }
+    }
 
     pan-frame := Timer {
         interval: 16ms;
@@ -228,10 +191,11 @@ component WorldMapView inherits Rectangle {
 
     map-touch := TouchArea {
         enabled: root.available;
-        mouse-cursor: root.panning ? grabbing : crosshair;
+        mouse-cursor: root.panning ? grabbing : root.pan-mode ? grab : crosshair;
         pointer-event(event) => {
-            if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.down) {
+            if ((event.button == PointerEventButton.middle || (root.pan-mode && event.button == PointerEventButton.left)) && event.kind == PointerEventKind.down) {
                 root.panning = true;
+                root.pan-with-left = event.button == PointerEventButton.left;
                 root.pan-start-x = self.mouse-x;
                 root.pan-start-y = self.mouse-y;
                 root.pan-latest-x = self.mouse-x;
@@ -249,7 +213,7 @@ component WorldMapView inherits Rectangle {
                     root.pan-dirty = true;
                     return;
                 }
-                if (event.button == PointerEventButton.middle && (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel)) {
+                if (event.kind == PointerEventKind.cancel || (event.kind == PointerEventKind.up && (root.pan-with-left ? event.button == PointerEventButton.left : event.button == PointerEventButton.middle))) {
                     root.pan-latest-x = self.mouse-x;
                     root.pan-latest-y = self.mouse-y;
                     root.pan-dirty = true;
@@ -343,16 +307,28 @@ export component MainWindow inherits Window {
     title: "Minesport — by Kastrick";
     preferred-width: 1280px;
     preferred-height: 800px;
-    min-width: 1060px;
-    min-height: 680px;
+    min-width: 960px;
+    min-height: 640px;
     background: #0d0f10;
     forward-focus: app-focus;
+    init => { Palette.color-scheme = ColorScheme.dark; }
 
     in-out property <int> active-activity: 0;
     in-out property <int> settings-page: 0;
     in-out property <int> viewport-mode: 0;
     in-out property <bool> settings-visible: false;
     in-out property <bool> debug-console-visible: false;
+    private property <bool> coordinates-visible: false;
+    private property <bool> export-details-visible: false;
+    private property <bool> advanced-settings-visible: false;
+    private property <bool> controls-visible: false;
+    private property <bool> map-pan-mode: false;
+    private property <bool> world-selected: root.world-path != "No world selected";
+    private property <bool> can-export: root.engine-ready && !root.foreground-busy && root.world-selected;
+    // Floating point multiplication avoids overflow for large world bounds.
+    private property <float> selection-volume: root.selection-mode == 0
+        ? (abs(root.max-x - root.min-x) + 1.0) * (abs(root.max-y - root.min-y) + 1.0) * (abs(root.max-z - root.min-z) + 1.0)
+        : (root.radius-x * 2.0 + 1.0) * (root.radius-y * 2.0 + 1.0) * (root.radius-z * 2.0 + 1.0);
 
     in-out property <string> world-path: "No world selected";
     in-out property <string> world-name: "No world selected";
@@ -426,6 +402,11 @@ export component MainWindow inherits Window {
     in-out property <float> task-progress: 0.0;
     in-out property <bool> task-active: false;
     private property <bool> foreground-busy: root.task-active || root.runtime-cache-busy;
+    private property <bool> task-failed: root.task-title == "ENGINE ERROR" || root.task-title == "INVALID WORLD"
+        || root.task-title == "MAP FAILED" || root.task-title == "EXPORT FAILED" || root.task-title == "EXPORT BLOCKED"
+        || root.task-title == "PREFLIGHT FAILED" || root.task-title == "3D PREVIEW FAILED"
+        || root.task-title == "RUNTIME CACHE FAILED" || root.task-title == "ENGINE OPERATION FAILED"
+        || root.task-title == "BLENDER INSTALL FAILED" || root.task-title == "CACHE CLEANUP FAILED";
     in-out property <bool> task-completing: false;
     in-out property <string> task-completion-detail: "";
     in-out property <string> diagnostics: "Minesport Rust/Slint desktop initialized.";
@@ -473,10 +454,17 @@ export component MainWindow inherits Window {
 
     app-focus := FocusScope {
         capture-key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                if (root.blender-prompt-visible) { root.blender-prompt-later(); return accept; }
+                if (root.settings-visible) { root.settings-visible = false; return accept; }
+                if (root.docs-visible) { root.docs-visible = false; return accept; }
+                if (root.controls-visible) { root.controls-visible = false; return accept; }
+            }
             if (root.blender-prompt-visible || root.settings-visible) {
                 return reject;
             }
-            if (root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
+            // Do not consume C/E/F while a text field or coordinate editor owns focus.
+            if (app-focus.has-focus && root.viewport-mode == 1 && root.preview-available && !root.preview-loading) {
                 if (event.text == "c" || event.text == "C") {
                     root.preview-clear();
                     return accept;
@@ -524,16 +512,33 @@ export component MainWindow inherits Window {
                     cross-axis-alignment: center;
                     Text { text: "MINESPORT"; color: #f2f4f1; font-size: 17px; font-weight: 700; vertical-alignment: center; }
                     Rectangle { width: 1px; height: 26px; background: #444946; }
-                    Text { text: "Minecraft world → production workbench"; color: #aab1ad; font-size: 12px; vertical-alignment: center; }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                     Text {
-                        text: root.world-path == "No world selected" ? "World workbench" : root.world-name + "  ·  " + root.minecraft-version + "  ·  " + root.loader-type;
+                        text: !root.world-selected ? "Minecraft → Blender & beyond" : root.world-name + "  ·  " + root.minecraft-version + "  ·  " + root.loader-type;
                         color: #b9c1bc;
                         font-size: 12px;
                         vertical-alignment: center;
                         overflow: elide;
+                        min-width: 0px;
                         max-width: 540px;
                     }
+                    ActionButton { text: "Help"; clicked => { root.open-docs(); } }
+                }
+            }
+
+            Rectangle {
+                height: 58px;
+                background: #111a17;
+                HorizontalLayout {
+                    padding: 10px;
+                    spacing: 10px;
+                    cross-axis-alignment: center;
+                    ActionButton { text: "1 · Open world"; enabled: !root.foreground-busy; clicked => { root.active-activity = 0; root.pick-world(); } }
+                    Text { text: "→"; color: #91b491; }
+                    ActionButton { text: "2 · Select area"; checkable: true; checked: root.active-activity == 0 && root.world-selected; enabled: root.world-selected; clicked => { root.active-activity = 0; } }
+                    Text { text: "→"; color: #91b491; }
+                    ActionButton { text: "3 · Export"; checkable: true; checked: root.active-activity == 1; enabled: root.world-selected; clicked => { root.active-activity = 1; } }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
                 }
             }
 
@@ -542,23 +547,22 @@ export component MainWindow inherits Window {
                 vertical-stretch: 1;
 
                 Rectangle {
-                    width: 58px;
+                    width: 104px;
                     background: #0e1010;
                     VerticalLayout {
-                        padding-left: 5px;
-                        padding-right: 5px;
-                        spacing: 0px;
+                        padding: 8px;
+                        spacing: 8px;
                         Rectangle {
                             height: 44px;
                             background: transparent;
                             Text { text: "M"; color: #dce2dd; font-size: 16px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                         }
-                        RailButton { glyph: "▣"; tip: "World"; active: root.active-activity == 0; clicked => { root.active-activity = 0; } }
-                        RailButton { glyph: "⇩"; tip: "Export"; active: root.active-activity == 1; clicked => { root.active-activity = 1; } }
-                        RailButton { glyph: "◆"; tip: "Blender"; active: root.active-activity == 2; clicked => { root.active-activity = 2; } }
-                        RailButton { glyph: "◷"; tip: "Tasks"; active: root.active-activity == 3; clicked => { root.active-activity = 3; } }
+                        RailButton { tip: "World"; active: root.active-activity == 0; clicked => { root.active-activity = 0; } }
+                        RailButton { tip: "Export"; active: root.active-activity == 1; clicked => { root.active-activity = 1; } }
+                        RailButton { tip: "Blender"; active: root.active-activity == 2; clicked => { root.active-activity = 2; } }
+                        RailButton { tip: "Activity"; active: root.active-activity == 3; clicked => { root.active-activity = 3; } }
                         Rectangle { vertical-stretch: 1; background: transparent; }
-                        RailButton { glyph: "⚙"; tip: "Settings"; active: root.settings-visible; clicked => { root.settings-visible = true; } }
+                        RailButton { tip: "Settings"; active: root.settings-visible; clicked => { root.settings-visible = true; } }
                     }
                 }
 
@@ -580,34 +584,47 @@ export component MainWindow inherits Window {
                                 padding-left: 14px;
                                 padding-right: 8px;
                                 Text {
-                                    text: root.active-activity == 0 ? "WORLD" : root.active-activity == 1 ? "EXPORT" : root.active-activity == 2 ? "BLENDER" : "TASKS";
+                                    text: root.active-activity == 0 ? "World & selection" : root.active-activity == 1 ? "Export setup" : root.active-activity == 2 ? "Blender" : "Activity";
                                     color: #e3e7e4;
                                     font-size: 13px;
                                     font-weight: 700;
                                     vertical-alignment: center;
                                 }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                                Button { text: "•••"; width: 44px; clicked => { root.settings-visible = true; root.settings-page = 3; } }
+                                ActionButton { text: "Help"; clicked => { root.open-docs(); } }
                             }
                         }
 
                         if root.active-activity == 0: ScrollView {
                             VerticalLayout {
+                                alignment: start;
                                 padding: 14px;
                                 spacing: 10px;
                                 Text { text: root.world-name; color: #eef0ee; font-size: 16px; font-weight: 700; overflow: elide; }
-                                Text { text: root.world-path; color: #aab2ad; font-size: 12px; wrap: word-wrap; }
-                                Text { text: root.minecraft-version + "  ·  " + root.loader-type; color: #91b491; font-size: 12px; }
-                                Button { text: "Open Minecraft world…"; primary: true; clicked => { root.pick-world(); } }
+                                if root.world-selected: Text { text: root.world-path; color: #aab2ad; font-size: 12px; wrap: word-wrap; }
+                                if root.world-selected: Text { text: root.minecraft-version + "  ·  " + root.loader-type; color: #91b491; font-size: 12px; }
+                                ActionButton { text: root.world-selected ? "Change world…" : "Open Minecraft world…"; primary: !root.world-selected; enabled: !root.foreground-busy; clicked => { root.pick-world(); } }
+                                if !root.world-selected: HintText { text: "Choose a saved world from your launcher, or browse to a world folder. Then select just the area you need."; }
+                                if root.world-selected: VerticalLayout {
+                                spacing: 10px;
                                 SectionTitle { label: "SELECTION"; }
                                 ComboBox { model: ["Box selection", "Bubble selection"]; current-index <=> root.selection-mode; }
-                                if root.selection-mode == 0: VerticalLayout {
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    ActionButton { text: "Select area"; checkable: true; checked: !root.map-pan-mode; clicked => { root.map-pan-mode = false; } }
+                                    ActionButton { text: "Pan map"; checkable: true; checked: root.map-pan-mode; clicked => { root.map-pan-mode = true; } }
+                                }
+                                HintText { text: root.map-pan-mode ? "Drag with the left mouse button to move the map. Switch to Select area when you're ready." : root.selection-mode == 0 ? "Drag on the 2D map to select an area. Use 3D preview to inspect it." : "Click the map to place the bubble. Enter coordinates to adjust its height and radius."; }
+                                Text { text: root.selection-mode == 0 ? "Size: " + (abs(root.max-x - root.min-x) + 1) + " × " + (abs(root.max-y - root.min-y) + 1) + " × " + (abs(root.max-z - root.min-z) + 1) + " blocks" : "Radius: " + root.radius-x + " × " + root.radius-y + " × " + root.radius-z + " blocks"; color: #e3e7e4; font-size: 14px; font-weight: 700; wrap: word-wrap; }
+                                if root.selection-volume > 16000000: HintText { color: #efcc8a; text: "Large selection. Start with a smaller area for a quicker export, especially on older computers."; }
+                                CheckBox { text: "Enter coordinates"; checked <=> root.coordinates-visible; }
+                                if root.coordinates-visible && root.selection-mode == 0: VerticalLayout {
                                     spacing: 7px;
                                     HorizontalLayout { spacing: 6px; Text { width: 30px; text: "X"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-x; } Text { text: "→"; color: #858d88; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-x; } }
                                     HorizontalLayout { spacing: 6px; Text { width: 30px; text: "Y"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.min-y; } Text { text: "→"; color: #858d88; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.max-y; } }
                                     HorizontalLayout { spacing: 6px; Text { width: 30px; text: "Z"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.min-z; } Text { text: "→"; color: #858d88; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.max-z; } }
                                 }
-                                if root.selection-mode == 1: VerticalLayout {
+                                if root.coordinates-visible && root.selection-mode == 1: VerticalLayout {
                                     spacing: 7px;
                                     HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Center X"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -30000000; maximum: 30000000; value <=> root.center-x; } }
                                     HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Center Y"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: -2048; maximum: 4096; value <=> root.center-y; } }
@@ -617,24 +634,27 @@ export component MainWindow inherits Window {
                                     HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Y"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 4096; value <=> root.radius-y; } }
                                     HorizontalLayout { spacing: 6px; Text { width: 70px; text: "Radius Z"; color: #aab2ad; font-size: 12px; vertical-alignment: center; } SpinBox { horizontal-stretch: 1; minimum: 1; maximum: 30000000; value <=> root.radius-z; } }
                                 }
-                                Button { text: "Use world bounds"; enabled: root.map-available; clicked => { root.min-x = root.map-min-x; root.max-x = root.map-max-x - 1; root.min-z = root.map-min-z; root.max-z = root.map-max-z - 1; } }
-                                HintText { text: "Selection stays editable while maps and exports run in the background."; }
+                                if root.selection-mode == 0: ActionButton { text: "Use world bounds"; enabled: root.map-available; clicked => { root.min-x = root.map-min-x; root.max-x = root.map-max-x - 1; root.min-z = root.map-min-z; root.max-z = root.map-max-z - 1; } }
+                                HintText { text: "Only the selected area is exported. You can adjust it again before exporting."; }
+                                ActionButton { text: "Next · Export setup"; primary: true; clicked => { root.active-activity = 1; } }
                                 if root.export-format-index < 2: VerticalLayout {
                                     spacing: 8px;
-                                    SectionTitle { label: "RUNTIME REGISTRY"; }
+                                    SectionTitle { label: "MODEL PREPARATION"; }
                                     Text { text: root.runtime-cache-status; color: root.runtime-cache-busy ? #dfc27d : #9bb9a0; font-size: 12px; wrap: word-wrap; }
-                                    if root.runtime-cache-busy: Button { text: "Cancel preparation"; clicked => { root.cancel-runtime-cache(); } }
+                                    if root.runtime-cache-busy: ActionButton { text: "Cancel preparation"; clicked => { root.cancel-runtime-cache(); } }
+                                }
                                 }
                             }
                         }
 
                         if root.active-activity == 1: ScrollView {
                             VerticalLayout {
+                                alignment: start;
                                 padding: 14px;
                                 spacing: 10px;
-                                SectionTitle { label: "PRESET"; }
+                                SectionTitle { label: "START WITH A PRESET"; }
                                 ComboBox {
-                                    model: ["Custom", "Blender Animation", "Blender Lightweight", "Raw Minecraft", "Modded Accurate"];
+                                    model: ["Your current settings", "Blender · Animation", "Blender · Lightweight", "Minecraft · Unoptimized", "Modded · Accuracy"];
                                     current-index <=> root.export-preset-index;
                                     selected(index) => {
                                         if (index == 1) { root.export-format-index = 0; root.export-mode-index = 1; root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.blender-export = true; }
@@ -644,13 +664,14 @@ export component MainWindow inherits Window {
                                         if (index > 0) { root.settings-changed(); }
                                     }
                                 }
-                                HintText { text: "Presets configure the current export controls; Advanced contains diagnostics and manual cache tools."; }
+                                HintText { text: root.export-preset-index == 1 ? "Keeps blocks separate for animation in Blender." : root.export-preset-index == 2 ? "Groups geometry and removes hidden blocks for a smaller Blender scene. Inspect the result: hidden-block culling is experimental." : root.export-preset-index == 3 ? "Keeps individual blocks without mesh optimization or Blender processing." : root.export-preset-index == 4 ? "Uses detailed mod geometry without mesh simplification." : "Use your saved settings, or choose a preset above."; }
                                 SectionTitle { label: "EXPORT"; }
                                 Text { text: "Name"; color: #aab2ad; font-size: 12px; }
                                 LineEdit { text <=> root.export-name; accepted(_) => { root.settings-changed(); } }
                                 Text { text: "Export as"; color: #aab2ad; font-size: 12px; }
-                                ComboBox { model: ["glTF (.gltf)", "OBJ (.obj)", "Litematica (.litematic)"]; current-index <=> root.export-format-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
-                                if root.export-format-index < 2: VerticalLayout {
+                                ComboBox { model: ["glTF · Blender & 3D tools", "OBJ · Other 3D tools", "Litematica · Minecraft schematic"]; current-index <=> root.export-format-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
+                                if root.export-format-index < 2: CheckBox { text: "Customize mesh settings"; checked <=> root.export-details-visible; }
+                                if root.export-format-index < 2 && root.export-details-visible: VerticalLayout {
                                     spacing: 10px;
                                     Text { text: "Objects"; color: #aab2ad; font-size: 12px; }
                                     ComboBox { model: ["Grouped", "Individual blocks", "Merged"]; current-index <=> root.export-mode-index; selected(_) => { root.settings-changed(); root.export-preset-index = 0; } }
@@ -658,20 +679,33 @@ export component MainWindow inherits Window {
                                 }
                                 SectionTitle { label: "OUTPUT"; }
                                 Text { text: root.output-path == "" ? "~/Minesport_Exports" : root.output-path; color: #a7b0aa; font-size: 12px; wrap: word-wrap; }
-                                Button { text: "Choose output folder…"; clicked => { root.pick-output(); } }
-                                if root.export-format-index < 2: VerticalLayout {
+                                ActionButton { text: "Choose output folder…"; clicked => { root.pick-output(); } }
+                                if root.export-format-index < 2 && root.export-details-visible: VerticalLayout {
                                     spacing: 10px;
                                     SectionTitle { label: "OPTIMIZATION"; }
                                     Text { text: "Optimization: face culling " + (root.face-culling ? "ON" : "OFF") + " · FLATTER " + (root.flatter-enabled ? "ON" : "OFF") + " · hidden culling " + (root.hidden-culling ? "ON" : "OFF"); color: #b6beb9; font-size: 12px; wrap: word-wrap; }
-                                    Button { text: "Apply safe optimization"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.export-preset-index = 0; root.settings-changed(); } }
+                                    ActionButton { text: "Apply safe optimization"; clicked => { root.optimize = true; root.face-culling = true; root.flatter-enabled = true; root.hidden-culling = false; root.export-preset-index = 0; root.settings-changed(); } }
                                 }
-                                Button { text: root.task-active ? "Working…" : "Export world"; primary: true; enabled: root.engine-ready && !root.foreground-busy && root.world-path != "No world selected"; clicked => { root.export-requested(); } }
-                                HintText { text: root.export-format-index == 2 ? "Litematica exports Minecraft block states directly. 3D geometry, runtime model resolution and Blender translation are skipped." : "3D export automatically prepares a matching runtime-model cache when needed. Progress appears only while work is active."; }
+                                ActionButton { text: root.task-completing ? "Finishing export…" : root.foreground-busy ? "Working…" : "Export selected area"; primary: true; enabled: root.can-export; clicked => { root.export-requested(); } }
+                                if !root.can-export: HintText { text: !root.world-selected ? "Open a world first, then select an area to export." : !root.engine-ready ? "Waiting for the export engine. Open Activity if startup needs attention." : root.runtime-cache-busy ? "Preparing model data. Export becomes available when preparation finishes." : "Another task is running. You can continue adjusting your export settings."; }
+                                HintText { text: root.export-format-index == 2 ? "Saves block states as a Minecraft schematic. No 3D model preparation is needed." : "Minesport prepares any missing model data automatically. Your original save is never edited."; }
+                                if root.task-title == "EXPORT COMPLETE": VerticalLayout {
+                                    spacing: 8px;
+                                    SectionTitle { label: "EXPORT SAVED"; }
+                                    Text { text: root.task-completion-detail; color: #bddbc5; font-size: 13px; wrap: word-wrap; }
+                                }
+                                if root.task-failed: VerticalLayout {
+                                    spacing: 8px;
+                                    Text { text: "Something needs attention"; color: #efcc8a; font-size: 14px; font-weight: 700; }
+                                    Text { text: root.task-detail; color: #e3c7ad; font-size: 13px; wrap: word-wrap; }
+                                    ActionButton { text: "View details in Activity"; clicked => { root.active-activity = 3; } }
+                                }
                             }
                         }
 
                         if root.active-activity == 2: ScrollView {
                             VerticalLayout {
+                                alignment: start;
                                 padding: 14px;
                                 spacing: 10px;
                                 SectionTitle { label: "WORLD INSPECTOR · BLENDER"; }
@@ -686,7 +720,7 @@ export component MainWindow inherits Window {
                                         Text { width: 18px; text: root.blender-translator-current ? "✓" : "✕"; color: root.blender-translator-current ? #8fc69b : #d39191; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                         Text { horizontal-stretch: 1; text: root.blender-translator-status; color: #b6beb9; font-size: 12px; vertical-alignment: center; overflow: elide; }
                                     }
-                                    Button { text: "Install / repair Minesport translator"; enabled: !root.foreground-busy; clicked => { root.install-blender-translator(); } }
+                                    ActionButton { text: "Install / repair Minesport translator"; enabled: !root.foreground-busy; clicked => { root.install-blender-translator(); } }
                                     HintText { text: "Animate export prepares dynamic state descriptors plus animated textures. Animate static preserves interactable world state while keeping continuously animated textures."; }
                                     HintText { text: "For OBJ, use Minesport's Blender translator import path. Blender's stock Wavefront importer bypasses Minesport metadata."; }
                                 }
@@ -695,19 +729,20 @@ export component MainWindow inherits Window {
 
                         if root.active-activity == 3: ScrollView {
                             VerticalLayout {
+                                alignment: start;
                                 padding: 14px;
                                 spacing: 10px;
                                 SectionTitle { label: "TASKS & DIAGNOSTICS"; }
-                                HintText { text: "Background work stays non-modal. A compact activity indicator appears only while a task is actually running."; }
+                                HintText { text: "See what Minesport is doing and check details if something goes wrong."; }
                                 SectionTitle { label: "ENGINE"; }
                                 Text { text: root.engine-status; color: root.engine-ready ? #8fc69b : #d39191; font-size: 13px; font-weight: 700; }
                                 SectionTitle { label: "ACTIVE TASK"; }
-                                Text { text: root.task-active ? root.task-title : "IDLE"; color: #e3e7e4; font-size: 14px; font-weight: 700; }
-                                Text { text: root.task-active ? root.task-detail : "No active task"; color: #a7b0aa; font-size: 12px; wrap: word-wrap; }
+                                Text { text: root.task-title; color: root.task-failed ? #efcc8a : #e3e7e4; font-size: 14px; font-weight: 700; }
+                                Text { text: root.task-detail; color: #b3bdb7; font-size: 13px; wrap: word-wrap; }
                                 if root.task-active: ProgressIndicator { progress: root.task-progress; }
                                 SectionTitle { label: "RUNTIME REGISTRY"; }
                                 Text { text: root.runtime-cache-status; color: #acb5af; font-size: 12px; wrap: word-wrap; }
-                                if root.runtime-cache-busy: Button { text: "Cancel runtime worker"; clicked => { root.cancel-runtime-cache(); } }
+                                if root.runtime-cache-busy: ActionButton { text: "Cancel runtime worker"; clicked => { root.cancel-runtime-cache(); } }
                                 SectionTitle { label: "DIAGNOSTICS"; }
                                 Surface {
                                     height: 320px;
@@ -732,11 +767,12 @@ export component MainWindow inherits Window {
                                 padding-left: 12px;
                                 padding-right: 10px;
                                 spacing: 8px;
-                                Text { text: root.viewport-mode == 0 ? "LMB select · MMB pan · scroll zoom · F6 fit" : "LMB A · RMB B · LMB confirm · MMB look · Shift+MMB pan · scroll dolly · E+scroll resize · C clear · F/F6 fit"; color: #adb5b0; font-size: 11px; vertical-alignment: center; }
+                                Text { text: root.viewport-mode == 0 ? (root.map-pan-mode ? "Drag to pan · Scroll to zoom" : "Drag to select · Scroll to zoom") : "Select two corners to choose an area"; color: #b3bdb7; font-size: 12px; vertical-alignment: center; overflow: elide; min-width: 0px; horizontal-stretch: 1; }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                                Button { text: "2D"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
-                                Button { text: "3D"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-path != "No world selected"; clicked => { root.viewport-mode = 1; root.open-3d(); } }
-                                Button {
+                                ActionButton { text: "Controls"; checkable: true; checked: root.controls-visible; clicked => { root.controls-visible = !root.controls-visible; } }
+                                ActionButton { text: "2D map"; checkable: true; checked: root.viewport-mode == 0; clicked => { root.viewport-mode = 0; } }
+                                ActionButton { text: "3D preview"; checkable: true; checked: root.viewport-mode == 1; enabled: root.world-selected && !root.foreground-busy; clicked => { root.viewport-mode = 1; root.open-3d(); } }
+                                ActionButton {
                                     text: "Fit";
                                     enabled: root.viewport-mode == 0 ? root.map-available : root.preview-available && !root.preview-loading;
                                     clicked => {
@@ -760,6 +796,7 @@ export component MainWindow inherits Window {
                                 visible: root.viewport-mode == 0;
                                 source: root.map-image;
                                 available: root.map-available && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible;
+                                pan-mode: root.map-pan-mode;
                                 map-min-x <=> root.map-min-x;
                                 map-min-z <=> root.map-min-z;
                                 map-max-x <=> root.map-max-x;
@@ -776,11 +813,33 @@ export component MainWindow inherits Window {
                                 cursor-label <=> root.map-cursor-label;
                             }
 
-                            if root.viewport-mode == 0 && !root.map-available && !root.map-loading: Text {
+                            if root.viewport-mode == 0 && !root.map-available && !root.map-loading: Rectangle {
                                 x: 0px; y: 0px; width: parent.width; height: parent.height;
-                                text: root.world-path == "No world selected" ? "SELECT A MINECRAFT WORLD" : "NO 2D MAP LOADED";
-                                color: #7f8984; font-size: 18px; font-weight: 700;
-                                horizontal-alignment: center; vertical-alignment: center;
+                                background: #0f1715;
+                                Rectangle {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    width: min(420px, parent.width - 48px);
+                                    height: min(300px, parent.height - 24px);
+                                    background: #18221e;
+                                    border-width: 1px;
+                                    border-color: #395044;
+                                    border-radius: 12px;
+                                    VerticalLayout {
+                                        padding: 24px;
+                                        spacing: 14px;
+                                        Text { text: "WORLD → CREATE"; color: #a4d9b2; font-size: 12px; font-weight: 700; }
+                                        Text { text: !root.world-selected ? "Bring your world\nto your next project." : "Let's load your map."; color: #eef4f0; font-size: 24px; font-weight: 700; wrap: word-wrap; }
+                                        HintText { text: !root.world-selected ? "Open a Minecraft save, select an area, and export it to Blender, other 3D tools, or Litematica." : "Reload the map to select an area. Check Activity if loading failed."; }
+                                        ActionButton {
+                                            text: !root.world-selected ? "Open a world…" : "Reload map";
+                                            primary: true;
+                                            enabled: !root.foreground-busy;
+                                            clicked => { if (!root.world-selected) { root.pick-world(); } else { root.reload-map(); } }
+                                        }
+                                        Text { text: "Your original world stays untouched."; color: #b3bdb7; font-size: 12px; wrap: word-wrap; }
+                                    }
+                                }
                             }
 
                             if root.viewport-mode == 0 && root.map-loading: Rectangle {
@@ -795,7 +854,7 @@ export component MainWindow inherits Window {
                                 active: root.map-loading;
                                 visible: root.viewport-mode == 0 && (root.map-loading || self.finishing);
                                 title: root.map-loading ? "Loading chunks…" : "Map ready";
-                                detail: root.map-loading ? "Preparing the Minecraft heightmap without blocking the workbench." : "2D map ready";
+                                detail: root.map-loading ? "Building your map. You can keep adjusting settings while it loads." : "2D map ready";
                                 determinate: false;
                                 compact: false;
                             }
@@ -813,6 +872,7 @@ export component MainWindow inherits Window {
                                     enabled: root.preview-available && !root.preview-loading && !root.docs-visible && !root.blender-prompt-visible && !root.settings-visible;
                                     mouse-cursor: self.middle-held ? grabbing : crosshair;
                                     pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.down) { app-focus.focus(); }
                                         if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                                             root.preview-pick-button = 1;
                                             root.preview-click(self.mouse-x / 1px, self.mouse-y / 1px, self.width / 1px, self.height / 1px);
@@ -861,15 +921,15 @@ export component MainWindow inherits Window {
                                     active: root.preview-loading;
                                     visible: root.preview-loading || self.finishing;
                                     title: root.preview-loading ? "Rendering 3D preview…" : "3D preview ready";
-                                    detail: root.preview-loading ? "Block parsing, voxel-ray indexing and rasterization run outside the Slint event loop." : "Preview ready";
+                                    detail: root.preview-loading ? "Preparing the selected area. Larger selections take longer." : "Preview ready";
                                     determinate: false;
                                     compact: false;
                                 }
                                 if !root.preview-available && !root.preview-loading: Rectangle {
                                     x: 0px; y: 0px; width: parent.width; height: parent.height;
                                     Text { x: 0px; y: parent.height / 2 - 56px; width: parent.width; height: 28px; text: "3D PREVIEW"; color: #b8c0bb; font-size: 20px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                                    Text { x: 0px; y: parent.height / 2 - 20px; width: parent.width; height: 24px; text: "Generate the Rust preview for the current selection."; color: #9fa8a2; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-                                    Button { x: (parent.width - 160px) / 2; y: parent.height / 2 + 18px; width: 160px; text: "Generate preview"; clicked => { root.open-3d(); } }
+                                    Text { x: 0px; y: parent.height / 2 - 20px; width: parent.width; height: 24px; text: "Inspect your selected area before exporting."; color: #b3bdb7; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+                                    ActionButton { x: (parent.width - 160px) / 2; y: parent.height / 2 + 18px; width: 160px; text: "Generate preview"; enabled: root.world-selected && !root.foreground-busy; clicked => { root.open-3d(); } }
                                 }
                                 if root.preview-available: Rectangle {
                                     x: 12px; y: 12px; width: 180px; height: 34px; border-radius: 5px; background: #101414e8; border-width: 1px; border-color: #323735;
@@ -909,6 +969,25 @@ export component MainWindow inherits Window {
                                 }
                             }
 
+                            if root.controls-visible && !root.docs-visible: Surface {
+                                x: parent.width - self.width - 12px;
+                                y: 12px;
+                                width: min(380px, parent.width - 24px);
+                                height: root.viewport-mode == 0 ? 204px : 288px;
+                                TouchArea { mouse-cursor: default; }
+                                VerticalLayout {
+                                    padding: 16px;
+                                    spacing: 10px;
+                                    HorizontalLayout {
+                                        Text { text: root.viewport-mode == 0 ? "Map controls" : "3D controls"; color: #eef4f0; font-size: 15px; font-weight: 700; vertical-alignment: center; }
+                                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                                        ActionButton { text: "Close"; clicked => { root.controls-visible = false; } }
+                                    }
+                                    HintText { text: root.viewport-mode == 0 ? "Left mouse · Select an area, or drag in Pan map mode\nMiddle mouse · Drag to pan anytime\nScroll · Zoom\nF6 · Fit the map" : "Left click · First corner; click again to confirm\nRight click · Second corner\nMiddle mouse · Drag to look around\nShift + middle mouse · Pan\nScroll · Move closer or farther\nE + scroll · Resize selection\nC · Clear selection\nF / F6 · Fit the preview"; }
+                                    Text { text: "Esc closes this guide."; color: #b3bdb7; font-size: 12px; }
+                                }
+                            }
+
                             if root.docs-visible: Rectangle {
                                 x: 0px; y: 0px; width: parent.width; height: parent.height;
                                 background: #111413f8;
@@ -922,9 +1001,9 @@ export component MainWindow inherits Window {
                                             padding-left: 14px; padding-right: 10px;
                                             Text { text: "DOCUMENTATION  ·  Page " + root.doc-page + " of " + root.doc-total + "  ·  " + root.doc-title; color: #eef0ee; font-size: 13px; font-weight: 700; vertical-alignment: center; overflow: elide; }
                                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                                            Button { text: "GitHub"; clicked => { root.docs-open-github(); } }
-                                            if root.doc-video-available: Button { text: "Video"; clicked => { root.docs-open-video(); } }
-                                            Button { text: "Close"; clicked => { root.docs-visible = false; } }
+                                            ActionButton { text: "GitHub"; clicked => { root.docs-open-github(); } }
+                                            if root.doc-video-available: ActionButton { text: "Video"; clicked => { root.docs-open-video(); } }
+                                            ActionButton { text: "Close"; clicked => { root.docs-visible = false; } }
                                         }
                                     }
                                     ScrollView { Text { x: 22px; y: 20px; width: parent.width - 44px; text: root.doc-content; color: #cbd2cd; font-size: 13px; wrap: word-wrap; } }
@@ -932,13 +1011,13 @@ export component MainWindow inherits Window {
                                         height: 54px; background: #181b19; border-width: 1px; border-color: #303532;
                                         HorizontalLayout {
                                             padding: 8px; spacing: 7px;
-                                            Button { text: "First"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(0); } }
-                                            Button { text: "Previous"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(-1); } }
+                                            ActionButton { text: "First"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(0); } }
+                                            ActionButton { text: "Previous"; enabled: root.doc-page > 1; clicked => { root.docs-navigate(-1); } }
                                             Rectangle { horizontal-stretch: 1; background: transparent; }
                                             Text { text: "Page " + root.doc-page + " of " + root.doc-total; color: #adb5b0; font-size: 12px; vertical-alignment: center; }
                                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                                            Button { text: "Next"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(1); } }
-                                            Button { text: "Last"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(2); } }
+                                            ActionButton { text: "Next"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(1); } }
+                                            ActionButton { text: "Last"; enabled: root.doc-page < root.doc-total; clicked => { root.docs-navigate(2); } }
                                         }
                                     }
                                 }
@@ -961,7 +1040,24 @@ export component MainWindow inherits Window {
                 }
             }
 
-            Rectangle { height: 3px; background: #4e8a3a; }
+            Rectangle {
+                height: 40px;
+                background: root.task-failed ? #30251b : #17221c;
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 10px;
+                    spacing: 10px;
+                    Text {
+                        text: root.task-failed ? "Needs attention · " + root.task-detail : root.foreground-busy ? root.task-detail : root.task-title == "EXPORT COMPLETE" ? "Export saved · See Export for the file details" : root.world-selected ? "Ready · " + root.world-name : "Start by opening a Minecraft world";
+                        color: root.task-failed ? #efcc8a : #c7d9cc;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    ActionButton { text: "View activity"; clicked => { root.active-activity = 3; } }
+                }
+            }
         }
 
         task-loader := MinesportLoader {
@@ -1006,32 +1102,39 @@ export component MainWindow inherits Window {
                             Text { text: "SETTINGS"; color: #f0f3f0; font-size: 16px; font-weight: 700; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             Text { text: "Changes save immediately"; color: #a5aea8; font-size: 12px; vertical-alignment: center; }
-                            Button { text: "Close"; clicked => { root.settings-visible = false; } }
+                            ActionButton { text: "Close"; clicked => { root.settings-visible = false; } }
                         }
                     }
                     ScrollView {
                         VerticalLayout {
+                            alignment: start;
                             padding: 18px;
+                            spacing: 11px;
+                            SectionTitle { label: "GENERAL"; }
+                            CheckBox { text: "Blender integration"; checked <=> root.blender-export; toggled => { root.export-preset-index = 0; root.settings-changed(); } }
+                            HintText { text: "Prepare exported models for the Minesport Blender translator. This setting is ignored for Litematica."; }
+                            ActionButton { text: "Open documentation"; clicked => { root.open-docs(); root.settings-visible = false; } }
+                            CheckBox { text: "Show advanced settings"; checked <=> root.advanced-settings-visible; }
+                            if root.advanced-settings-visible: VerticalLayout {
                             spacing: 11px;
                             if root.export-format-index == 2: HintText { text: "Litematica exports block states directly; 3D geometry and runtime-model settings are not used."; }
                             if root.export-format-index < 2: VerticalLayout {
                                 spacing: 11px;
                                 SectionTitle { label: "GEOMETRY"; }
-                            CheckBox { text: "Face culling"; checked <=> root.face-culling; toggled => { root.settings-changed(); } }
+                            CheckBox { text: "Face culling"; checked <=> root.face-culling; toggled => { root.export-preset-index = 0; root.settings-changed(); } }
                             HintText { text: "Remove a face only when neighboring geometry and its resolved texture prove that the face is fully hidden."; }
-                            CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; toggled => { root.settings-changed(); } }
-                            ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; selected(_) => { root.settings-changed(); } }
+                            CheckBox { text: "FLATTER geometry · Experimental"; checked <=> root.flatter-enabled; toggled => { root.export-preset-index = 0; root.settings-changed(); } }
+                            ComboBox { model: ["8 × 8 × 8", "16 × 16 × 16", "32 × 32 × 32", "64 × 64 × 64"]; current-index <=> root.flatter-cell-index; enabled: root.flatter-enabled; selected(_) => { root.export-preset-index = 0; root.settings-changed(); } }
                             HintText { text: "Controls the spatial FLATTER cell. Smaller cells rebuild more locally; larger cells create fewer objects and broader greedy surfaces."; }
-                            CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; toggled => { root.settings-changed(); } }
-                                CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; toggled => { root.settings-changed(); } }
+                            CheckBox { text: "Hidden block culling · Experimental"; checked <=> root.hidden-culling; toggled => { root.export-preset-index = 0; root.settings-changed(); } }
+                                CheckBox { text: "Select by model · Experimental"; checked <=> root.select-by-model; toggled => { root.export-preset-index = 0; root.settings-changed(); } }
                             }
                             SectionTitle { label: "PIPELINE"; }
-                            if root.export-format-index < 2: CheckBox { text: "Blender integration"; checked <=> root.blender-export; toggled => { root.settings-changed(); } }
                             CheckBox { text: "Debug engine console"; checked <=> root.debug-mode; toggled => { root.settings-changed(); } }
                             if root.export-format-index < 2: VerticalLayout {
                                 spacing: 8px;
                                 Text { text: root.runtime-cache-status; color: #aab2ad; font-size: 12px; wrap: word-wrap; }
-                                Button { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.rebuild-runtime-cache(); } }
+                                ActionButton { text: "Rebuild full runtime registry"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.rebuild-runtime-cache(); } }
                             }
                             if root.export-format-index < 2: VerticalLayout {
                                 spacing: 11px;
@@ -1063,12 +1166,12 @@ export component MainWindow inherits Window {
                                 }
                             }
                             SectionTitle { label: "ADVANCED EXPORT TOOLS"; }
-                            Button { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.run-preflight(); } }
+                            ActionButton { text: "Run manual preflight"; enabled: root.world-path != "No world selected" && !root.foreground-busy; clicked => { root.run-preflight(); } }
                             Text { text: root.preflight-summary; color: #a7b0aa; font-size: 12px; wrap: word-wrap; }
-                            Button { text: "Reload 2D map"; enabled: root.world-path != "No world selected" && !root.map-loading && !root.foreground-busy; clicked => { root.reload-map(); } }
-                            Button { text: "Open documentation"; clicked => { root.open-docs(); root.settings-visible = false; } }
-                            Button { text: "Remove all Minesport cache"; enabled: !root.foreground-busy; clicked => { root.remove-cache(); } }
+                            ActionButton { text: "Reload 2D map"; enabled: root.world-path != "No world selected" && !root.map-loading && !root.foreground-busy; clicked => { root.reload-map(); } }
+                            ActionButton { text: "Remove all Minesport cache"; enabled: !root.foreground-busy; clicked => { root.remove-cache(); } }
                             HintText { text: "Deletes only regenerable runtime/cache/toolchain data. Worlds, exports, settings and real mods are never touched."; }
+                            }
                         }
                     }
                 }
@@ -1103,8 +1206,8 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         spacing: 8px;
                         Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Button { text: "Not now"; clicked => { root.blender-prompt-later(); } }
-                        Button { text: "Install"; primary: true; enabled: !root.foreground-busy; clicked => { root.blender-prompt-install(); } }
+                        ActionButton { text: "Not now"; clicked => { root.blender-prompt-later(); } }
+                        ActionButton { text: "Install"; primary: true; enabled: !root.foreground-busy; clicked => { root.blender-prompt-install(); } }
                     }
                 }
             }

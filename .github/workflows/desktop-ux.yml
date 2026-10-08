@@ -1,0 +1,49 @@
+name: Desktop UX preview
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'desktop/ui/**'
+      - 'desktop/src/world_picker.rs'
+      - 'desktop/ux-preview/**'
+      - '.github/workflows/desktop-ux.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/ux-preview -> target
+          cache-on-failure: true
+      - name: Install display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb
+      - name: Compile UI and capture UX states
+        env:
+          SLINT_BACKEND: winit-software
+          SLINT_COLOR_SCHEME: dark
+        run: xvfb-run -a cargo run --manifest-path desktop/ux-preview/Cargo.toml -- ux-snapshots
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-ux-snapshots
+          path: ux-snapshots/*.png
+          if-no-files-found: error
+          retention-days: 14

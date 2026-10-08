@@ -2,6 +2,16 @@
 
 This is the replacement for the archived Go/Fyne desktop UI.
 
+## Workbench flow
+
+1. **Open world** — choose a launcher, instance, and save, or browse directly to a world folder.
+2. **Select area** — drag on the map, choose **Pan map** to move it with the left mouse button, or enable **Enter coordinates** for precise bounds. Bubble selections expose their center/radius through the same coordinate controls.
+3. **Export** — choose a preset, format, name, and output folder. Mesh customization and advanced settings remain optional. A disabled export button explains what is needed next.
+
+**Controls** opens the map/preview gesture guide. **Activity** keeps task details and errors visible after work stops. Export completion details appear in **Export**. **Help** opens the manual; Escape dismisses the guide, manual, or settings.
+
+For UI-only builds and review screenshots, see [UX preview](ux-preview/README.md).
+
 ## Architecture
 
 - Slint owns presentation and the native event loop only.

@@ -10,7 +10,7 @@ use std::{
 };
 
 slint::slint! {
-    import { Button, LineEdit, ListView } from "std-widgets.slint";
+    import { Button, LineEdit, ListView, Palette } from "std-widgets.slint";
 
     export struct PickerRow {
         icon-kind: int,
@@ -24,7 +24,8 @@ slint::slint! {
         preferred-height: 560px;
         min-width: 640px;
         min-height: 460px;
-        background: #11171d;
+        background: #111a17;
+        init => { Palette.color-scheme = ColorScheme.dark; }
 
         in property <[PickerRow]> rows;
         in-out property <string> breadcrumb: "Launcher";
@@ -33,7 +34,6 @@ slint::slint! {
         in-out property <int> selected-index: -1;
         in property <bool> can-back: false;
         in property <bool> can-use: false;
-        in property <bool> browse-fallback: false;
         callback activate(int);
         callback go-back();
         callback use-selected();
@@ -46,6 +46,19 @@ slint::slint! {
             spacing: 8px;
 
             Text {
+                text: "Open your Minecraft world";
+                color: #eef4f0;
+                font-size: 22px;
+                font-weight: 700;
+            }
+            Text {
+                text: "Choose a launcher, then an instance and a save. Or browse directly to a world folder.";
+                color: #b3bdb7;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+
+            Text {
                 text: root.breadcrumb;
                 color: #dce7ef;
                 font-size: 14px;
@@ -53,7 +66,7 @@ slint::slint! {
             }
             LineEdit {
                 text <=> root.search-text;
-                placeholder-text: "Search launcher, instance or world…";
+                placeholder-text: "Search this list…";
                 edited(value) => { root.search-edited(value); }
             }
 
@@ -67,9 +80,11 @@ slint::slint! {
 
                 if root.rows.length == 0: Text {
                     x: 28px;
+                    height: parent.height;
                     width: parent.width - 56px;
                     text: root.empty-message;
-                    color: #71808d;
+                    color: #b3bdb7;
+                    font-size: 14px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     wrap: word-wrap;
@@ -80,72 +95,14 @@ slint::slint! {
                     y: 4px;
                     width: parent.width - 8px;
                     height: parent.height - 8px;
-                    for row[index] in root.rows: Rectangle {
-                        height: 62px;
-                        width: parent.width;
-                        background: root.selected-index == index ? #243748 : hover.has-hover ? #18232c : transparent;
-                        border-radius: 4px;
-
-                        if row.icon-kind == 0: Image {
-                            x: 13px;
-                            y: (parent.height - 24px) / 2;
-                            width: 24px;
-                            height: 24px;
-                            source: @image-url("../assets/fyne-theme-icons/computer.svg");
-                            image-fit: contain;
-                            colorize: root.selected-index == index ? #dff1fc : #8fa2b4;
-                            accessible-role: none;
-                        }
-                        if row.icon-kind == 1: Image {
-                            x: 13px;
-                            y: (parent.height - 24px) / 2;
-                            width: 24px;
-                            height: 24px;
-                            source: @image-url("../assets/fyne-theme-icons/settings.svg");
-                            image-fit: contain;
-                            colorize: root.selected-index == index ? #dff1fc : #8fa2b4;
-                            accessible-role: none;
-                        }
-                        if row.icon-kind == 2: Image {
-                            x: 13px;
-                            y: (parent.height - 24px) / 2;
-                            width: 24px;
-                            height: 24px;
-                            source: @image-url("../assets/fyne-theme-icons/file.svg");
-                            image-fit: contain;
-                            colorize: root.selected-index == index ? #dff1fc : #8fa2b4;
-                            accessible-role: none;
-                        }
-                        Text {
-                            x: 50px;
-                            y: 8px;
-                            width: parent.width - 62px;
-                            height: 22px;
-                            text: row.title;
-                            color: root.selected-index == index ? #eef7fd : #d4e0e8;
-                            font-size: 11px;
-                            font-weight: 700;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                        Text {
-                            x: 50px;
-                            y: 31px;
-                            width: parent.width - 62px;
-                            height: 21px;
-                            text: row.subtitle;
-                            color: root.selected-index == index ? #b9cbd7 : #8798a5;
-                            font-size: 10px;
-                            font-italic: true;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                        hover := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.selected-index = index;
-                                root.activate(index);
-                            }
+                    for row[index] in root.rows: Button {
+                        height: 64px;
+                        text: row.title + "\n" + row.subtitle;
+                        checkable: true;
+                        checked: root.selected-index == index;
+                        clicked => {
+                            root.selected-index = index;
+                            root.activate(index);
                         }
                     }
                 }
@@ -158,13 +115,13 @@ slint::slint! {
                     enabled: root.can-back;
                     clicked => { root.go-back(); }
                 }
-                if root.browse-fallback: Button {
+                Button {
                     text: "Browse folder…";
                     clicked => { root.browse-folder(); }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 Button {
-                    text: "Use world";
+                    text: "Open selected world";
                     primary: true;
                     enabled: root.can-use;
                     clicked => { root.use-selected(); }
@@ -223,7 +180,6 @@ where
     };
 
     let launchers = discovery.into_catalog();
-    picker.set_browse_fallback(launchers.is_empty());
     let state = Rc::new(RefCell::new(PickerState {
         launchers,
         step: Step::Launcher,
