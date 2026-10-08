@@ -29,6 +29,27 @@ GltfStreamingTest verifies 4,097 quads crossing a primitive boundary, both with 
 
 The synthetic fixture reuses one quad to isolate exporter working memory. It is not a 500,000-block world and does not include Minecraft or the desktop. The export-memory workflow compares the same fixture against the audited exporter at c825c539f3efe820ac877cde6064c43af9f3291e, reporting per-process peak RSS and elapsed time. The baseline gets a 768 MiB heap limit; the optimized fixture gets 48 MiB, so the report must retain those settings when interpreting measured differences.
 
+Measured on Ubuntu CI / Temurin Java 22 in [workflow run 37754848004](https://github.com/Kate-alt-69/Minesport/actions/runs/37754848004):
+
+| Same 500,000-quad fixture | Original exporter | Streaming exporter |
+|---|---:|---:|
+| JVM heap limit | 768 MiB | 48 MiB |
+| Peak process RSS | 852,292 KiB (832 MiB) | 148,396 KiB (145 MiB) |
+| Wall time | 3.70 s | 0.84 s |
+| Binary output | 76,000,000 bytes | 76,000,000 bytes |
+
+All 141 engine tests passed, including the small-heap export and boundary regression. This is one controlled synthetic run, with different heap limits, not a measured 83% reduction for the user's complete application/world.
+
+## Worker focused on extraction
+
+The goal is to exclude unrelated menus, overlays, audio, telemetry and gameplay work from the isolated worker, while retaining registrations, geometry, resource overrides and their dependencies. Current code only excludes existing Minesport bridges, crash-assistant and explicit Fabric/Quilt server-only mods. It does not yet provide a general dependency-aware UI-mod filter.
+
+The next worker change should create a manifest that records why each JAR is retained or excluded. Retained roots include Minesport's bridge and loader API, selected-block providers, required dependencies and any mods/resources that can modify those models. Metadata IDs alone are insufficient: library APIs, nested JARs, provided aliases, mixins and cross-namespace resource overrides matter. Keep unclassified mods until their extraction role is established. For pure UI candidates, retain a candidate if a kept mod has a required dependency on it.
+
+Start with the actual loader/version/modpack that produced the 4 GB observation, record baseline loaded mods/captured states/model output, then remove confirmed UI-only roots. Compare model IDs, states, quads, UVs, light metadata and errors against the full worker. Work skipped after registration should be gated by the worker flag and preserve model baking/resource readiness. Do not edit the user's normal game instance or globally disable its mods.
+
+Selecting only a namespace currently narrows the dump **after client startup**. Selecting exact block IDs/states can reduce extraction further, but reducing resource baking and other mods' initialization requires a separate worker-loading policy or loader-specific hooks. Arbitrary mod initializers cannot be partially executed safely just by loading Minesport last.
+
 ## Remaining work toward 1 GB
 
 1. Measure peak resident memory for each process on the user's representative world/modpack, including cold capture and cached export.
