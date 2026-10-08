@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           mkdir -p memory-results/baseline-src/dev/kastrick/minesport/export
           git show c825c539f3efe820ac877cde6064c43af9f3291e:engine/src/main/java/dev/kastrick/minesport/export/GltfExporter.java > memory-results/baseline-src/dev/kastrick/minesport/export/GltfExporter.java
-          gson_jar="$(rg --files "$HOME/.gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.11.0" -g '*.jar' | head -n 1)"
+          gson_jar="$(python3 -c 'from pathlib import Path; print(next((Path.home() / ".gradle/caches/modules-2/files-2.1/com.google.code.gson/gson/2.11.0").rglob("gson-2.11.0.jar")))')"
           test_cp="engine/build/classes/java/test:engine/build/classes/java/main:$gson_jar"
           javac -cp "$test_cp" -d memory-results/baseline-classes memory-results/baseline-src/dev/kastrick/minesport/export/GltfExporter.java
           /usr/bin/time -v -o memory-results/optimized-time.txt java -Xmx48m -Dminesport.flatter=false -cp "$test_cp" 'dev.kastrick.minesport.export.GltfStreamingTest$MemoryProbe' memory-results/optimized.gltf > memory-results/optimized.log 2>&1
