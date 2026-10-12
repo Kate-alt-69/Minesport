@@ -45,6 +45,7 @@ Source: "{#SourceDir}\dist\source\Minesport.exe"; DestDir: "{app}"; DestName: "m
 Source: "{#SourceDir}\dist\source\minesport-engine.exe"; DestDir: "{app}"; DestName: "minesport-engine.exe"; Flags: ignoreversion
 Source: "{#SourceDir}\dist\source\minesport-engine.json"; DestDir: "{app}"; DestName: "minesport-engine.json"; Flags: ignoreversion
 Source: "{#SourceDir}\installer\windows\install-blender.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "{#SourceDir}\installer\windows\install-runtime.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Minesport"; Filename: "{app}\minesport.exe"; WorkingDir: "{app}"
@@ -61,3 +62,29 @@ Type: files; Name: "{app}\minesport-engine.json.prev"
 ; Remove bridge-data left by older pre-embedded installs.
 Type: filesandordirs; Name: "{commonpf64}\kastrick's_software\minesport\bridge-data"
 Type: filesandordirs; Name: "{app}\tools"
+
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  Completed: Boolean;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    Completed := False;
+    while not Completed do
+    begin
+      ResultCode := -1;
+      Completed := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+        '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\tools\install-runtime.ps1') + '" -AppDirectory "' + ExpandConstant('{app}') + '"',
+        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Completed := Completed and (ResultCode = 0);
+      if not Completed then
+      begin
+        if WizardSilent or (MsgBox('Required runtimes could not be prepared. Check your internet connection and retry. Details: ProgramData\Minesport\logs\runtime-setup.log. Setup can be rerun to repair the installation.', mbError, MB_RETRYCANCEL) <> IDRETRY) then
+          RaiseException('Required runtime preparation failed.');
+      end;
+    end;
+  end;
+end;

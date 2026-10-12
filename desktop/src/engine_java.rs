@@ -1,4 +1,4 @@
-use crate::{diagnostics, toolchain};
+use crate::{diagnostics, runtime, toolchain};
 use anyhow::{Context, Result, bail};
 use std::{env, io::Write, path::PathBuf};
 
@@ -69,4 +69,35 @@ fn emit_worker_info(percent: i32, message: &str) {
 
 fn java_executable_name() -> &'static str {
     if cfg!(windows) { "java.exe" } else { "java" }
+}
+
+
+/// Used by setup/repair before any GUI or engine worker starts.
+pub fn prepare_managed_runtime() -> Result<()> {
+    let _lease = runtime::acquire_generated_cache_lease()?;
+    let jar = runtime::materialize_engine()?;
+    let home = toolchain::ensure_managed_jdk(ENGINE_JAVA_MAJOR, |progress| {
+        emit_worker_info(progress.percent, &progress.message);
+    })?;
+    report_runtime(&home, &jar)
+}
+
+/// Offline check: validates executable Java and the embedded engine payload.
+pub fn check_runtime() -> Result<()> {
+    let _lease = runtime::acquire_generated_cache_lease()?;
+    let home = toolchain::find_available_jdk(ENGINE_JAVA_MAJOR)
+        .context("Java runtime is missing or damaged; run Minesport setup again or --prepare-runtime with an internet connection")?;
+    let jar = runtime::materialize_engine()?;
+    report_runtime(&home, &jar)
+}
+
+fn report_runtime(home: &std::path::Path, jar: &std::path::Path) -> Result<()> {
+    let java = home.join("bin").join(java_executable_name());
+    let major = toolchain::java_major(&java);
+    if major < ENGINE_JAVA_MAJOR { bail!("prepared Java cannot run the Minesport engine (expected Java {ENGINE_JAVA_MAJOR}+, got {major})"); }
+    println!("{}", serde_json::json!({
+        "type": "runtimeReady", "javaMajor": major,
+        "javaHome": home, "engineJar": jar,
+    }));
+    Ok(())
 }
