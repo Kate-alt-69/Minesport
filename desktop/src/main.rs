@@ -87,6 +87,7 @@ fn main() -> anyhow::Result<()> {
     diagnostics::append(&format!("Persistent diagnostics log: {}", log.display()));
     install_panic_hook();
 
+    #[cfg(windows)]
     let desktop_gui_mode = std::env::args_os().len() == 1;
     let engine_worker_mode = std::env::args().nth(1).as_deref() == Some("--engine-worker");
 
@@ -190,3 +191,4 @@ fn install_panic_hook() {
         previous(panic_info);
     }));
 }
+
