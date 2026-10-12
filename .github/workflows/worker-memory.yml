@@ -1,0 +1,98 @@
+name: Minecraft worker JVM limits
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/src/runtime_worker.rs'
+      - '.github/workflows/worker-memory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-memory-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  child-jvm-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { java: '17', gradle: '8.14' }
+          - { java: '21', gradle: '8.14' }
+          - { java: '25', gradle: '9.5.1' }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '${{ matrix.java }}'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '${{ matrix.gradle }}'
+      - name: Extract the actual Rust-embedded launch policy and create a conflicting task
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          source = Path('desktop/src/runtime_worker.rs').read_text()
+          policy = source.split('const WORKER_LAUNCH_LIMITS_GRADLE: &str = r#"', 1)[1].split('"#;', 1)[0]
+          fixture = Path(os.environ['RUNNER_TEMP']) / 'worker-jvm-fixture'
+          (fixture / 'src/main/java').mkdir(parents=True)
+          (fixture / 'worker-launch-limits.gradle').write_text(policy)
+          (fixture / 'settings.gradle').write_text("rootProject.name = 'worker-jvm-fixture'\n")
+          (fixture / 'build.gradle').write_text('''
+          plugins { id 'java' }
+          tasks.register('runClient', JavaExec) {
+              dependsOn classes
+              classpath = sourceSets.main.runtimeClasspath
+              mainClass = 'HeapProbe'
+              args 'worker'
+              maxHeapSize = '3g'
+              minHeapSize = '2g'
+              jvmArgs '-Xmx3g', '-Xms2g', '-XX:MaxMetaspaceSize=1g', '-XX:ActiveProcessorCount=8', '-Dmodel.fixture=preserved'
+          }
+          tasks.register('keepDefaults', JavaExec) {
+              dependsOn classes
+              classpath = sourceSets.main.runtimeClasspath
+              mainClass = 'HeapProbe'
+              args 'unrelated'
+              maxHeapSize = '128m'
+              minHeapSize = '64m'
+              jvmArgs '-XX:ActiveProcessorCount=4'
+          }
+          ''')
+          (fixture / 'src/main/java/HeapProbe.java').write_text('''
+          import java.lang.management.ManagementFactory;
+          public class HeapProbe {
+              public static void main(String[] args) {
+                  boolean worker = args[0].equals("worker");
+                  long heap = Runtime.getRuntime().maxMemory();
+                  int cpu = Runtime.getRuntime().availableProcessors();
+                  var flags = ManagementFactory.getRuntimeMXBean().getInputArguments();
+                  long expectedHeap = (worker ? 512L : 128L) * 1024 * 1024;
+                  int expectedCpu = worker ? 2 : 4;
+                  if (heap > expectedHeap || heap < expectedHeap * .9 || cpu != expectedCpu)
+                      throw new AssertionError("Unexpected child limits: " + heap + " / " + cpu + " / " + flags);
+                  if (worker && (!flags.contains("-XX:MaxMetaspaceSize=384m")
+                      || flags.stream().anyMatch(flag -> flag.equals("-Xmx3g") || flag.equals("-Xms2g"))
+                      || !"preserved".equals(System.getProperty("model.fixture"))))
+                      throw new AssertionError("Worker overrides were not normalized: " + flags);
+                  System.out.println(args[0] + " actual maxHeapBytes=" + heap + " processors=" + cpu + " JVM=" + flags);
+              }
+          }
+          ''')
+          PY
+      - name: Run the real Gradle child JVM and verify limits
+        shell: bash
+        run: |
+          gradle --no-daemon --console=plain --max-workers=1 \
+            --init-script "$RUNNER_TEMP/worker-jvm-fixture/worker-launch-limits.gradle" \
+            -p "$RUNNER_TEMP/worker-jvm-fixture" runClient keepDefaults
