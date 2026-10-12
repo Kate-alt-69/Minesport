@@ -22,16 +22,27 @@ function Write-SetupLog([string]$Message) {
     Write-Host $Message
 }
 
-function Test-VisualCpp {
+function Get-VisualCppVersion {
     $registry = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
     try {
         $key = $registry.OpenSubKey('SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64')
-        if ($null -eq $key) { return $false }
+        if ($null -eq $key) { return $null }
         try {
-            $version = [string]$key.GetValue('Version', '')
-            return ([int]$key.GetValue('Installed', 0) -eq 1 -and $version.TrimStart('v') -match '^\d+\.\d+\.\d+\.\d+$' -and [version]$version.TrimStart('v') -ge [version]'14.44.0.0')
+            $version = ([string]$key.GetValue('Version', '')).TrimStart('v')
+            if ([int]$key.GetValue('Installed', 0) -eq 1 -and $version -match '^\d+\.\d+\.\d+\.\d+$') { return [version]$version }
+            return $null
         } finally { $key.Dispose() }
     } finally { $registry.Dispose() }
+}
+
+function Test-VisualCpp {
+    $version = Get-VisualCppVersion
+    if ($null -eq $version -or $version -lt [version]'14.44.0.0') { return $false }
+    $system = if ([Environment]::Is64BitProcess) { Join-Path $env:SystemRoot 'System32' } else { Join-Path $env:SystemRoot 'Sysnative' }
+    foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $system $dll) -PathType Leaf)) { return $false }
+    }
+    return $true
 }
 
 function Install-VisualCpp {
@@ -45,7 +56,9 @@ function Install-VisualCpp {
         if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
             throw 'Downloaded Visual C++ runtime does not have a valid Microsoft signature.'
         }
-        $process = Start-Process -FilePath $download -ArgumentList '/install', '/quiet', '/norestart' -PassThru
+        $installed = Get-VisualCppVersion
+        $mode = if ($null -ne $installed -and $installed -ge [version]'14.44.0.0') { '/repair' } else { '/install' }
+        $process = Start-Process -FilePath $download -ArgumentList $mode, '/quiet', '/norestart' -PassThru
         if (-not $process.WaitForExit(300000)) { $process.Kill(); throw 'Visual C++ installation timed out.' }
         if ($process.ExitCode -notin @(0, 1638, 3010) -or -not (Test-VisualCpp)) { throw "Visual C++ installation failed (exit $($process.ExitCode))." }
         if ($process.ExitCode -eq 3010) { Write-SetupLog 'Visual C++ installation requests a Windows restart.' }

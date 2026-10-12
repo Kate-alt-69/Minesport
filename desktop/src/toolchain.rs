@@ -153,7 +153,8 @@ pub fn find_installed_jdk(required: u32) -> Option<PathBuf> {
     // that home also contains javac and satisfies the requested major.
     if let Some(java) = find_on_path(java_name()) {
         let mut command = Command::new(java);
-        command.args(["-XshowSettings:properties", "-version"]);
+        command.env_remove("JAVA_TOOL_OPTIONS").env_remove("_JAVA_OPTIONS").env_remove("JDK_JAVA_OPTIONS")
+            .args(["-XshowSettings:properties", "-version"]);
         hide_console_window(&mut command);
         if let Ok(Some(output)) = runtime::output_with_timeout(&mut command, Duration::from_secs(5))
         {
