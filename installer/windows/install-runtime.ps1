@@ -11,8 +11,6 @@ $ProgressPreference = 'SilentlyContinue'
 $logs = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'Minesport\logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 $log = Join-Path $logs 'runtime-setup.log'
-$stdout = Join-Path $logs "runtime-$PID.stdout.log"
-$stderr = Join-Path $logs "runtime-$PID.stderr.log"
 $oldRoot = $env:MINESPORT_TOOLCHAIN_ROOT
 $oldCache = $env:MINESPORT_CACHE_DIR
 
@@ -20,6 +18,36 @@ function Write-SetupLog([string]$Message) {
     $line = "$(Get-Date -Format o) $Message"
     Add-Content -LiteralPath $log -Value $line -Encoding UTF8
     Write-Host $Message
+}
+
+# Start-Process in Windows PowerShell 5.1 may lose ExitCode after WaitForExit.
+# Own the process handle and drain both pipes asynchronously instead.
+function Invoke-SetupProcess([string]$Executable, [string]$Arguments, [int]$TimeoutSeconds) {
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $Executable
+    $start.Arguments = $Arguments
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $start.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
+    $process = [System.Diagnostics.Process]::Start($start)
+    try {
+        $out = $process.StandardOutput.ReadToEndAsync()
+        $err = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $process.Kill()
+            $null = $process.WaitForExit(5000)
+            throw "Runtime process timed out: $Executable"
+        }
+        foreach ($text in @($out.Result, $err.Result)) {
+            foreach ($line in ($text -split '\r?\n')) {
+                if ($line.Length -gt 0) { Write-SetupLog $line }
+            }
+        }
+        return [int]$process.ExitCode
+    } finally { $process.Dispose() }
 }
 
 function Get-VisualCppVersion {
@@ -58,10 +86,9 @@ function Install-VisualCpp {
         }
         $installed = Get-VisualCppVersion
         $mode = if ($null -ne $installed -and $installed -ge [version]'14.44.0.0') { '/repair' } else { '/install' }
-        $process = Start-Process -FilePath $download -ArgumentList $mode, '/quiet', '/norestart' -PassThru
-        if (-not $process.WaitForExit(300000)) { $process.Kill(); throw 'Visual C++ installation timed out.' }
-        if ($process.ExitCode -notin @(0, 1638, 3010) -or -not (Test-VisualCpp)) { throw "Visual C++ installation failed (exit $($process.ExitCode))." }
-        if ($process.ExitCode -eq 3010) { Write-SetupLog 'Visual C++ installation requests a Windows restart.' }
+        $code = Invoke-SetupProcess $download "$mode /quiet /norestart" 300
+        if ($code -notin @(0, 1638, 3010) -or -not (Test-VisualCpp)) { throw "Visual C++ installation failed (exit $code)." }
+        if ($code -eq 3010) { Write-SetupLog 'Visual C++ installation requests a Windows restart.' }
     } finally { Remove-Item -LiteralPath $download -Force -ErrorAction SilentlyContinue }
 }
 
@@ -74,12 +101,8 @@ try {
     $env:MINESPORT_CACHE_DIR = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'Minesport\setup-cache'
     $mode = if ($CheckOnly) { '--check-runtime' } else { '--prepare-runtime' }
     Write-SetupLog "Preparing required Minesport runtime ($mode)..."
-    $process = Start-Process -FilePath $engine -ArgumentList $mode -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-    if (-not $process.WaitForExit(900000)) { $process.Kill(); throw 'Java runtime preparation timed out. Check your internet connection and run setup again.' }
-    foreach ($output in @($stdout, $stderr)) {
-        if (Test-Path -LiteralPath $output) { Get-Content -LiteralPath $output | ForEach-Object { Write-SetupLog $_ } }
-    }
-    if ($process.ExitCode -ne 0) { throw "Runtime preparation failed (exit $($process.ExitCode)). Check the internet connection and run setup again. Details: $log" }
+    $code = Invoke-SetupProcess $engine $mode 900
+    if ($code -ne 0) { throw "Runtime preparation failed (exit $code). Check the internet connection and run setup again. Details: $log" }
     Write-SetupLog 'Required runtime is ready. Future loader-specific Java versions are prepared automatically when needed.'
     exit 0
 } catch {
@@ -88,5 +111,4 @@ try {
 } finally {
     $env:MINESPORT_TOOLCHAIN_ROOT = $oldRoot
     $env:MINESPORT_CACHE_DIR = $oldCache
-    Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
 }
