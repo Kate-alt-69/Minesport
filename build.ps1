@@ -320,10 +320,15 @@ function Test-TransientBridgeBuildFailure([string]$LogPath) {
 
 function Invoke-BridgeGradleBuild($bridge) {
     $attempts = Get-BridgeBuildAttempts
-    $attemptLog = Join-Path ([IO.Path]::GetTempPath()) (
+    $logDirectory = Join-Path $Root 'dist\build-logs'
+    New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+    $attemptLog = Join-Path $logDirectory (
         "minesport-$($bridge.Slug)-gradle-$([Guid]::NewGuid().ToString('N')).log"
     )
-    $lastExitCode = 0
+    $completed = $false
+    # Native failures are handled below so PowerShell 7's optional preference
+    # does not terminate the function before its retry policy runs.
+    $PSNativeCommandUseErrorActionPreference = $false
 
     try {
         for ($attempt = 1; $attempt -le $attempts; $attempt++) {
@@ -331,15 +336,20 @@ function Invoke-BridgeGradleBuild($bridge) {
 
             # Keep Gradle/Mavenizer caches between attempts. A retry should resume
             # dependency resolution, not throw away already-downloaded artifacts.
+            # Merge stderr inside cmd.exe: Windows PowerShell 5.1 otherwise
+            # turns native stderr into terminating errors with Stop enabled.
             if ($Fresh) {
-                & .\gradlew.bat --no-daemon --stacktrace clean build --rerun-tasks --no-build-cache 2>&1 |
+                & $env:ComSpec /d /c '.\gradlew.bat --no-daemon --stacktrace clean build --rerun-tasks --no-build-cache 2>&1' |
                     Tee-Object -FilePath $attemptLog
             } else {
-                & .\gradlew.bat --no-daemon --stacktrace build 2>&1 |
+                & $env:ComSpec /d /c '.\gradlew.bat --no-daemon --stacktrace build 2>&1' |
                     Tee-Object -FilePath $attemptLog
             }
-            $lastExitCode = $LASTEXITCODE
-            if ($lastExitCode -eq 0) {
+            # PowerShell variable names are case-insensitive. A local variable
+            # named lastExitCode would shadow the native LASTEXITCODE value.
+            $gradleExitCode = $LASTEXITCODE
+            if ($gradleExitCode -eq 0) {
+                $completed = $true
                 if ($attempt -gt 1) {
                     Write-Host "     recovered after transient Gradle/download failure (attempt $attempt/$attempts)" -ForegroundColor Green
                 }
@@ -349,9 +359,9 @@ function Invoke-BridgeGradleBuild($bridge) {
             $transient = Test-TransientBridgeBuildFailure $attemptLog
             if (-not $transient -or $attempt -ge $attempts) {
                 if ($transient) {
-                    throw "$($bridge.Name) Export Worker build failed after $attempt attempts (last exit code $lastExitCode)."
+                    throw "$($bridge.Name) Export Worker build failed after $attempt attempts (exit code $gradleExitCode). Gradle could not download required files. Check access to services.gradle.org and its redirected download host, or configure your HTTPS proxy in user Gradle properties. Caches are preserved. Log: $attemptLog"
                 }
-                throw "$($bridge.Name) Export Worker build failed with exit code $lastExitCode (non-transient failure; not retrying)."
+                throw "$($bridge.Name) Export Worker build failed with exit code $gradleExitCode (non-transient failure; not retrying). Log: $attemptLog"
             }
 
             $delaySeconds = [Math]::Min(20, 5 * $attempt)
@@ -359,7 +369,9 @@ function Invoke-BridgeGradleBuild($bridge) {
             Start-Sleep -Seconds $delaySeconds
         }
     } finally {
-        Remove-Item -LiteralPath $attemptLog -Force -ErrorAction SilentlyContinue
+        if ($completed) {
+            Remove-Item -LiteralPath $attemptLog -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -383,6 +395,9 @@ function Build-Bridge($bridge) {
         # temporary DNS failure, HTTP 429/5xx, etc.). Deterministic compile errors
         # still fail immediately instead of wasting several full builds.
         Invoke-BridgeGradleBuild $bridge
+        if (-not (Test-Path -LiteralPath 'build\libs' -PathType Container)) {
+            throw "$($bridge.Name) Export Worker reported success but did not produce $($bridge.Project)\build\libs."
+        }
         $bridgeJar = Get-ChildItem -Path 'build\libs\*.jar' -File |
             Where-Object { $_.Name -notmatch '(sources|javadoc)' } |
             Sort-Object Name |
