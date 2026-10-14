@@ -61,6 +61,16 @@ public class MinesportExportWorker implements ClientModInitializer {
     }
 
     private void runDump(Minecraft client) {
+        System.out.println("[MinesportWorker JVM] pid=" + ProcessHandle.current().pid()
+            + " maxHeapBytes=" + Runtime.getRuntime().maxMemory()
+            + " activeProcessors=" + Runtime.getRuntime().availableProcessors()
+            + " limits=" + java.lang.management.ManagementFactory.getRuntimeMXBean()
+                .getInputArguments().stream().filter(arg ->
+                    arg.startsWith("-Xmx") || arg.startsWith("-Xms")
+                        || arg.startsWith("-XX:MaxMetaspaceSize=")
+                        || arg.startsWith("-XX:ActiveProcessorCount="))
+                .toList());
+
         try (ExportWorkerSender sender = new ExportWorkerSender()) {
             String modeEnv = System.getenv("MINESPORT_EXPORT_WORKER_MODE");
             String mode = (modeEnv != null) ? modeEnv : "all";
@@ -229,3 +239,4 @@ public class MinesportExportWorker implements ClientModInitializer {
         return mods;
     }
 }
+

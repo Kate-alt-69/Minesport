@@ -6,6 +6,9 @@
     <OutputType>Package</OutputType>
     <DefineConstants>SourceDir=$(SourceDir);AppVersion=$(AppVersion)</DefineConstants>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Same-version rebuilds deliberately replace an earlier test package.
+         ICE61 assumes strictly older-only upgrades; retain every other ICE. -->
+    <SuppressIces>ICE61</SuppressIces>
   </PropertyGroup>
 
   <Target Name="ValidatePackageVersion" BeforeTargets="Build">
@@ -17,3 +20,4 @@
     <PackageReference Include="WixToolset.Util.wixext" Version="7.0.0" />
   </ItemGroup>
 </Project>
+

@@ -44,6 +44,8 @@ fn main() -> Result<()> {
     }
 
     match mode.as_deref() {
+        Some("--prepare-runtime") => engine_java::prepare_managed_runtime(),
+        Some("--check-runtime") => engine_java::check_runtime(),
         Some("--identity") => {
             println!(
                 "{}",
@@ -65,7 +67,7 @@ fn main() -> Result<()> {
         }
         Some("-h" | "--help") => {
             println!(
-                "Minesport Engine {engine_version}\n\nUsage:\n  minesport-engine                 Run the IPC engine worker\n  minesport-engine --identity      Print machine-readable engine identity\n  minesport-engine --version       Print engine version\n  minesport-engine --protocol-version\n  minesport-engine --help"
+                "Minesport Engine {engine_version}\n\nUsage:\n  minesport-engine                 Run the IPC engine worker\n  minesport-engine --prepare-runtime\n                                  Download/repair the required managed Java runtime\n  minesport-engine --check-runtime\n                                  Check runtime readiness without downloads\n  minesport-engine --identity      Print machine-readable engine identity\n  minesport-engine --version       Print engine version\n  minesport-engine --protocol-version\n  minesport-engine --help"
             );
             Ok(())
         }
@@ -106,3 +108,4 @@ mod tests {
         assert_eq!(engine_version(), ENGINE_VERSION_RAW.trim());
     }
 }
+

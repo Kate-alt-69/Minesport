@@ -87,6 +87,13 @@ fn main() -> anyhow::Result<()> {
     diagnostics::append(&format!("Persistent diagnostics log: {}", log.display()));
     install_panic_hook();
 
+    match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [flag] if flag == "--prepare-runtime" => return engine_java::prepare_managed_runtime(),
+        [flag] if flag == "--check-runtime" => return engine_java::check_runtime(),
+        _ => {}
+    }
+
+    #[cfg(windows)]
     let desktop_gui_mode = std::env::args_os().len() == 1;
     let engine_worker_mode = std::env::args().nth(1).as_deref() == Some("--engine-worker");
 
@@ -190,3 +197,4 @@ fn install_panic_hook() {
         previous(panic_info);
     }));
 }
+

@@ -48,6 +48,32 @@ const DIRECT_LAUNCH_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CAPTURE_FIRST_PROGRESS_TIMEOUT: Duration = Duration::from_secs(4 * 60);
 const CAPTURE_STALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
+// Applied only to the isolated workspace. Gradle's launcher JVM limits do not
+// constrain JavaExec: without this policy, runClient can choose a multi-GB heap.
+// Enforce immediately before execution so loader/task defaults cannot replace it.
+const WORKER_LAUNCH_LIMITS_GRADLE: &str = r#"
+gradle.projectsEvaluated {
+    rootProject.allprojects { workerProject ->
+        workerProject.tasks.withType(org.gradle.api.tasks.JavaExec).configureEach { workerTask ->
+            if (workerTask.name == 'runClient') {
+                workerTask.doFirst {
+                    workerTask.setJvmArgs((workerTask.getJvmArgs() ?: []).findAll { arg ->
+                        def value = arg.toString()
+                        !(value.startsWith('-Xmx') || value.startsWith('-Xms')
+                            || value.startsWith('-XX:MaxMetaspaceSize=')
+                            || value.startsWith('-XX:ActiveProcessorCount='))
+                    })
+                    workerTask.setMinHeapSize(null)
+                    workerTask.setMaxHeapSize('512m')
+                    workerTask.jvmArgs('-XX:MaxMetaspaceSize=384m', '-XX:ActiveProcessorCount=2')
+                    workerTask.logger.lifecycle('Minesport Minecraft worker JVM: heap <=512 MiB, metaspace <=384 MiB, active processors=2')
+                }
+            }
+        }
+    }
+}
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RegistryScope {
     #[default]
@@ -397,6 +423,14 @@ where
             capture_port,
         )?
     };
+    diagnostics::append(&format!(
+        "Minecraft capture launch · loader={} · version={} · path={} · launcher_pid={} · requested heap<=512 MiB · requested metaspace<=384 MiB · log={}",
+        family.label(),
+        version,
+        if direct_launch.is_some() { "direct" } else { "Gradle/runClient" },
+        child.id(),
+        log_path.display(),
+    ));
     progress(Progress {
         percent: 62,
         message: "Loading runtime models…".into(),
@@ -437,6 +471,7 @@ where
                     message: "Saving runtime cache…".into(),
                 });
                 finish_child_after_capture(&mut child, app_cds_archive.is_some());
+                record_worker_jvm_notice(&log_path);
                 progress(Progress {
                     percent: 100,
                     message: "Runtime ready".into(),
@@ -474,6 +509,7 @@ where
         if let Some(status) = child.try_wait().context("poll isolated Minecraft worker")? {
             match capture_rx.recv_timeout(Duration::from_secs(2)) {
                 Ok(Ok(path)) => {
+                    record_worker_jvm_notice(&log_path);
                     progress(Progress {
                         percent: 100,
                         message: "Runtime ready".into(),
@@ -614,6 +650,11 @@ where
             prepared.java
         }
     };
+
+    write_file(
+        &workspace.join("worker-launch-limits.gradle"),
+        WORKER_LAUNCH_LIMITS_GRADLE.as_bytes(),
+    )?;
 
     let run_dir = workspace.join("run");
     let run_mods = run_dir.join("mods");
@@ -1107,6 +1148,8 @@ fn start_gradle_worker(
         .arg("-cp")
         .arg(&wrapper)
         .arg("org.gradle.wrapper.GradleWrapperMain")
+        .arg("--init-script")
+        .arg(workspace.join("worker-launch-limits.gradle"))
         .args([
             "--no-daemon",
             "--console=plain",
@@ -1403,6 +1446,20 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
     Ok(())
+}
+
+fn record_worker_jvm_notice(log_path: &Path) {
+    let Ok(file) = File::open(log_path) else {
+        return;
+    };
+    // Preserve only the bridge's memory/identity notice before the private
+    // workspace is deleted. Do not copy arbitrary mod output into diagnostics.
+    for line in BufReader::new(file).lines().map_while(std::result::Result::ok) {
+        if line.starts_with("[MinesportWorker JVM]") {
+            diagnostics::append(&line);
+            return;
+        }
+    }
 }
 
 fn finish_child_after_capture(child: &mut Child, allow_graceful_exit: bool) {
@@ -2144,3 +2201,4 @@ mod tests {
         ));
     }
 }
+

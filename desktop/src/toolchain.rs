@@ -42,7 +42,28 @@ where
 pub fn ensure_jdk_cancellable<F>(
     required: u32,
     cancel: Arc<AtomicBool>,
+    progress: F,
+) -> Result<PathBuf>
+where
+    F: FnMut(ToolchainProgress),
+{
+    ensure_jdk_with_policy(required, cancel, progress, false)
+}
+
+/// Installer preparation must create an owned runtime, not depend on the
+/// elevated account's private JAVA_HOME or PATH.
+pub fn ensure_managed_jdk<F>(required: u32, progress: F) -> Result<PathBuf>
+where
+    F: FnMut(ToolchainProgress),
+{
+    ensure_jdk_with_policy(required, Arc::new(AtomicBool::new(false)), progress, true)
+}
+
+fn ensure_jdk_with_policy<F>(
+    required: u32,
+    cancel: Arc<AtomicBool>,
     mut progress: F,
+    managed_only: bool,
 ) -> Result<PathBuf>
 where
     F: FnMut(ToolchainProgress),
@@ -52,7 +73,7 @@ where
         percent: 40,
         message: format!("Checking for JDK {required}…"),
     });
-    if let Some(home) = find_installed_jdk(required) {
+    if let Some(home) = (!managed_only).then(|| find_installed_jdk(required)).flatten() {
         check_cancelled(&cancel, "checking installed JDK")?;
         progress(ToolchainProgress {
             percent: 44,
@@ -104,6 +125,11 @@ where
     Ok(home)
 }
 
+/// Read-only readiness check used by setup/repair, without starting downloads.
+pub fn find_available_jdk(required: u32) -> Option<PathBuf> {
+    find_installed_jdk(required).or_else(|| find_cached_jdk(required))
+}
+
 pub fn find_installed_jdk(required: u32) -> Option<PathBuf> {
     for key in ["JAVA_HOME", "JDK_HOME", "GRADLE_JAVA_HOME"] {
         if let Some(home) = env::var_os(key).map(PathBuf::from) {
@@ -127,7 +153,8 @@ pub fn find_installed_jdk(required: u32) -> Option<PathBuf> {
     // that home also contains javac and satisfies the requested major.
     if let Some(java) = find_on_path(java_name()) {
         let mut command = Command::new(java);
-        command.args(["-XshowSettings:properties", "-version"]);
+        command.env_remove("JAVA_TOOL_OPTIONS").env_remove("_JAVA_OPTIONS").env_remove("JDK_JAVA_OPTIONS")
+            .args(["-XshowSettings:properties", "-version"]);
         hide_console_window(&mut command);
         if let Ok(Some(output)) = runtime::output_with_timeout(&mut command, Duration::from_secs(5))
         {
@@ -147,10 +174,18 @@ pub fn find_installed_jdk(required: u32) -> Option<PathBuf> {
 }
 
 fn find_cached_jdk(required: u32) -> Option<PathBuf> {
-    let root = toolchain_root()
-        .join(format!("jdk-{required}"))
-        .join("runtime");
-    find_jdk_home_under(&root, required)
+    let shared = if env::var_os("MINESPORT_TOOLCHAIN_ROOT").is_some_and(|value| !value.is_empty()) {
+        None
+    } else {
+        shared_toolchain_root()
+    };
+    let roots = std::iter::once(toolchain_root()).chain(shared);
+    for root in roots {
+        if let Some(home) = find_jdk_home_under(&root.join(format!("jdk-{required}")).join("runtime"), required) {
+            return Some(home);
+        }
+    }
+    None
 }
 
 fn download_adoptium_jdk<F>(
@@ -248,14 +283,32 @@ where
         message: format!("Verified JDK {required} · extracting…"),
     });
 
-    let extraction = root.join("runtime");
+    let extraction = root.join(format!(".runtime-stage-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&extraction);
     fs::create_dir_all(&extraction)?;
-    extract_archive_cancellable(&archive, &extraction, cancel.clone())?;
-    check_cancelled(&cancel, "finishing JDK extraction")?;
+    let prepared = (|| -> Result<PathBuf> {
+        extract_archive_cancellable(&archive, &extraction, cancel.clone())?;
+        check_cancelled(&cancel, "finishing JDK extraction")?;
+        let home = find_jdk_home_under(&extraction, required)
+            .ok_or_else(|| anyhow!("downloaded JDK {required} did not contain a compatible Java/compiler"))?;
+        let relative = home.strip_prefix(&extraction)?.to_path_buf();
+        let destination = root.join("runtime");
+        let previous = root.join(".runtime-previous");
+        let _ = fs::remove_dir_all(&previous);
+        let had_previous = destination.exists();
+        if had_previous {
+            fs::rename(&destination, &previous).context("stage previous JDK for repair")?;
+        }
+        if let Err(error) = fs::rename(&extraction, &destination) {
+            if had_previous { let _ = fs::rename(&previous, &destination); }
+            return Err(error).context("publish verified JDK runtime");
+        }
+        let _ = fs::remove_dir_all(&previous);
+        Ok(destination.join(relative))
+    })();
+    if prepared.is_err() { let _ = fs::remove_dir_all(&extraction); }
     let _ = fs::remove_file(&archive);
-    let home = find_jdk_home_under(&extraction, required)
-        .ok_or_else(|| anyhow!("downloaded JDK {required} did not contain a compatible javac"))?;
-    Ok(home)
+    prepared
 }
 
 fn download_file(url: &str, destination: &Path, cancel: Arc<AtomicBool>) -> Result<()> {
@@ -478,21 +531,11 @@ fn extract_archive_cancellable(
     cancel: Arc<AtomicBool>,
 ) -> Result<()> {
     check_cancelled(&cancel, "starting JDK extraction")?;
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("powershell.exe");
-        command
-            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
-            .arg("param($archive,$dest) Expand-Archive -LiteralPath $archive -DestinationPath $dest -Force")
-            .arg(archive)
-            .arg(destination);
-        hide_console_window(&mut command);
-        command
-    } else {
-        let mut command = Command::new("tar");
-        command.arg("-xzf").arg(archive).arg("-C").arg(destination);
-        command
-    };
-
+    if cfg!(windows) {
+        return extract_zip_cancellable(archive, destination, &cancel);
+    }
+    let mut command = Command::new("tar");
+    command.arg("-xzf").arg(archive).arg("-C").arg(destination);
     let mut child = command.spawn().with_context(|| {
         if cfg!(windows) {
             "launch PowerShell Expand-Archive for JDK"
@@ -527,6 +570,35 @@ fn extract_archive_cancellable(
             Err(error) => return Err(error).context("poll JDK extraction process"),
         }
     }
+}
+
+fn extract_zip_cancellable(archive: &Path, destination: &Path, cancel: &Arc<AtomicBool>) -> Result<()> {
+    let mut zip = zip::ZipArchive::new(File::open(archive)?).context("open downloaded JDK ZIP")?;
+    let started = Instant::now();
+    let mut buffer = [0u8; 64 * 1024];
+    for index in 0..zip.len() {
+        check_cancelled(cancel, "extracting JDK ZIP")?;
+        let mut entry = zip.by_index(index)?;
+        let name = entry.enclosed_name().ok_or_else(|| anyhow!("JDK ZIP entry escapes runtime directory"))?;
+        if entry.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
+            bail!("JDK ZIP contains an unsupported symbolic link");
+        }
+        let path = destination.join(name);
+        if entry.is_dir() {
+            fs::create_dir_all(&path)?;
+            continue;
+        }
+        if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+        let mut output = File::create(path)?;
+        loop {
+            check_cancelled(cancel, "extracting JDK ZIP")?;
+            if started.elapsed() >= JDK_EXTRACTION_TIMEOUT { bail!("JDK ZIP extraction timed out"); }
+            let count = entry.read(&mut buffer)?;
+            if count == 0 { break; }
+            output.write_all(&buffer[..count])?;
+        }
+    }
+    Ok(())
 }
 
 fn terminate_child(child: &mut Child) {
@@ -585,6 +657,7 @@ pub fn valid_jdk_home(home: &Path, required: u32) -> bool {
     let java = home.join("bin").join(java_name());
     let javac = home.join("bin").join(javac_name());
     java.is_file() && javac.is_file() && javac_major(&javac) >= required
+        && java_major(&java) >= required
 }
 
 fn javac_path(home: &Path) -> PathBuf {
@@ -592,23 +665,27 @@ fn javac_path(home: &Path) -> PathBuf {
 }
 
 pub fn javac_major(javac: &Path) -> u32 {
-    let mut command = Command::new(javac);
+    executable_major(javac)
+}
+
+pub fn java_major(java: &Path) -> u32 {
+    executable_major(java)
+}
+
+fn executable_major(executable: &Path) -> u32 {
+    let mut command = Command::new(executable);
+    // Version probes must not inherit launcher heap/agent flags or reserve the
+    // user's game heap just to discover a runtime.
+    command.env_remove("JAVA_TOOL_OPTIONS").env_remove("_JAVA_OPTIONS").env_remove("JDK_JAVA_OPTIONS");
     command.arg("-version");
     hide_console_window(&mut command);
-    let output = match runtime::output_with_timeout(&mut command, Duration::from_secs(5)) {
-        Ok(Some(output)) => output,
-        _ => return 0,
-    };
-    let text = format!(
-        "{} {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let rx = Regex::new(r"(?i)javac\s+([0-9]+)").expect("javac version regex");
-    rx.captures(&text)
-        .and_then(|capture| capture.get(1))
-        .and_then(|value| value.as_str().parse().ok())
-        .unwrap_or(0)
+    let Ok(Some(output)) = runtime::output_with_timeout(&mut command, Duration::from_secs(5)) else { return 0; };
+    if !output.status.success() { return 0; }
+    let text = format!("{} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let regex = Regex::new(r#"(?:version\s+"|javac\s+)(\d+)(?:\.(\d+))?"#).expect("constant Java version regex");
+    let Some(captures) = regex.captures(&text) else { return 0; };
+    let major = captures.get(1).and_then(|value| value.as_str().parse::<u32>().ok()).unwrap_or(0);
+    if major == 1 { captures.get(2).and_then(|value| value.as_str().parse().ok()).unwrap_or(0) } else { major }
 }
 
 fn find_on_path(executable: &str) -> Option<PathBuf> {
@@ -625,7 +702,19 @@ fn javac_name() -> &'static str {
     if cfg!(windows) { "javac.exe" } else { "javac" }
 }
 fn toolchain_root() -> PathBuf {
-    runtime::cache_root().join("toolchains")
+    env::var_os("MINESPORT_TOOLCHAIN_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| runtime::cache_root().join("toolchains"))
+}
+
+fn shared_toolchain_root() -> Option<PathBuf> {
+    if cfg!(windows) {
+        env::var_os("ProgramData").filter(|value| !value.is_empty())
+            .map(|root| PathBuf::from(root).join("Minesport").join("toolchains"))
+    } else {
+        None
+    }
 }
 
 #[cfg(windows)]
@@ -641,6 +730,42 @@ fn hide_console_window(_command: &mut Command) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn zip_fixture(entries: &[(&str, &[u8])]) -> (PathBuf, PathBuf) {
+        let root = env::temp_dir().join(format!("minesport-jdk-zip-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("jdk.zip");
+        let mut writer = zip::ZipWriter::new(File::create(&archive).unwrap());
+        for (name, bytes) in entries {
+            writer.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+        (root, archive)
+    }
+
+    #[test]
+    fn native_jdk_zip_extracts_nested_binary_files() {
+        let (root, archive) = zip_fixture(&[("jdk/bin/java.exe", b"java\0bytes"), ("jdk/lib/modules", b"modules")]);
+        let output = root.join("runtime");
+        extract_zip_cancellable(&archive, &output, &Arc::new(AtomicBool::new(false))).unwrap();
+        assert_eq!(fs::read(output.join("jdk/bin/java.exe")).unwrap(), b"java\0bytes");
+        assert_eq!(fs::read(output.join("jdk/lib/modules")).unwrap(), b"modules");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_jdk_zip_rejects_escape_and_cancel_before_writing() {
+        let (root, archive) = zip_fixture(&[("../escaped.exe", b"bad")]);
+        assert!(extract_zip_cancellable(&archive, &root.join("runtime"), &Arc::new(AtomicBool::new(false))).is_err());
+        assert!(!root.join("escaped.exe").exists());
+        fs::remove_dir_all(root).unwrap();
+        let (root, archive) = zip_fixture(&[("jdk/bin/java.exe", b"java")]);
+        assert!(extract_zip_cancellable(&archive, &root.join("runtime"), &Arc::new(AtomicBool::new(true))).is_err());
+        assert!(!root.join("runtime/jdk/bin/java.exe").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn fake_oracle_java_directory_is_not_a_jdk() {
@@ -709,3 +834,4 @@ mod tests {
         let _ = fs::remove_file(root);
     }
 }
+

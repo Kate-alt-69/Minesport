@@ -303,7 +303,8 @@ jobs:
           $files = @(
             (Join-Path $env:GITHUB_WORKSPACE 'build.ps1'),
             (Join-Path $env:GITHUB_WORKSPACE 'check.ps1'),
-            (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\install-blender.ps1')
+            (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\install-blender.ps1'),
+            (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\install-runtime.ps1')
           )
           foreach ($file in $files) {
             $tokens = $null
@@ -362,6 +363,50 @@ jobs:
           if ([int]$identity.protocolVersion -ne [int]$manifest.protocolVersion) { throw 'Engine manifest protocol does not match sidecar identity.' }
           $actual = (Get-FileHash -LiteralPath .\dist\source\minesport-engine.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne [string]$manifest.sha256) { throw 'Engine manifest SHA-256 does not match sidecar.' }
+      - name: Prepare and repair runtime with no user Java configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'Minesport runtime fixture'
+          $app = Join-Path $root 'app with spaces'
+          $javaRoot = Join-Path $root 'toolchains'
+          New-Item -ItemType Directory -Force -Path $app | Out-Null
+          Copy-Item .\dist\source\* $app
+          $helper = Join-Path $env:GITHUB_WORKSPACE 'installer\windows\install-runtime.ps1'
+          $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $helper -AppDirectory $app -RuntimeRoot $javaRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Cold required-runtime preparation failed.' }
+          $oldPath = $env:PATH
+          $oldJava = $env:JAVA_HOME
+          $oldJdk = $env:JDK_HOME
+          $oldGradle = $env:GRADLE_JAVA_HOME
+          $oldRoot = $env:MINESPORT_TOOLCHAIN_ROOT
+          try {
+            $env:JAVA_HOME = Join-Path $root 'missing-java'
+            $env:JDK_HOME = $env:JAVA_HOME
+            $env:GRADLE_JAVA_HOME = $env:JAVA_HOME
+            $env:PATH = Join-Path $env:SystemRoot 'System32'
+            $env:MINESPORT_TOOLCHAIN_ROOT = $javaRoot
+            $engine = Join-Path $app 'minesport-engine.exe'
+            $ready = (& $engine --check-runtime | Out-String).Trim() | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $ready.type -ne 'runtimeReady' -or [int]$ready.javaMajor -lt 22) { throw 'Offline runtime readiness check failed.' }
+            if (-not ([string]$ready.javaHome).StartsWith($javaRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Runtime readiness escaped the fixture root.' }
+            $java = Join-Path $ready.javaHome 'bin\java.exe'
+            $disabled = "$java.disabled"
+            Move-Item $java $disabled
+            $damaged = Start-Process -FilePath $engine -ArgumentList '--check-runtime' -Wait -PassThru
+            if ($damaged.ExitCode -eq 0) { throw 'Damaged runtime was incorrectly accepted.' }
+            & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $helper -AppDirectory $app -RuntimeRoot $javaRoot
+            if ($LASTEXITCODE -ne 0) { throw 'Damaged runtime repair failed.' }
+            & $engine --check-runtime
+            if ($LASTEXITCODE -ne 0) { throw 'Repaired runtime is not ready.' }
+          } finally {
+            $env:PATH = $oldPath
+            $env:JAVA_HOME = $oldJava
+            $env:JDK_HOME = $oldJdk
+            $env:GRADLE_JAVA_HOME = $oldGradle
+            $env:MINESPORT_TOOLCHAIN_ROOT = $oldRoot
+          }
       - name: Resolve Windows package version
         shell: pwsh
         run: |
@@ -400,6 +445,16 @@ jobs:
         run: |
           & $env:NSIS_EXE '/V2' "/DSourceDir=$env:GITHUB_WORKSPACE" "/DAppVersion=$env:MINESPORT_VERSION" (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\minesport.nsi')
           if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed.' }
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          & choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+          $candidates = @('C:\Program Files (x86)\Inno Setup 6\ISCC.exe', 'C:\Program Files (x86)\Inno Setup 7\ISCC.exe')
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw 'Inno Setup compiler was not found.' }
+          & $iscc "/DSourceDir=$env:GITHUB_WORKSPACE" "/DAppVersion=$env:MINESPORT_VERSION" .\installer\windows\minesport.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
       - name: Verify Windows installer outputs
         shell: pwsh
         run: |
@@ -420,6 +475,7 @@ jobs:
           path: |
             dist/installer/Minesport-*-x64.msi
             dist/installer/Minesport-*-Setup-x64.exe
+            dist/installer/Minesport-*-Inno-Setup-x64.exe
             dist/source/Minesport.exe
             dist/source/minesport-engine.exe
             dist/source/minesport-engine.json
@@ -556,3 +612,4 @@ jobs:
         env:
           VERDICT: ${{ steps.verdict.outputs.result }}
         run: test "$VERDICT" = success
+

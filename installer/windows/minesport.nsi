@@ -81,6 +81,11 @@ Function .onInit
     SetSilent silent
   ${EndIf}
 
+  ${IfNot} ${AtLeastWin10}
+    MessageBox MB_ICONSTOP|MB_OK "Minesport requires Windows 10 or newer."
+    Abort
+  ${EndIf}
+
   ${IfNot} ${RunningX64}
     MessageBox MB_ICONSTOP|MB_OK "Minesport requires 64-bit Windows."
     Abort
@@ -149,6 +154,7 @@ Section "!Minesport core (required)" SEC_CORE
 
   SetOutPath "$INSTDIR\tools"
   File "${SourceDir}\installer\windows\install-blender.ps1"
+  File "${SourceDir}\installer\windows\install-runtime.ps1"
 
   CreateDirectory "$SMPROGRAMS"
   CreateShortcut "$SMPROGRAMS\Minesport.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
@@ -166,6 +172,24 @@ Section "!Minesport core (required)" SEC_CORE
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoRepair" 1
 
 core_done:
+SectionEnd
+
+Section "!Required Java and Visual C++ runtimes" SEC_RUNTIME
+  SectionIn RO
+  ${If} $EngineOnly == "1"
+    Goto runtime_done
+  ${EndIf}
+runtime_retry:
+  ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\tools\install-runtime.ps1" -AppDirectory "$INSTDIR"' $0
+  ${If} $0 != 0
+    DetailPrint "Required runtime preparation failed. Details: ProgramData\Minesport\logs\runtime-setup.log"
+    IfSilent runtime_abort
+    MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL "Required runtimes could not be prepared. Check your internet connection, then retry. Details are in ProgramData\Minesport\logs\runtime-setup.log. You can run setup again to repair the installed files." IDRETRY runtime_retry
+runtime_abort:
+    SetErrorLevel 21
+    Quit
+  ${EndIf}
+runtime_done:
 SectionEnd
 
 Section /o "Desktop shortcut" SEC_DESKTOP
@@ -201,6 +225,7 @@ SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "Install Minesport ${APP_VERSION}, its independently replaceable engine sidecar, and embedded loader Export Workers."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_RUNTIME} "Prepare verified Java and Microsoft Visual C++ runtimes. Internet is needed when they are missing."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "Create a Minesport shortcut on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_BLENDER} "Download and install Blender 5.2 LTS from the official Blender Foundation mirror."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_TRANSLATOR} "Install the Minesport Blender translator into detected Blender 4.3+ profiles."
@@ -217,6 +242,7 @@ Section "Uninstall"
   Delete "$INSTDIR\${ENGINE_MANIFEST}"
   Delete "$INSTDIR\${ENGINE_MANIFEST}.prev"
   Delete "$INSTDIR\tools\install-blender.ps1"
+  Delete "$INSTDIR\tools\install-runtime.ps1"
   Delete "$INSTDIR\Uninstall.exe"
   ; Clean up bridge-data left by pre-embedded Minesport installs.
   RMDir /r "$INSTDIR\bridge-data"
@@ -224,3 +250,4 @@ Section "Uninstall"
   RMDir "$INSTDIR"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
 SectionEnd
+
