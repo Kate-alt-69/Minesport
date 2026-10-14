@@ -16,6 +16,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+
+  windows-build-script:
+    name: Windows Gradle build failure regression
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test PowerShell 7
+        shell: pwsh
+        run: .\tests\windows-build-retry.ps1
+      - name: Test Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\windows-build-retry.ps1
+
   loader-bridges-bundled:
     name: Bundled loader Bridges · Minecraft 1.21.10 · Java 21
     runs-on: ubuntu-latest
