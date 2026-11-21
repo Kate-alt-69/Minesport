@@ -1,0 +1,31 @@
+name: Setup Inno Setup
+description: Download, hash-check, Authenticode-verify and install the pinned Inno Setup 6.7.4 compiler.
+runs:
+  using: composite
+  steps:
+    - name: Download, verify and install Inno Setup
+      shell: pwsh
+      run: |
+        $version = '6.7.4'
+        $tag = 'is-6_7_4'
+        $expectedHash = 'a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c'
+        $file = "innosetup-$version.exe"
+        $url = "https://github.com/jrsoftware/issrc/releases/download/$tag/$file"
+        $installer = Join-Path $env:RUNNER_TEMP $file
+        Invoke-WebRequest -Uri $url -OutFile $installer -MaximumRedirection 5 -ErrorAction Stop
+
+        $actualHash = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $expectedHash) { throw "Inno Setup SHA-256 mismatch: $actualHash" }
+
+        $signature = Get-AuthenticodeSignature -FilePath $installer
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys B\.V\.') {
+          throw "Inno Setup Authenticode validation failed: $($signature.Status)"
+        }
+
+        $installDir = Join-Path $env:RUNNER_TEMP 'Inno6'
+        $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installDir") -Wait -PassThru
+        if ($process.ExitCode -ne 0) { throw "Inno Setup installer exited with code $($process.ExitCode)." }
+
+        $iscc = Join-Path $installDir 'ISCC.exe'
+        if (-not (Test-Path $iscc)) { throw "Inno Setup 6 compiler was not found at $iscc after installation." }
+        "ISCC_EXE=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

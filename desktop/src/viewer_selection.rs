@@ -129,8 +129,14 @@ fn dominant_axis(direction: [f32; 3]) -> usize {
 mod tests {
     use super::*;
 
+    // These tests exercise the production singleton. Serialize them so another
+    // test cannot reset the shared selection between two related operations.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+
     #[test]
     fn lmb_rmb_lmb_matches_retired_box_workflow() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         reset();
         assert_eq!(primary_action(), PrimaryAction::PickPointA);
         set_point_a([5, 70, -4]);
@@ -143,6 +149,7 @@ mod tests {
 
     #[test]
     fn choosing_new_point_a_clears_point_b() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         reset();
         set_point_a([0, 0, 0]);
         set_point_b([4, 4, 4]).unwrap();
@@ -153,6 +160,7 @@ mod tests {
 
     #[test]
     fn e_wheel_resize_uses_dominant_axis_and_look_sign() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         reset();
         set_point_a([0, 0, 0]);
         set_point_b([3, 4, 5]).unwrap();
