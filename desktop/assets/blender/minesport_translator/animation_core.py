@@ -28,6 +28,7 @@ MAX_TIMELINE_MARKERS = 512
 
 _ORIGINAL_TRANSLATE_TEXTURE = None
 _ORIGINAL_TRANSLATE_SCENE = None
+_MSGBUS_OWNER = object()
 
 
 def _base_material_name(name):
@@ -79,19 +80,31 @@ def _register_material_drivers(material):
     if material is None or SCHEDULE_KEY not in material:
         return None, None
 
+    scene = getattr(bpy.context, "scene", None)
+    if scene is None:
+        return None, None
+
     sequence = _material_schedule(material)
+    if not sequence:
+        return None, None
+
     frame_count = max(1, int(material.get(FRAME_COUNT_KEY, 1)))
     columns = max(1, int(material.get(COLUMNS_KEY, 1)))
     rows = max(1, int(material.get(ROWS_KEY, frame_count)))
-    frames_per_tick = max(1.0e-6, float(material.get(FRAMES_PER_TICK_KEY, 1.0)))
     base = _driver_base(material.name)
     x_name = base + "_x"
     y_name = base + "_y"
 
     def sprite(frame, speed):
-        scaled = max(0.0, float(frame) - 1.0) * max(0.0, float(speed))
-        index = int(math.floor(scaled / frames_per_tick)) % len(sequence)
-        return max(0, min(frame_count - 1, int(sequence[index])))
+        try:
+            fps_base = max(1.0e-6, float(scene.render.fps_base))
+            fps = max(1.0e-6, float(scene.render.fps) / fps_base)
+            frames_per_tick = fps / 20.0
+            scaled = max(0.0, float(frame) - 1.0) * max(0.0, float(speed))
+            index = int(math.floor(scaled / frames_per_tick)) % len(sequence)
+            return max(0, min(frame_count - 1, int(sequence[index])))
+        except Exception:
+            return 0
 
     def sample_x(frame, speed, enabled):
         if not enabled:
@@ -316,6 +329,41 @@ def install_texture_markers(metadata, scene=None):
     return count
 
 
+def _refresh_texture_markers_for_fps_change():
+    for scene in bpy.data.scenes:
+        raw = scene.get("minesport_texture_timeline_json", "")
+        if not raw:
+            continue
+        try:
+            descriptors = json.loads(str(raw))
+        except Exception:
+            continue
+        if not isinstance(descriptors, list):
+            continue
+        try:
+            install_texture_markers({"animations": descriptors}, scene)
+        except Exception as exc:
+            print(f"[Minesport Animation] FPS marker refresh failed for {scene.name}: {exc}")
+
+
+def _subscribe_fps_changes():
+    try:
+        bpy.msgbus.clear_by_owner(_MSGBUS_OWNER)
+        for prop in ("fps", "fps_base"):
+            bpy.msgbus.subscribe_rna(
+                key=(bpy.types.RenderSettings, prop),
+                owner=_MSGBUS_OWNER,
+                args=(),
+                notify=_refresh_texture_markers_for_fps_change,
+                options={"PERSISTENT"},
+            )
+    except Exception as exc:
+        # Live driver timing remains correct even if a Blender build rejects
+        # one of the RNA message-bus keys; only automatic marker relayout is lost.
+        print(f"[Minesport Animation] FPS marker subscription unavailable: {exc}")
+
+
+
 def _translate_scene_wrapper(metadata=None, objects=None, asset_path=None):
     result = _ORIGINAL_TRANSLATE_SCENE(metadata, objects=objects, asset_path=asset_path)
     try:
@@ -401,10 +449,16 @@ def register():
     for material in bpy.data.materials:
         if material is not None and SCHEDULE_KEY in material:
             _register_material_drivers(material)
+    _subscribe_fps_changes()
 
 
 def unregister():
     global _ORIGINAL_TRANSLATE_TEXTURE, _ORIGINAL_TRANSLATE_SCENE
+
+    try:
+        bpy.msgbus.clear_by_owner(_MSGBUS_OWNER)
+    except Exception:
+        pass
 
     if _ORIGINAL_TRANSLATE_SCENE is not None:
         translate_module.translate_scene = _ORIGINAL_TRANSLATE_SCENE
