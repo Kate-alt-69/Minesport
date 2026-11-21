@@ -71,4 +71,4 @@ Use them when debugging or when you explicitly want to invalidate/rebuild a cach
 
 ## What if the worker fails?
 
-Minesport should preserve useful worker diagnostics instead of deleting the only evidence with the disposable directory. Use **[Page 20 — Troubleshooting](20.md)** and include the preserved runtime-worker log when reporting the problem.
+Minesport should preserve useful worker diagnostics instead of deleting the only evidence with the disposable directory. Use **[Page 20 — Troubleshooting](20-troubleshooting.md)** and include the preserved runtime-worker log when reporting the problem.

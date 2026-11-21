@@ -1,6 +1,6 @@
 # Page 13 — Minecraft Light Blocks in Blender
 
-This page explains Minesport's Minecraft-style light placement **from the beginning**. If you do not know where the Minesport sidebar is, read **[Page 11](11.md)**. If clicking FLATTER blocks is still confusing, read **[Page 12](12.md)** first.
+This page explains Minesport's Minecraft-style light placement **from the beginning**. If you do not know where the Minesport sidebar is, read **[Page 11](11-find-minesport-panel.md)**. If clicking FLATTER blocks is still confusing, read **[Page 12](12-flatter-for-beginners.md)** first.
 
 ## The two objects involved
 
@@ -28,7 +28,7 @@ This separation is important because hiding the helper must **not** turn off ill
 4. Select a Minesport `FLATTER_...` object.
 5. Open the **FLATTER Workflow / Minecraft Light Block** controls.
 
-If step 3 makes no sense, use **[Page 11 — Find the Minesport Panel](11.md)**.
+If step 3 makes no sense, use **[Page 11 — Find the Minesport Panel](11-find-minesport-panel.md)**.
 
 ## Place a light above a block
 
@@ -91,4 +91,4 @@ Check:
 4. helper visibility is not being confused with actual light visibility;
 5. the selected Light Level is what you expected.
 
-For broader problems, use **[Page 20 — Troubleshooting](20.md)**.
+For broader problems, use **[Page 20 — Troubleshooting](20-troubleshooting.md)**.

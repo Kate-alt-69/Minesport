@@ -1,6 +1,6 @@
 # Page 02 — Minesport Main App
 
-This page explains the desktop app itself. If your goal is Blender editing, the Blender-specific guides start at **[Page 10](10.md)**.
+This page explains the desktop app itself. If your goal is Blender editing, the Blender-specific guides start at **[Page 10](10-blender-basics.md)**.
 
 ## Left-side activities
 
@@ -56,4 +56,4 @@ Manual Preflight is an **advanced diagnostic**, not a required step before Expor
 
 ## Next
 
-For Blender, continue with **[Page 10 — Blender Beginner Basics](10.md)**.
+For Blender, continue with **[Page 10 — Blender Beginner Basics](10-blender-basics.md)**.
