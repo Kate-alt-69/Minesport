@@ -85,6 +85,9 @@ def _register_material_drivers(material):
         return None, None
 
     sequence = _material_schedule(material)
+    if not sequence:
+        return None, None
+
     frame_count = max(1, int(material.get(FRAME_COUNT_KEY, 1)))
     columns = max(1, int(material.get(COLUMNS_KEY, 1)))
     rows = max(1, int(material.get(ROWS_KEY, frame_count)))
