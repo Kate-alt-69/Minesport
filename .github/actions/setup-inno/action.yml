@@ -1,0 +1,39 @@
+name: Setup Inno Setup
+description: Download, verify and install the pinned official Inno Setup compiler.
+inputs:
+  version:
+    description: Inno Setup 6 version to install.
+    required: false
+    default: "6.7.4"
+runs:
+  using: composite
+  steps:
+    - name: Download, verify and install Inno Setup
+      shell: pwsh
+      env:
+        INNO_SETUP_VERSION: ${{ inputs.version }}
+      run: |
+        $version = $env:INNO_SETUP_VERSION
+        if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid Inno Setup version: $version" }
+        $tag = 'is-' + ($version -replace '\.', '_')
+        $file = "innosetup-$version.exe"
+        $url = "https://github.com/jrsoftware/issrc/releases/download/$tag/$file"
+        $installer = Join-Path $env:RUNNER_TEMP $file
+        Invoke-WebRequest -Uri $url -OutFile $installer -MaximumRedirection 5
+
+        $signature = Get-AuthenticodeSignature -FilePath $installer
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys B\.V\.') {
+          throw "Inno Setup installer signature validation failed: $($signature.Status)"
+        }
+
+        $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -Wait -PassThru
+        if ($process.ExitCode -ne 0) { throw "Inno Setup installer exited with code $($process.ExitCode)." }
+
+        $candidates = @()
+        $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+        $programFiles = [Environment]::GetFolderPath('ProgramFiles')
+        if ($programFilesX86) { $candidates += Join-Path $programFilesX86 'Inno Setup 6\ISCC.exe' }
+        if ($programFiles) { $candidates += Join-Path $programFiles 'Inno Setup 6\ISCC.exe' }
+        $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $iscc) { throw 'Inno Setup 6 compiler was not found after installation.' }
+        "ISCC_EXE=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
