@@ -11,7 +11,7 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 
-/** IPC mode for the Go wrapper. */
+/** Line-delimited JSON IPC server used by the Rust/Slint desktop application. */
 public class IpcMode {
     private static final Gson GSON = new Gson();
     private static final PrintWriter OUT = new PrintWriter(

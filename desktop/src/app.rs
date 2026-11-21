@@ -222,7 +222,7 @@ pub fn run() -> Result<()> {
     );
     append_diagnostic(
         &ui,
-        "Desktop: Rust + Slint · Fyne UI archived under /archive/go-fyne-ui",
+        "Desktop: Rust + Slint",
     );
     append_diagnostic(
         &ui,

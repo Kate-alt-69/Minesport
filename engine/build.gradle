@@ -24,6 +24,27 @@ application {
     mainClass = 'dev.kastrick.minesport.Main'
 }
 
+sourceSets {
+    dev {
+        java.srcDir 'src/dev/java'
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+configurations {
+    devImplementation.extendsFrom implementation
+    devRuntimeOnly.extendsFrom runtimeOnly
+}
+
+tasks.register('runDevUi', JavaExec) {
+    group = 'application'
+    description = 'Run the Java engine developer UI without packaging it in the production engine JAR.'
+    dependsOn sourceSets.dev.classesTaskName
+    classpath = sourceSets.dev.runtimeClasspath
+    mainClass = 'dev.kastrick.minesport.DevUiMain'
+}
+
 repositories {
     mavenCentral()
 }
