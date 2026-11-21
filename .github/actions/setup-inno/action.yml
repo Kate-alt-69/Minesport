@@ -22,14 +22,10 @@ runs:
           throw "Inno Setup Authenticode validation failed: $($signature.Status)"
         }
 
-        $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -Wait -PassThru
+        $installDir = Join-Path $env:RUNNER_TEMP 'Inno6'
+        $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installDir") -Wait -PassThru
         if ($process.ExitCode -ne 0) { throw "Inno Setup installer exited with code $($process.ExitCode)." }
 
-        $candidates = @()
-        $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
-        $programFiles = [Environment]::GetFolderPath('ProgramFiles')
-        if ($programFilesX86) { $candidates += Join-Path $programFilesX86 'Inno Setup 6\ISCC.exe' }
-        if ($programFiles) { $candidates += Join-Path $programFiles 'Inno Setup 6\ISCC.exe' }
-        $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $iscc) { throw 'Inno Setup 6 compiler was not found after installation.' }
+        $iscc = Join-Path $installDir 'ISCC.exe'
+        if (-not (Test-Path $iscc)) { throw "Inno Setup 6 compiler was not found at $iscc after installation." }
         "ISCC_EXE=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
