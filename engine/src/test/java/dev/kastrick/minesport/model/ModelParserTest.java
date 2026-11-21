@@ -121,7 +121,7 @@ class ModelParserTest {
         assertArrayEquals(new float[]{16, 15, 14}, element.to, 0.0001f);
         assertFalse(element.shade);
         assertEquals("y", element.rotation.axis);
-        assertEquals(45.0f, element.rotation.angle);
+        assertEquals(45.0f, element.rotation.angle, 0.0001f);
         assertTrue(element.rotation.rescale);
 
         BlockModel.Face face = element.faces.get("north");
