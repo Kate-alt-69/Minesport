@@ -4,7 +4,7 @@
 
 Minesport reads Minecraft save data and the game's resource assets, resolves vanilla and modded block geometry, and exports selected parts of a world to **glTF 2.0** or **OBJ + MTL** for Blender and other 3D tools.
 
-> **Current status:** the Java engine and Fabric bridge build successfully. The native Go/Fyne wrapper supports the current loader/resource resolver architecture described below.
+> **Current status:** the Rust/Slint desktop application, Java export engine, and loader-specific bridge workers are the active Minesport architecture. The former Go/Fyne desktop UI has been retired.
 
 ## What Minesport actually exports
 
@@ -101,7 +101,7 @@ The native UI supports:
 - Cached 2D heightmaps that invalidate when the save's region files change
 - Middle-mouse panning
 - Scroll-wheel zoom
-- Live OpenGL 3D preview hosted inside the Fyne window on Windows
+- Live 3D preview integrated into the native Rust/Slint Workbench
 - View controls overlaid at the top-right of either viewport
 
 3D controls:
@@ -129,8 +129,8 @@ Minesport copies the selected world to a temporary working directory before read
 ## Requirements
 
 - Windows 10/11 x64, Linux, or macOS
-- Java 22+
-- Go 1.26+
+- Rust 1.92+ (edition 2024)
+- Java 22+ for the engine; bridge compatibility builds select their required Java version
 - A Minecraft installation containing the matching Minecraft client JAR for best vanilla geometry resolution
 - The target world's `level.dat` and `.mca` region files
 
@@ -163,7 +163,7 @@ Every Windows build also stages the standalone application at `dist\source\Mines
 
 The MSI project is pinned to WiX Toolset 7.0.0 and explicitly accepts the WiX 7 EULA. Building it requires the .NET SDK 6 or newer; the SDK and WiX extensions restore automatically through `dotnet build`. Review the [WiX Open Source Maintenance Fee terms](https://docs.firegiant.com/wix/osmf/) before building the MSI for a revenue-generating organization.
 
-The current Windows builds require Windows 10 or 11 x64. Windows 7 is not supported by the Go toolchain used by Minesport.
+The current Windows builds require Windows 10 or 11 x64. Windows 7 is not supported by the Rust/Slint desktop toolchain.
 
 ### Linux / macOS
 
@@ -172,36 +172,26 @@ chmod +x build.sh
 ./build.sh
 ```
 
-### Manual build
+### Build pipeline
 
-```bash
-cd engine
-./gradlew jar
+The root build scripts are the supported orchestration entry points. They fingerprint source inputs, build the Java engine and loader-specific bridge workers when required, then compile and stage the Rust/Slint desktop application.
 
-cd ../bridge
-./gradlew jar
+The pipeline produces three components:
 
-cd ../wrapper
-go mod tidy
-go build -o minesport .
-```
-
-The repository's build pipeline produces three components:
-
-1. **Fabric bridge mod** — captures Minecraft-side asset/geometry information when required.
-2. **Java engine** — reads worlds, resolves assets and writes OBJ/glTF.
-3. **Go/Fyne wrapper** — native desktop UI and 3D tooling connected to the Java engine through IPC.
+1. **Rust/Slint desktop application** — native Workbench UI, world selection, preview, runtime management, and IPC orchestration.
+2. **Java engine** — reads worlds, resolves Minecraft/mod assets, and writes OBJ/glTF exports.
+3. **Loader bridge workers** — Fabric, Forge, NeoForge, and Quilt workers that capture loader-specific Minecraft-side data when required.
 
 ## Running
 
-Recommended native UI:
+Recommended native desktop UI:
 
-```bash
-cd wrapper
-./minesport
-```
+- **Windows:** `dist\\source\\Minesport.exe`
+- **Linux / macOS:** `./dist/minesport`
 
-Java development UI:
+The root build script stages the platform executable after a successful build.
+
+Java engine developer UI (not the shipped desktop Workbench):
 
 ```bash
 cd engine
@@ -212,18 +202,21 @@ cd engine
 
 ```text
 Minesport/
-├── bridge/       Fabric-side bridge and asset extraction
-├── engine/       Java exporter core
-│   ├── nbt/      NBT reader
-│   ├── region/   Anvil/MCA world reader
-│   ├── model/    Blockstate/model representation
-│   ├── resolver/ Vanilla + Fabric + Quilt + Forge/NeoForge + Polymer + resource packs
-│   └── export/   OBJ/glTF geometry and material exporters
-└── wrapper/      Go/Fyne desktop UI
-    ├── ipc/      Java engine communication
-    ├── launcher/ Minecraft launcher/world discovery
-    ├── ui/      World picker, map and export controls
-    └── viewer/  OpenGL 3D preview
+├── desktop/                         Rust + Slint native desktop Workbench
+│   ├── src/                         IPC, runtime, preview, update and UI orchestration
+│   └── ui/                          Slint Workbench UI
+├── engine/                          Java exporter core
+│   ├── nbt/                         NBT reader
+│   ├── region/                      Anvil/MCA world reader
+│   ├── model/                       Blockstate/model representation
+│   ├── resolver/                    Vanilla + mod + resource-pack resolution
+│   └── export/                      OBJ/glTF geometry and material exporters
+├── minesport-bridge-fabric/          Fabric worker source
+├── minesport-bridge-forge/           Forge worker source
+├── minesport-bridge-neoforge/        NeoForge worker source
+├── minesport-bridge-quilt/           Quilt worker source
+├── minesport-bridge-*-versions/      Per-version compatibility manifests and patches
+└── installer/windows/               NSIS default, optional WiX MSI and Inno Setup packages
 ```
 
 ## Resolver priority

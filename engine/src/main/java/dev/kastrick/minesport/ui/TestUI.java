@@ -17,7 +17,7 @@ import java.util.List;
 
 /**
  * Swing test UI for Minesport.
- * Not the final UI (Go/Fyne handles that) — just for local Java testing.
+ * Not the shipped UI (the Rust/Slint Workbench handles that) — retained for local Java testing.
  */
 public class TestUI extends JFrame {
 
