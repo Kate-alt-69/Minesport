@@ -126,6 +126,7 @@ def _register_material_drivers(material):
     bpy.app.driver_namespace[y_name] = sample_y
     return x_name, y_name
 
+
 def _remove_existing_animation_nodes(material):
     tree = material.node_tree
     if tree is None:
