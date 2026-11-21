@@ -14,7 +14,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class DataPackBlockTagReaderTest {
     @TempDir
@@ -91,13 +90,10 @@ class DataPackBlockTagReaderTest {
     @Test
     void nullOrEmptyInputsProduceAnEmptyReader() {
         DataPackBlockTagReader reader = DataPackBlockTagReader.load(null, null);
-        assertTrueEmpty(reader);
-    }
-
-    private static void assertTrueEmpty(DataPackBlockTagReader reader) {
-        assertFalse(!reader.isEmpty());
+        assertEquals(Set.of(), reader.getTagIds());
         assertEquals(Set.of(), reader.resolveTag("demo:missing"));
     }
+
 
     private static void writeTag(Path pack, String relative, String json) throws IOException {
         Path file = pack.resolve(relative);
