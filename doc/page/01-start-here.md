@@ -21,18 +21,18 @@ You do **not** need a Minesport “Project” file. That system was removed for 
 
 ## If Blender terminology is already confusing
 
-Read **[Page 10 — Blender Beginner Basics](10.md)** before the addon pages. It explains the 3D Viewport, Outliner, N-panel/sidebar, Object Mode, selection, and collections in plain language.
+Read **[Page 10 — Blender Beginner Basics](10-blender-basics.md)** before the addon pages. It explains the 3D Viewport, Outliner, N-panel/sidebar, Object Mode, selection, and collections in plain language.
 
-Then read **[Page 11 — Find the Minesport Panel](11.md)** so instructions like “open the Minesport panel” have an exact location instead of assuming you already know Blender.
+Then read **[Page 11 — Find the Minesport Panel](11-find-minesport-panel.md)** so instructions like “open the Minesport panel” have an exact location instead of assuming you already know Blender.
 
 ## If you see a huge object named `FLATTER_...`
 
-That is intentional. Do not immediately enter Blender Edit Mode and start deleting faces. Read **[Page 12 — FLATTER for Blender Beginners](12.md)** first.
+That is intentional. Do not immediately enter Blender Edit Mode and start deleting faces. Read **[Page 12 — FLATTER for Blender Beginners](12-flatter-for-beginners.md)** first.
 
 ## If you want Minecraft-style invisible lights
 
-Read **[Page 13 — Minecraft Light Blocks in Blender](13.md)**. It explains the difference between the 1×1×1 Minesport helper block and the Blender POINT light that actually produces illumination.
+Read **[Page 13 — Minecraft Light Blocks in Blender](13-light-blocks.md)**. It explains the difference between the 1×1×1 Minesport helper block and the Blender POINT light that actually produces illumination.
 
 ## If something does not work
 
-Read **[Page 20 — Troubleshooting](20.md)** and include the Minesport diagnostics log when reporting a bug.
+Read **[Page 20 — Troubleshooting](20-troubleshooting.md)** and include the Minesport diagnostics log when reporting a bug.

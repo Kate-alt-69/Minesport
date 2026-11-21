@@ -33,7 +33,7 @@ There are also different geometry classes:
 
 ## Step 1 — Find the Minesport panel
 
-If you have never opened it, stop here and read **[Page 11 — Find the Minesport Panel](11.md)**.
+If you have never opened it, stop here and read **[Page 11 — Find the Minesport Panel](11-find-minesport-panel.md)**.
 
 The short version is:
 
@@ -141,10 +141,10 @@ Check these in order:
 5. You clicked actual visible FLATTER geometry, not an unrelated object sitting in front of it.
 6. If you imported before updating the addon, restart Blender and re-import/reopen after the addon update.
 
-See **[Page 20 — Troubleshooting](20.md)** if those checks do not solve it.
+See **[Page 20 — Troubleshooting](20-troubleshooting.md)** if those checks do not solve it.
 
 ## Where Minecraft Light blocks fit in
 
 Light placement uses the same logical block focus. You first click/focus the Minecraft block face you care about, then use the Minesport light controls.
 
-Read **[Page 13 — Minecraft Light Blocks in Blender](13.md)** next.
+Read **[Page 13 — Minecraft Light Blocks in Blender](13-light-blocks.md)** next.

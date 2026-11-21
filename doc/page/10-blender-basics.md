@@ -32,7 +32,7 @@ At the top-left of the 3D Viewport Blender shows a mode selector. For normal Min
 
 A FLATTER object is **not** meant to be edited as ordinary merged Blender mesh faces. The visible mesh is a render cache. Minesport keeps the Minecraft blocks in an embedded logical grid.
 
-If you want to edit one Minecraft block, use Minesport's logical selection/materialization tools instead. See **[Page 12 — FLATTER](12.md)**.
+If you want to edit one Minecraft block, use Minesport's logical selection/materialization tools instead. See **[Page 12 — FLATTER](12-flatter-for-beginners.md)**.
 
 ## 4. The right sidebar / N-panel
 
@@ -40,7 +40,7 @@ With your mouse over the 3D Viewport, press **N**. A sidebar appears on the righ
 
 Minesport adds a tab named **Minesport** there when the addon is installed and enabled.
 
-If you have never opened it before, continue to **[Page 11 — Find the Minesport Panel](11.md)**.
+If you have never opened it before, continue to **[Page 11 — Find the Minesport Panel](11-find-minesport-panel.md)**.
 
 ## 5. Collections
 
@@ -52,4 +52,4 @@ The lower-right area with vertical icons is Blender's **Properties editor**. Min
 
 ## Next
 
-Go to **[Page 11](11.md)** to find the Minesport panel, then **[Page 12](12.md)** for FLATTER.
+Go to **[Page 11](11-find-minesport-panel.md)** to find the Minesport panel, then **[Page 12](12-flatter-for-beginners.md)** for FLATTER.

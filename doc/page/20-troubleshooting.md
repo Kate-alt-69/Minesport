@@ -4,7 +4,7 @@ This page is for problems after you have already tried the normal workflow. If a
 
 ## I cannot find the Minesport panel in Blender
 
-Read **[Page 11 — Find the Minesport Panel](11.md)**. The exact path is:
+Read **[Page 11 — Find the Minesport Panel](11-find-minesport-panel.md)**. The exact path is:
 
 **3D Viewport → press N → Minesport tab**.
 
@@ -12,7 +12,7 @@ If the tab is missing, verify the `Minesport Dynamic Translator` addon is instal
 
 ## I selected a FLATTER object but clicking does not give me a green block outline
 
-Read **[Page 12 — FLATTER for Blender Beginners](12.md)** first.
+Read **[Page 12 — FLATTER for Blender Beginners](12-flatter-for-beginners.md)** first.
 
 Then check:
 
@@ -33,17 +33,17 @@ Use **Logical overlay → Selected only** for normal work.
 
 ## I do not understand why thousands of Minecraft blocks are one Blender object
 
-That is the point of FLATTER. Read **[Page 12](12.md)**. The visible mesh is optimized render geometry; the original Minecraft block grid remains embedded and addressable.
+That is the point of FLATTER. Read **[Page 12](12-flatter-for-beginners.md)**. The visible mesh is optimized render geometry; the original Minecraft block grid remains embedded and addressable.
 
 ## I need one block to behave like a normal Blender object
 
 Use FLATTER **Materialize** for that block. Do not destroy the entire optimized FLATTER mesh just to animate one block.
 
-See the **Materialize** section on **[Page 12](12.md)**.
+See the **Materialize** section on **[Page 12](12-flatter-for-beginners.md)**.
 
 ## My Minecraft Light block is invisible / I cannot find it
 
-Read **[Page 13 — Minecraft Light Blocks in Blender](13.md)**.
+Read **[Page 13 — Minecraft Light Blocks in Blender](13-light-blocks.md)**.
 
 Search the Outliner for:
 
@@ -68,7 +68,7 @@ Also verify the actual POINT light is enabled in the Outliner; hiding the 1×1×
 
 That is expected for a new Minecraft version/mod-set fingerprint. Minesport starts an isolated exact-version Fabric client worker, captures registry/model data, writes a reusable cache, and reuses it until the relevant mod/version fingerprint changes.
 
-See **[Page 90 — Runtime Model Cache](90.md)** for the full explanation.
+See **[Page 90 — Runtime Model Cache](90-runtime-model-cache.md)** for the full explanation.
 
 ## A helper mod such as Crash Assistant opens during cache generation
 

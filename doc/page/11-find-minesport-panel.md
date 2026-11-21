@@ -49,6 +49,6 @@ For a FLATTER object, Minesport exposes controls for things such as:
 
 ## Next
 
-If you selected a giant `FLATTER_...` object and are wondering why Blender treats thousands of blocks like one object, read **[Page 12 — FLATTER for Blender Beginners](12.md)**.
+If you selected a giant `FLATTER_...` object and are wondering why Blender treats thousands of blocks like one object, read **[Page 12 — FLATTER for Blender Beginners](12-flatter-for-beginners.md)**.
 
-If you specifically want invisible Minecraft-style lights, read **[Page 13 — Minecraft Light Blocks in Blender](13.md)** after Page 12.
+If you specifically want invisible Minecraft-style lights, read **[Page 13 — Minecraft Light Blocks in Blender](13-light-blocks.md)** after Page 12.
