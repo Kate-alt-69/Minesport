@@ -13,3 +13,34 @@
 /desktop/target/
 /desktop/dist/
 /installer/windows/obj/*
+
+# Rust / Cargo
+/target/
+/**/target/
+
+# Java / Gradle
+/.gradle/
+/**/.gradle/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Windows installer build output
+*.wixobj
+*.wixpdb
+
+# Temporary files and editor backups
+*.tmp*
+*.swp
+*.swo
+*~
+
+# IDE and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
