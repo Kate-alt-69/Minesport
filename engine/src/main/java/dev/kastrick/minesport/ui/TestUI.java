@@ -36,7 +36,7 @@ public class TestUI extends JFrame {
 
     // ── Constructor ───────────────────────────────────────────────────────────
     public TestUI() {
-        super("Minesport v0.3");
+        super("Minesport Java Engine Test UI");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setSize(750, 620);
         setMinimumSize(new Dimension(600, 500));
@@ -133,7 +133,7 @@ public class TestUI extends JFrame {
         bottomPanel.add(exportBtn,   BorderLayout.EAST);
         root.add(bottomPanel, BorderLayout.SOUTH);
 
-        log("Minesport v0.3 ready.");
+        log("Minesport Java engine test UI ready.");
         log("Select a Minecraft world folder to begin.");
     }
 
