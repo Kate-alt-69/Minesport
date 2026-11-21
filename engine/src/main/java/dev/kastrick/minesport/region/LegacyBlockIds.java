@@ -4,12 +4,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Numeric block ID compatibility for pre-flattening Anvil worlds (1.2-1.12).
+ * Initial numeric block ID compatibility table for pre-flattening Anvil worlds.
  *
- * The initial table is deliberately anchored to the Minecraft 1.5-era vanilla
- * registry. Later legacy releases can extend this without changing the chunk
- * decoder. Metadata is always preserved as legacy_data even when we translate
- * a variant to its modern namespaced block ID.
+ * The table is anchored to the Minecraft 1.5-era vanilla registry and is not
+ * yet a complete compatibility matrix for every pre-flattening release.
+ * Metadata is preserved as legacy_data even when geometry-critical values are
+ * also translated into modern block-state properties.
  */
 public final class LegacyBlockIds {
     private LegacyBlockIds() {}
