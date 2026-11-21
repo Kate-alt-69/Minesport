@@ -73,7 +73,6 @@ def register():
     _register_optional("light_block_core")
     _register_optional("emissive_materials")
     _register_optional("animation_core")
-    _register_optional("animation_fps_fix")
     _register_optional("material_core")
     _register_optional("cutout_materials")
     _register_optional("flatter_runtime")
@@ -94,7 +93,7 @@ def register():
     _register_optional("performance_draw")
 
     _register_optional("flatter_overlay")
-    _register_optional("flatter_020_ui")
+    _register_optional("flatter_workflow_ui")
 
     # Load the batched map renderer before registering the map operator. The
     # operator's draw_handler_add call then captures the optimized callback from
@@ -117,7 +116,7 @@ def unregister():
         "flatter_map_live",
         "flatter_map",
         "performance_map",
-        "flatter_020_ui",
+        "flatter_workflow_ui",
         "flatter_overlay",
         "performance_draw",
         "performance",
@@ -130,7 +129,6 @@ def unregister():
         "flatter_runtime",
         "cutout_materials",
         "material_core",
-        "animation_fps_fix",
         "animation_core",
         "emissive_materials",
         "light_block_core",

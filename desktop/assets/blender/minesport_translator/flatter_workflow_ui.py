@@ -1,4 +1,4 @@
-"""Minesport 0.2 FLATTER workflow UI.
+"""FLATTER workflow UI for Minesport's Blender translator.
 
 This panel deliberately explains the interaction model where the user is
 already looking: directly under the FLATTER panel. It also exposes Minecraft
@@ -43,7 +43,7 @@ class MINESPORT_OT_flatter_place_light_020(bpy.types.Operator):
 
 
 class MINESPORT_PT_flatter_workflow_020(bpy.types.Panel):
-    bl_label = "FLATTER Workflow · 0.2"
+    bl_label = "FLATTER Workflow"
     bl_idname = "MINESPORT_PT_flatter_workflow_020"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
