@@ -191,11 +191,11 @@ Recommended native desktop UI:
 
 The root build script stages the platform executable after a successful build.
 
-Java engine developer UI (not the shipped desktop Workbench):
+Java engine developer UI (compiled in a separate development source set, not the shipped engine JAR):
 
 ```bash
 cd engine
-./gradlew run
+./gradlew runDevUi
 ```
 
 ## Architecture
